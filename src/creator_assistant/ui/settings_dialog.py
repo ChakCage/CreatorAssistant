@@ -324,13 +324,84 @@ class SettingsDialog(QDialog):
         if not self.container:
             return
         runtime = self.container.whisper_runtime
+        if runtime.is_ready():
+            QMessageBox.information(
+                self, "Управляемый Whisper",
+                f"Изолированный runtime уже установлен:\n{runtime.python}\n\nМодели: {runtime.models}",
+            )
+            return
         runtime.prepare_directories()
-        QMessageBox.information(
-            self, "Управляемый Whisper",
-            "Изолированный runtime подготовлен. Пакеты не будут устанавливаться в системный Python.\n\n"
-            f"Runtime: {runtime.root}\nМодели: {runtime.models}\n\n"
-            "На этом компьютере уже найден совместимый локальный Whisper, поэтому повторная загрузка сейчас не требуется.",
+        answer = QMessageBox.question(
+            self, "Установить управляемый Whisper",
+            "Будет создан отдельный Python runtime и установлен openai-whisper. Системный Python и .venv Creator Assistant не изменяются. "
+            "Операция может скачать крупные ML-пакеты. Уже существующая совместимая модель будет использована без повторной загрузки.\n\n"
+            f"Runtime: {runtime.root}\nМодели: {runtime.models}\n\nПродолжить?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
+        if answer != QMessageBox.Yes:
+            return
+        from creator_assistant.services.shorts.transcription.existing_whisper import find_existing_python
+        commands = runtime.install_commands(find_existing_python())
+        self.whisper_install_button.setEnabled(False)
+        self.whisper_install_button.setText("Установка…")
+        thread = QThread(self)
+
+        def work(progress):
+            for index, command in enumerate(commands, 1):
+                progress(f"Шаг {index}/{len(commands)}: {' '.join(command[:3])}")
+                self.container.runner.run(command, timeout=60 * 60)
+            return str(runtime.python)
+
+        worker = FunctionWorker(work)
+        terminal = {"kind": "", "args": ()}
+
+        def queue(kind, *args):
+            terminal.update(kind=kind, args=args)
+
+        def cleanup():
+            if thread in self._threads:
+                self._threads.remove(thread)
+            bridge.deleteLater()
+            self.whisper_install_button.setEnabled(True)
+            self.whisper_install_button.setText("Установить управляемый backend")
+            if terminal["kind"] == "finished":
+                self.result_settings["whisper_backend"] = "managed"
+                self.whisper_backend.setCurrentIndex(max(0, self.whisper_backend.findData("managed")))
+                self.whisper_status.setText(f"Управляемый runtime установлен: {runtime.python}\nМодели: {runtime.models}")
+                QMessageBox.information(self, "Управляемый Whisper", "Установка завершена. Нажмите «Сохранить», чтобы выбрать этот backend.")
+            elif terminal["kind"] == "failed":
+                QMessageBox.warning(self, "Управляемый Whisper", str(terminal["args"][0]))
+
+        bridge = UiWorkerBridge({
+            "finished": lambda value: queue("finished", value),
+            "failed": lambda message, details: queue("failed", message, details),
+            "cancelled": lambda: queue("cancelled"),
+            "manual_action_required": lambda value: queue("failed", str(value), ""),
+            "runtime_install_required": lambda value: queue("failed", str(value), ""),
+            "authentication_required": lambda value: queue("failed", str(value), ""),
+            "cookies_unavailable": lambda value: queue("failed", str(value), ""),
+            "media_forbidden": lambda value: queue("failed", str(value), ""),
+            "thread_finished": cleanup,
+        }, parent=self)
+        thread.worker = worker
+        thread.bridge = bridge
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(bridge.finished)
+        worker.failed.connect(bridge.failed)
+        worker.cancelled.connect(bridge.cancelled)
+        for signal in (
+            worker.finished, worker.failed, worker.cancelled, worker.manual_action_required,
+            worker.runtime_install_required, worker.authentication_required, worker.cookies_unavailable,
+            worker.media_forbidden, worker.waiting_for_disk_space, worker.gpu_memory_required,
+            worker.system_memory_required, worker.audio_output_missing,
+        ):
+            signal.connect(worker.deleteLater)
+            signal.connect(thread.quit)
+        thread.finished.connect(bridge.thread_finished)
+        thread.finished.connect(thread.deleteLater)
+        self._threads.append(thread)
+        thread.start()
 
     def _clear_whisper_temp(self) -> None:
         if not self.container:
