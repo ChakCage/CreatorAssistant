@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QLabel, QMainWindow, QTabWidget, QToolBar, QWidget
+from PySide6.QtWidgets import QLabel, QMainWindow, QTabWidget, QToolBar
 
 from creator_assistant.app import ServiceContainer
 from creator_assistant.ui.diagnostics_dialog import DiagnosticsDialog
 from creator_assistant.ui.project_prep_tab import ProjectPrepTab
+from creator_assistant.ui.shorts.shorts_tab import ShortsTab
 from creator_assistant.ui.settings_dialog import SettingsDialog
 from creator_assistant.infrastructure.crash_logging import event as crash_event, safe_call
 
@@ -38,9 +39,8 @@ class MainWindow(QMainWindow):
             )
         )
         self.tabs.addTab(self.prep_tab, "Подготовка проекта")
-        placeholder = QWidget()
-        shorts_index = self.tabs.addTab(placeholder, "Shorts — будет добавлено позже")
-        self.tabs.setTabEnabled(shorts_index, False)
+        self.shorts_tab = ShortsTab(container)
+        self.tabs.addTab(self.shorts_tab, "Shorts")
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage("Готов к работе")
         if self.container.first_run:
@@ -55,7 +55,7 @@ class MainWindow(QMainWindow):
             self.prep_tab.reload_authors()
 
     def closeEvent(self, event) -> None:
-        if self.prep_tab.shutdown_workers():
+        if self.prep_tab.shutdown_workers() and self.shorts_tab.shutdown_workers():
             crash_event("Main window closed after all QThreads finished")
             event.accept()
         else:
