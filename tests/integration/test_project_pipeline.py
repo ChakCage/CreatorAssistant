@@ -13,7 +13,7 @@ from creator_assistant.services.project_service import ProjectService
 from creator_assistant.services.reaper_service import ReaperService
 from creator_assistant.services.storage_service import GIB, StoragePolicy, StorageService
 from creator_assistant.services.vegas_service import VegasProjectResult
-from creator_assistant.infrastructure.manifest_store import MANIFEST_NAME, ManifestLoader, ManifestStatus
+from creator_assistant.infrastructure.manifest_store import LEGACY_MANIFEST_NAME, MANIFEST_NAME, ManifestLoader, ManifestStatus
 
 
 class FakeYtDlp:
@@ -241,8 +241,9 @@ def test_full_pipeline_creates_only_expected_structure(tmp_path: Path):
     assert result.project_path is not None
     root = result.project_path
     assert {path.name for path in root.iterdir()} == {
-        "Материалы", "Тест- проект.rpp", ".creator-assistant.json"
+        "Материалы", "Тест- проект.rpp", ".creator-assistant"
     }
+    assert (root / MANIFEST_NAME).is_file()
     assert len(list((root / "Материалы").iterdir())) == 4
     assert set(result.files) == {"maximum", "proxy", "audio", "instrumental", "reaper"}
     assert events[-1].percent == 100
@@ -294,12 +295,12 @@ def test_resume_detects_legacy_media_by_content_and_skips_downloads(tmp_path: Pa
     for executable in (yt_exe, ffmpeg, ffprobe):
         executable.write_bytes(b"exe")
     project = tmp_path / "Beppo" / "Doing" / "Legacy Human Names"
-    media = project / "Media"
+    media = project / "Материалы"
     media.mkdir(parents=True)
     ready = {
         "maximum": media / "raw capture source.mp4",
         "proxy": media / "edit proxy.mp4",
-        "audio": media / "voice track.m4a",
+        "audio": media / "original audio.m4a",
         "instrumental": media / "music inst.flac",
     }
     for path in ready.values():
@@ -339,6 +340,59 @@ def test_resume_detects_legacy_media_by_content_and_skips_downloads(tmp_path: Pa
     assert record["stages"]["maximum"]["source"] == "legacy_content_scan"
     manifest = ManifestLoader().load(project / MANIFEST_NAME).manifest
     assert manifest.files["maximum"]["path"] == str(ready["maximum"])
+
+
+def test_only_vegas_mode_uses_existing_max_and_instrumental_without_other_stages(tmp_path: Path):
+    yt_exe = tmp_path / "yt-dlp.exe"
+    ffmpeg = tmp_path / "ffmpeg.exe"
+    ffprobe = tmp_path / "ffprobe.exe"
+    for executable in (yt_exe, ffmpeg, ffprobe):
+        executable.write_bytes(b"exe")
+    project = tmp_path / "Beppo" / "Делаю" / "Legacy Only VEGAS"
+    materials = project / "Материалы"
+    materials.mkdir(parents=True)
+    maximum = materials / "Legacy MAX source.mp4"
+    instrumental = materials / "Legacy Instrumental.flac"
+    ambiguous_audio_a = materials / "A Original Audio.m4a"
+    ambiguous_audio_b = materials / "B Original Audio.m4a"
+    for path in (maximum, instrumental, ambiguous_audio_a, ambiguous_audio_b):
+        path.write_bytes(b"ready")
+    jobs = JobStore(tmp_path / "jobs-only-vegas")
+    jobs.save("only-vegas", {"created_by": "CreatorAssistant", "status": "bound", "project_path": str(project), "files": {}})
+    yt = FakeYtDlp(yt_exe)
+    separator = FakeSeparator()
+    vegas = FakeVegas()
+    service = ProjectService(
+        yt, FakeFfmpeg(ffmpeg), LegacyContentValidator(ffprobe), FakeThumbnail(),
+        ReaperService(), separator, separator, jobs, NamingTemplates(), vegas=vegas,
+    )
+    item = VideoMetadata(
+        "only-vegas", "Legacy Only VEGAS", 12, "https://youtu.be/only-vegas",
+        formats=[
+            VideoFormat("maximum", "mp4", height=1440, fps=60, vcodec="vp9"),
+            VideoFormat("proxy", "mp4", height=720, fps=60, vcodec="avc1"),
+            VideoFormat("audio", "m4a", acodec="aac"),
+        ],
+    )
+    options = ProjectOptions(
+        download_maximum=False,
+        create_proxy=False,
+        download_audio=False,
+        create_instrumental=False,
+        create_reaper_project=False,
+        create_vegas_project=True,
+    )
+
+    result = service.execute(tmp_path, item, options, CancellationToken(), lambda _event: None, project)
+
+    assert yt.download_count == 0
+    assert len(vegas.calls) == 1
+    assert vegas.calls[0][0] == maximum
+    assert vegas.calls[0][1] == instrumental
+    assert "proxy" not in result.files
+    assert "audio" not in result.files
+    assert "reaper" not in result.files
+    assert result.files["vegas"].is_file()
 
 
 def test_resume_preserves_last_compatible_alternative_format_id(tmp_path: Path):
@@ -436,6 +490,7 @@ def test_legacy_manifest_migrate_and_resume_five_times_without_download_or_data_
     project.mkdir(parents=True)
     user_file = project / "Mylesoru.psd"
     user_file.write_bytes(b"real-user-data")
+    legacy_manifest_path = project / LEGACY_MANIFEST_NAME
     manifest_path = project / MANIFEST_NAME
     legacy_bytes = json.dumps({
         "schema_version": 1,
@@ -445,7 +500,7 @@ def test_legacy_manifest_migrate_and_resume_five_times_without_download_or_data_
         "project_path": str(project),
         "status": "running",
     }, ensure_ascii=False).encode("utf-8")
-    manifest_path.write_bytes(legacy_bytes)
+    legacy_manifest_path.write_bytes(legacy_bytes)
     jobs = JobStore(tmp_path / "jobs")
     yt = FakeYtDlp(yt_exe)
     separator = FakeSeparator()
@@ -479,4 +534,5 @@ def test_legacy_manifest_migrate_and_resume_five_times_without_download_or_data_
         assert result.project_path == project
         assert user_file.read_bytes() == b"real-user-data"
     assert yt.download_count == 0
-    assert manifest_path.with_name(manifest_path.name + ".bak").read_bytes() == legacy_bytes
+    assert (manifest_path.parent / "backups" / LEGACY_MANIFEST_NAME).read_bytes() == legacy_bytes
+    assert not legacy_manifest_path.exists()

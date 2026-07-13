@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import ctypes
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -10,7 +12,57 @@ from typing import Any, Callable, Dict, List, Optional
 
 
 CURRENT_SCHEMA_VERSION = 2
-MANIFEST_NAME = ".creator-assistant.json"
+METADATA_DIR_NAME = ".creator-assistant"
+MANIFEST_NAME = ".creator-assistant/manifest.json"
+LEGACY_MANIFEST_NAME = ".creator-assistant.json"
+LEGACY_STATE_NAME = ".creator-assistant"
+
+MATERIALS_DIRECTORY_NAMES = {"материалы", "materials", "source", "sources"}
+EXCLUDED_DIRECTORY_NAMES = {
+    "media", "backups", "backup", "reaper media", "recorded media", "peak files",
+    "peaks", "peak", "waveforms", "waveform", "audio peaks", "autosave", "auto-save",
+    "vegas auto save", "vegas backups", "rendered files", "renders", "render", "exports",
+    "export", "output", "final", "готово", "shorts", "cache", ".cache", "temp", "tmp",
+    "logs", "_test_output", "proxy cache", "waveform cache", "adobe", "capcut", "premiere",
+    "davinci", "resolve", "recovery", "history", "versions", METADATA_DIR_NAME,
+}
+SIDECAR_SUFFIXES = {
+    ".sfk", ".sfap0", ".sfap1", ".sfvp0", ".sfvp1", ".sfl", ".sfdecprop",
+    ".reapeaks", ".pkf", ".peak", ".lck", ".lock", ".tmp", ".temp", ".part",
+    ".ytdl", ".bak", ".autosave", ".undo", ".crdownload",
+}
+SIDECAR_ENDINGS = (".rpp-bak", ".veg.bak", ".veg~")
+
+
+def project_metadata_dir(project_path: Path) -> Path:
+    return project_path / METADATA_DIR_NAME
+
+
+def project_manifest_path(project_path: Path) -> Path:
+    return project_metadata_dir(project_path) / "manifest.json"
+
+
+def is_ignored_sidecar(path: Path) -> bool:
+    name = path.name.casefold()
+    return path.suffix.casefold() in SIDECAR_SUFFIXES or name.endswith(SIDECAR_ENDINGS)
+
+
+def is_excluded_directory(path: Path) -> bool:
+    return path.name.casefold() in EXCLUDED_DIRECTORY_NAMES
+
+
+def set_hidden_directory(path: Path) -> bool:
+    if os.name != "nt" or not path.is_dir():
+        return False
+    try:
+        get_attributes = ctypes.windll.kernel32.GetFileAttributesW
+        set_attributes = ctypes.windll.kernel32.SetFileAttributesW
+        attributes = get_attributes(str(path))
+        if attributes == 0xFFFFFFFF:
+            return False
+        return bool(set_attributes(str(path), attributes | 0x2))
+    except (AttributeError, OSError):
+        return False
 
 
 class ManifestStatus(str, Enum):
@@ -120,8 +172,16 @@ class ManifestValidator:
 
 class ManifestLoader:
     def load(self, path: Path) -> ManifestLoadResult:
+        requested = path
+        project_path = path.parent.parent if path.name == "manifest.json" and path.parent.name == METADATA_DIR_NAME else path.parent
+        candidates = (
+            project_manifest_path(project_path),
+            project_path / LEGACY_MANIFEST_NAME,
+            project_path / LEGACY_STATE_NAME,
+        )
+        path = next((candidate for candidate in candidates if candidate.is_file()), requested)
         if not path.is_file():
-            return ManifestLoadResult(ManifestStatus.MISSING, path, message="Manifest отсутствует.")
+            return ManifestLoadResult(ManifestStatus.MISSING, requested, message="Manifest отсутствует.")
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -135,9 +195,13 @@ class ManifestWriter:
 
     def write(self, path: Path, manifest: ProjectManifest, *, backup_existing: bool = True) -> ManifestLoadResult:
         ManifestValidator.validate_for_write(manifest)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        project_path = Path(manifest.project_path)
+        path = project_manifest_path(project_path)
+        self._prepare_metadata_directory(project_path)
         temporary = path.with_name(path.name + ".tmp")
-        backup = path.with_name(path.name + ".bak")
+        backup_dir = path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup = self._unique_backup(backup_dir / "manifest.json.bak")
         backup_temporary = backup.with_name(backup.name + ".tmp")
         try:
             if path.exists() and backup_existing and not backup.exists():
@@ -157,6 +221,8 @@ class ManifestWriter:
             saved = self.loader.load(path)
             if saved.status != ManifestStatus.VALID:
                 raise ValueError("Повторная проверка записанного manifest не пройдена: " + saved.message)
+            self._finish_legacy_manifest_migration(project_path)
+            set_hidden_directory(path.parent)
             return saved
         except Exception:
             for candidate in (temporary, backup_temporary):
@@ -166,6 +232,67 @@ class ManifestWriter:
                     pass
             raise
 
+    @staticmethod
+    def _unique_backup(path: Path) -> Path:
+        if not path.exists():
+            return path
+        index = 2
+        while True:
+            candidate = path.with_name(f"{path.stem}.{index}{path.suffix}")
+            if not candidate.exists():
+                return candidate
+            index += 1
+
+    def _prepare_metadata_directory(self, project_path: Path) -> None:
+        metadata_dir = project_metadata_dir(project_path)
+        if metadata_dir.is_file():
+            temporary = project_path / ".creator-assistant.legacy"
+            if temporary.exists():
+                raise OSError("Не удалось безопасно мигрировать legacy .creator-assistant: временный путь уже существует.")
+            os.replace(str(metadata_dir), str(temporary))
+            try:
+                metadata_dir.mkdir(parents=False, exist_ok=False)
+                backups = metadata_dir / "backups"
+                backups.mkdir()
+                backup = backups / "legacy-state"
+                shutil.copy2(temporary, backup)
+                if backup.read_bytes() != temporary.read_bytes():
+                    raise OSError("Проверка backup legacy .creator-assistant не пройдена.")
+                state = metadata_dir / "state.json"
+                try:
+                    parsed = json.loads(temporary.read_text(encoding="utf-8"))
+                    state.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
+                    json.loads(state.read_text(encoding="utf-8"))
+                except (UnicodeError, json.JSONDecodeError):
+                    # Нечитаемый legacy state всё равно полностью сохранён в backups.
+                    pass
+                temporary.unlink()
+            except Exception:
+                if metadata_dir.is_dir():
+                    shutil.rmtree(metadata_dir, ignore_errors=True)
+                if temporary.exists():
+                    os.replace(str(temporary), str(project_path / LEGACY_STATE_NAME))
+                raise
+        else:
+            metadata_dir.mkdir(parents=True, exist_ok=True)
+        for name in ("logs", "temp", "backups"):
+            (metadata_dir / name).mkdir(exist_ok=True)
+        set_hidden_directory(metadata_dir)
+
+    def _finish_legacy_manifest_migration(self, project_path: Path) -> None:
+        legacy = project_path / LEGACY_MANIFEST_NAME
+        if not legacy.is_file():
+            return
+        try:
+            json.loads(legacy.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return
+        backup = self._unique_backup(project_metadata_dir(project_path) / "backups" / LEGACY_MANIFEST_NAME)
+        shutil.copy2(legacy, backup)
+        if backup.read_bytes() != legacy.read_bytes():
+            raise OSError("Проверка backup legacy manifest не пройдена.")
+        legacy.unlink()
+
 
 class LegacyProjectScanner:
     MEDIA_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4a", ".mp3", ".wav", ".flac", ".ogg", ".opus"}
@@ -173,14 +300,13 @@ class LegacyProjectScanner:
 
     def __init__(self, probe: Optional[Callable[[Path], Dict[str, Any]]] = None) -> None:
         self.probe = probe
+        self.stats: Dict[str, int] = {}
 
     def scan(self, project_path: Path) -> List[DiscoveredFile]:
         results: List[DiscoveredFile] = []
-        try:
-            candidates = [item for item in project_path.rglob("*") if item.is_file()]
-        except OSError:
-            candidates = []
-        ignored = {MANIFEST_NAME, MANIFEST_NAME + ".bak", MANIFEST_NAME + ".tmp"}
+        candidates, excluded_dirs, ignored_sidecars = self._allowed_files(project_path)
+        probe_calls = 0
+        ignored = {LEGACY_MANIFEST_NAME, "manifest.json", "manifest.json.bak", "manifest.json.tmp"}
         for path in candidates:
             if path.name in ignored:
                 continue
@@ -193,8 +319,9 @@ class LegacyProjectScanner:
                 classification = "REAPER_PROJECT"
             elif suffix in self.MEDIA_EXTENSIONS:
                 classification = "MEDIA_UNKNOWN"
-                if self.probe:
+                if self.probe and probe_calls < 20:
                     try:
+                        probe_calls += 1
                         probe = self.probe(path)
                         streams = probe.get("streams", []) if isinstance(probe, dict) else []
                         has_video = any(item.get("codec_type") == "video" for item in streams if isinstance(item, dict))
@@ -208,7 +335,69 @@ class LegacyProjectScanner:
             except OSError:
                 size = 0
             results.append(DiscoveredFile(str(path), classification, size, details))
+        self.stats = {
+            "allowed_files": len(results),
+            "excluded_directories": excluded_dirs,
+            "ignored_sidecar_files": ignored_sidecars,
+            "ffprobe_calls": probe_calls,
+        }
         return results
+
+    @staticmethod
+    def _allowed_files(project_path: Path, *, include_material_subdirs: bool = False) -> tuple[List[Path], int, int]:
+        files: List[Path] = []
+        excluded_dirs = 0
+        ignored_sidecars = 0
+        material_dirs: List[Path] = []
+        try:
+            root_children = list(project_path.iterdir())
+        except OSError:
+            root_children = []
+        for child in root_children:
+            if child.is_file():
+                if child.name.casefold() in {LEGACY_MANIFEST_NAME.casefold(), LEGACY_STATE_NAME.casefold()}:
+                    continue
+                if is_ignored_sidecar(child):
+                    ignored_sidecars += 1
+                else:
+                    files.append(child)
+            elif child.is_dir():
+                if is_excluded_directory(child):
+                    excluded_dirs += 1
+                elif child.name.casefold() in MATERIALS_DIRECTORY_NAMES:
+                    material_dirs.append(child)
+                else:
+                    excluded_dirs += 1
+        for material_dir in material_dirs:
+            try:
+                children = list(material_dir.iterdir())
+            except OSError:
+                continue
+            for child in children:
+                if child.is_file():
+                    if is_ignored_sidecar(child):
+                        ignored_sidecars += 1
+                    else:
+                        files.append(child)
+                elif child.is_dir():
+                    if is_excluded_directory(child):
+                        excluded_dirs += 1
+                        continue
+                    if not include_material_subdirs:
+                        excluded_dirs += 1
+                        continue
+                    try:
+                        nested = list(child.iterdir())
+                    except OSError:
+                        continue
+                    for item in nested:
+                        if not item.is_file():
+                            continue
+                        if is_ignored_sidecar(item):
+                            ignored_sidecars += 1
+                        else:
+                            files.append(item)
+        return files, excluded_dirs, ignored_sidecars
 
 
 class ManifestMigrator:

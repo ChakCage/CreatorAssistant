@@ -14,6 +14,7 @@ from creator_assistant.domain.errors import (
     GpuOutOfMemoryError,
     JobCancelledError,
     ManualActionRequiredError,
+    MediaRoleResolutionRequired,
     SystemMemoryError,
     YouTubeAuthenticationRequiredError,
     YouTubeCookiesUnavailableError,
@@ -35,6 +36,7 @@ class FunctionWorker(QObject):
     gpu_memory_required = Signal(object)
     system_memory_required = Signal(object)
     audio_output_missing = Signal(object)
+    media_resolution_required = Signal(object)
     progress = Signal(object)
 
     def __init__(self, function: Callable[[Callable[[ProgressInfo], None]], Any]) -> None:
@@ -81,6 +83,9 @@ class FunctionWorker(QObject):
             self.system_memory_required.emit(exc)
         except AudioSeparatorOutputMissingError as exc:
             self.audio_output_missing.emit(exc)
+        except MediaRoleResolutionRequired as exc:
+            logging.getLogger("creator_assistant").info("Waiting for media role selection: %s", exc.role)
+            self.media_resolution_required.emit(exc)
         except Exception as exc:
             details = traceback.format_exc()
             extra = getattr(exc, "details", "")
@@ -172,6 +177,10 @@ class UiWorkerBridge(QObject):
     @Slot(object)
     def audio_output_missing(self, value) -> None:
         self._dispatch("audio_output_missing", value)
+
+    @Slot(object)
+    def media_resolution_required(self, value) -> None:
+        self._dispatch("media_resolution_required", value)
 
     @Slot(object)
     def progress(self, value) -> None:

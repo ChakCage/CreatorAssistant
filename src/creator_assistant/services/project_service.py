@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import shutil
 import datetime as dt
+import json
+import os
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from creator_assistant.domain.errors import AudioSeparatorRuntimeMissingError, DependencyMissingError, DiskSpaceError, JobCancelledError, ManualActionRequiredError, ValidationError, YouTubeMediaForbiddenError
+from creator_assistant.domain.errors import AudioSeparatorRuntimeMissingError, DependencyMissingError, DiskSpaceError, JobCancelledError, ManualActionRequiredError, MediaRoleResolutionRequired, ValidationError, YouTubeMediaForbiddenError
 from creator_assistant.domain.job import CancellationToken, JobState
 from creator_assistant.domain.author_presets import AuthorPreset
 from creator_assistant.domain.models import (
@@ -29,6 +31,7 @@ from creator_assistant.infrastructure.manifest_store import (
     ManifestStatus,
     ManifestWriter,
     ProjectManifest,
+    project_metadata_dir,
 )
 from creator_assistant.infrastructure.windows_paths import NamingTemplates, exact_directory_path, safe_file_name, sanitize_windows_component, unique_directory_path
 
@@ -85,6 +88,7 @@ class ProjectService:
         self.manifest_loader = ManifestLoader()
         self.manifest_writer = ManifestWriter(self.manifest_loader)
         self.manifest_migrator = ManifestMigrator()
+        self.last_scan_stats: Dict[str, int] = {}
 
     def planned_path(self, destination: Path, metadata: VideoMetadata) -> Path:
         return exact_directory_path(destination, metadata.title)
@@ -135,9 +139,11 @@ class ProjectService:
             children = []
         for child in children:
             manifest_path = child / self.MANIFEST_NAME
-            if not child.is_dir() or not manifest_path.is_file():
+            if not child.is_dir():
                 continue
             loaded = ManifestLoader().load(manifest_path)
+            if loaded.status == ManifestStatus.MISSING:
+                continue
             raw = loaded.raw if isinstance(loaded.raw, dict) else {}
             manifest_video_id = loaded.manifest.video_id if loaded.manifest else str(raw.get("video_id", ""))
             if manifest_video_id == metadata.video_id:
@@ -240,8 +246,17 @@ class ProjectService:
         scanner = LegacyProjectScanner(
             (lambda path: validator.probe(path, cancellation)) if validator and hasattr(validator, "probe") else None
         )
-        on_progress(ProgressInfo("migration", "Сканирование и классификация материалов", 40.0))
+        on_progress(ProgressInfo("migration", "Проверка существующих материалов: быстрый индекс", 40.0))
         discovered = scanner.scan(project_path)
+        self.last_scan_stats = dict(scanner.stats)
+        on_progress(ProgressInfo(
+            "migration",
+            "Проверка существующих материалов: "
+            f"файлов {scanner.stats.get('allowed_files', 0)}, "
+            f"FFprobe {scanner.stats.get('ffprobe_calls', 0)}, "
+            f"sidecar пропущено {scanner.stats.get('ignored_sidecar_files', 0)}",
+            65.0,
+        ))
         cancellation.raise_if_cancelled()
         on_progress(ProgressInfo("migration", "Сохранение manifest", 80.0))
         manifest = migrator.migrate(
@@ -260,6 +275,7 @@ class ProjectService:
             channel_name=metadata.channel or metadata.uploader,
         )
         saved = writer.write(manifest_path, manifest, backup_existing=True)
+        self._write_scan_index(project_path, discovered, scanner.stats)
         record = self.job_store.load(metadata.video_id) or {}
         previous_path = str(record.get("project_path", ""))
         record.update({
@@ -282,7 +298,48 @@ class ProjectService:
         self.job_store.save(metadata.video_id, record)
         self._record_in_index(project_path, metadata, preset_id=preset_id, display_name=author_preset)
         on_progress(ProgressInfo("migration", "Готово к продолжению", 100.0))
-        return {"manifest": saved, "discovered_files": discovered, "project_path": project_path}
+        return {
+            "manifest": saved,
+            "discovered_files": discovered,
+            "project_path": project_path,
+            "scan_stats": dict(scanner.stats),
+        }
+
+    @staticmethod
+    def _write_scan_index(project_path: Path, discovered, stats: Dict[str, int]) -> None:
+        target = project_metadata_dir(project_path) / "scan_index.json"
+        payload = {
+            "schema_version": 1,
+            "updated_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "stats": dict(stats),
+            "files": [],
+        }
+        for item in discovered:
+            path = Path(item.path)
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            payload["files"].append({
+                "path": item.path,
+                "classification": item.classification,
+                "size": item.size,
+                "mtime": mtime,
+            })
+        temporary = target.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(str(temporary), str(target))
+
+    @staticmethod
+    def clear_media_index(project_path: Path) -> int:
+        removed = 0
+        metadata_dir = project_metadata_dir(project_path)
+        for name in ("scan_index.json", "media_probe_cache.json"):
+            path = metadata_dir / name
+            if path.is_file():
+                path.unlink()
+                removed += 1
+        return removed
 
     def _write_manifest(
         self,
@@ -415,6 +472,23 @@ class ProjectService:
     def resumable_path(self, metadata: VideoMetadata) -> Optional[Path]:
         return self.job_store.resumable_path(metadata.video_id)
 
+    @staticmethod
+    def required_roles(options: ProjectOptions) -> set[str]:
+        roles: set[str] = set()
+        if options.download_maximum:
+            roles.add("maximum")
+        if options.create_proxy:
+            roles.add("proxy")
+        if options.download_audio:
+            roles.add("audio")
+        if options.create_instrumental:
+            roles.update(("audio", "instrumental"))
+        if options.create_reaper_project:
+            roles.update(("proxy", "instrumental", "reaper"))
+        if options.create_vegas_project:
+            roles.update(("maximum", "instrumental", "vegas"))
+        return roles
+
     def inspect_existing(
         self,
         metadata: VideoMetadata,
@@ -426,10 +500,18 @@ class ProjectService:
         if not project_path:
             return {}
         paths = ProjectPaths(project_path, project_path / "Материалы", project_path.name)
-        if options.create_vegas_project and not (options.download_maximum and options.create_instrumental):
-            raise ValidationError("Для проекта VEGAS нужны максимальное видео и Instrumental FLAC.")
+        required = self.required_roles(options)
         plan = build_format_plan(metadata.formats, options.reaper_proxy_height)
-        states: Dict[str, Dict[str, Any]] = {}
+        states: Dict[str, Dict[str, Any]] = {
+            key: {"status": "NOT_REQUIRED"}
+            for key in ("maximum", "proxy", "audio", "instrumental", "reaper", "vegas")
+        }
+        loaded_manifest = self.manifest_loader.load(paths.root / self.MANIFEST_NAME)
+        assigned_paths: Dict[str, Path] = {}
+        if loaded_manifest.manifest:
+            for key, entry in loaded_manifest.manifest.files.items():
+                if key in states and isinstance(entry, dict) and entry.get("path"):
+                    assigned_paths[key] = Path(str(entry["path"]))
 
         def inspect_media(key: str, template: Path, validator) -> None:
             candidate = YtDlpService.find_created_file(template)
@@ -452,80 +534,77 @@ class ProjectService:
 
         max_name = safe_file_name(paths.base_name, self.naming.maximum, "%(ext)s", height=plan.maximum_video.height or 0)
         max_name = max_name[: -len(".%(ext)s")] + ".%(ext)s"
-        inspect_media(
-            "maximum",
-            paths.materials / max_name,
-            lambda path: self.validator.validate_expected_video(
-                path,
-                cancellation,
-                duration=metadata.duration,
-                height=plan.maximum_video.height,
-                fps=plan.maximum_video.fps,
-                require_audio=True,
-                require_sdr=True,
-            ),
-        )
+        if "maximum" in required:
+            inspect_media(
+                "maximum",
+                paths.materials / max_name,
+                lambda path: self.validator.validate_expected_video(
+                    path,
+                    cancellation,
+                    duration=metadata.duration,
+                    height=plan.maximum_video.height,
+                    fps=plan.maximum_video.fps,
+                    require_audio=True,
+                    require_sdr=True,
+                ),
+            )
         proxy_name = safe_file_name(
             paths.base_name, self.naming.proxy, "mp4", proxy_height=options.reaper_proxy_height
         )
-        inspect_media(
-            "proxy",
-            paths.materials / (Path(proxy_name).stem + ".%(ext)s"),
-            lambda path: self.validator.validate_expected_video(
-                path,
-                cancellation,
-                duration=metadata.duration,
-                fps=plan.proxy_video.fps,
-                require_audio=True,
-                maximum_height=options.reaper_proxy_height,
-                require_sdr=True,
-            ),
-        )
+        if "proxy" in required:
+            inspect_media(
+                "proxy",
+                paths.materials / (Path(proxy_name).stem + ".%(ext)s"),
+                lambda path: self.validator.validate_expected_video(
+                    path,
+                    cancellation,
+                    duration=metadata.duration,
+                    fps=plan.proxy_video.fps,
+                    require_audio=True,
+                    maximum_height=options.reaper_proxy_height,
+                    require_sdr=True,
+                ),
+            )
         audio_name = safe_file_name(paths.base_name, self.naming.audio, "%(ext)s")
         audio_name = audio_name[: -len(".%(ext)s")] + ".%(ext)s"
-        inspect_media(
-            "audio",
-            paths.materials / audio_name,
-            lambda path: self.validator.validate_expected_audio(path, cancellation, duration=metadata.duration),
-        )
+        if "audio" in required:
+            inspect_media(
+                "audio",
+                paths.materials / audio_name,
+                lambda path: self.validator.validate_expected_audio(path, cancellation, duration=metadata.duration),
+            )
         instrumental_name = safe_file_name(paths.base_name, self.naming.instrumental, "flac")
-        inspect_media(
-            "instrumental",
-            paths.materials / (Path(instrumental_name).stem + ".%(ext)s"),
-            lambda path: self.validator.validate_expected_audio(path, cancellation, duration=metadata.duration, require_flac=True),
-        )
-        for key, details in self._legacy_media_states(metadata, plan, paths.root, options, cancellation).items():
+        if "instrumental" in required:
+            inspect_media(
+                "instrumental",
+                paths.materials / (Path(instrumental_name).stem + ".%(ext)s"),
+                lambda path: self.validator.validate_expected_audio(path, cancellation, duration=metadata.duration, require_flac=True),
+            )
+        for key, details in self._legacy_media_states(
+            metadata, plan, paths.root, options, cancellation, required, assigned_paths
+        ).items():
             if states.get(key, {}).get("status") != "VALID":
                 states[key] = details
         preview_candidates = [path for path in paths.root.glob(self.naming.preview + ".*") if path.is_file() and path.stat().st_size > 0]
         states["thumbnail"] = ({"status": "VALID", "path": str(preview_candidates[0]), "size": preview_candidates[0].stat().st_size} if preview_candidates else {"status": "MISSING"})
-        rpp = paths.root / safe_file_name(paths.base_name, "{title}", "rpp")
-        proxy = Path(states["proxy"]["path"]) if states["proxy"].get("status") == "VALID" else None
-        instrumental = Path(states["instrumental"]["path"]) if states["instrumental"].get("status") == "VALID" else None
-        if rpp.is_file() and proxy and instrumental and self.reaper.validate_project(rpp, proxy, instrumental):
-            states["reaper"] = {"status": "VALID", "path": str(rpp), "size": rpp.stat().st_size}
-        elif rpp.is_file():
-            states["reaper"] = {"status": "INVALID", "path": str(rpp), "size": rpp.stat().st_size, "reason": f"RPP не ссылается на проверенные {options.reaper_proxy_height}p и Instrumental"}
-        else:
-            states["reaper"] = {"status": "MISSING"}
-        veg = self.vegas.project_path(paths.root, paths.base_name)
-        if veg.is_file() and veg.stat().st_size > 0:
-            states["vegas"] = {"status": "VALID", "path": str(veg), "size": veg.stat().st_size}
-        elif veg.is_file():
-            states["vegas"] = {"status": "INVALID", "path": str(veg), "size": veg.stat().st_size, "reason": "VEGAS project file is empty."}
-        else:
-            states["vegas"] = {"status": "MISSING"}
-        enabled = {
-            "maximum": options.download_maximum,
-            "proxy": options.create_proxy,
-            "audio": options.download_audio,
-            "instrumental": options.create_instrumental,
-            "reaper": options.create_reaper_project,
-            "vegas": options.create_vegas_project,
-        }
-        for key, is_enabled in enabled.items():
-            if not is_enabled:
-                states[key] = {"status": "DISABLED"}
+        if "reaper" in required:
+            rpp = paths.root / safe_file_name(paths.base_name, "{title}", "rpp")
+            proxy = Path(states["proxy"]["path"]) if states["proxy"].get("status") == "VALID" else None
+            instrumental = Path(states["instrumental"]["path"]) if states["instrumental"].get("status") == "VALID" else None
+            if rpp.is_file() and proxy and instrumental and self.reaper.validate_project(rpp, proxy, instrumental):
+                states["reaper"] = {"status": "VALID", "path": str(rpp), "size": rpp.stat().st_size}
+            elif rpp.is_file():
+                states["reaper"] = {"status": "INVALID", "path": str(rpp), "size": rpp.stat().st_size, "reason": f"RPP не ссылается на проверенные {options.reaper_proxy_height}p и Instrumental"}
+            else:
+                states["reaper"] = {"status": "MISSING"}
+        if "vegas" in required:
+            veg = self.vegas.project_path(paths.root, paths.base_name)
+            if veg.is_file() and veg.stat().st_size > 0:
+                states["vegas"] = {"status": "VALID", "path": str(veg), "size": veg.stat().st_size}
+            elif veg.is_file():
+                states["vegas"] = {"status": "INVALID", "path": str(veg), "size": veg.stat().st_size, "reason": "VEGAS project file is empty."}
+            else:
+                states["vegas"] = {"status": "MISSING"}
         return states
 
     def _legacy_media_states(
@@ -535,6 +614,8 @@ class ProjectService:
         project_path: Path,
         options: ProjectOptions,
         cancellation: Optional[CancellationToken],
+        required: set[str],
+        assigned_paths: Dict[str, Path],
     ) -> Dict[str, Dict[str, Any]]:
         if not getattr(self.validator, "probe", None):
             return {}
@@ -542,15 +623,25 @@ class ProjectService:
         def probe(path: Path, token: Optional[CancellationToken]) -> Dict[str, Any]:
             return self.validator.probe(path, token)
 
-        inspector = LegacyProjectMediaInspector(probe)
+        inspector = LegacyProjectMediaInspector(
+            probe,
+            cache_path=project_metadata_dir(project_path) / "media_probe_cache.json",
+        )
         matches = inspector.inspect(
             project_path,
             metadata,
             plan,
             proxy_height=options.reaper_proxy_height,
             cancellation=cancellation,
+            required_roles=required & {"maximum", "proxy", "audio", "instrumental"},
+            assigned_paths=assigned_paths,
         )
-        return {key: match.to_state() for key, match in matches.items() if match.status != "NOT_MATCHED"}
+        self.last_scan_stats = dict(inspector.stats)
+        return {
+            key: match.to_state()
+            for key, match in matches.items()
+            if match.status not in {"NOT_MATCHED", "NOT_REQUIRED"}
+        }
 
     def reconcile_existing(
         self,
@@ -584,8 +675,10 @@ class ProjectService:
                 "updated_at": dt.datetime.now().isoformat(timespec="seconds"),
             }
         )
-        if record.get("status") not in {"completed", "cancelled"}:
-            record["status"] = "failed"
+        if any(details.get("status") == "AMBIGUOUS" for details in states.values()):
+            record["status"] = "waiting_for_media_selection"
+        elif record.get("status") not in {"completed", "cancelled"}:
+            record["status"] = "bound"
         self.job_store.save(metadata.video_id, record)
         self._write_manifest(
             project_path,
@@ -596,6 +689,67 @@ class ProjectService:
             record.get("stages", {}),
         )
         return states
+
+    def resolve_media_role(
+        self,
+        metadata: VideoMetadata,
+        project_path: Path,
+        role: str,
+        *,
+        selected_path: Optional[Path] = None,
+        action: str = "select",
+        cancellation: Optional[CancellationToken] = None,
+    ) -> Dict[str, Any]:
+        if role not in {"maximum", "proxy", "audio", "instrumental"}:
+            raise ValidationError("Неизвестная роль существующего материала: " + role)
+        record = self.job_store.load(metadata.video_id) or {}
+        stages = dict(record.get("stages", {})) if isinstance(record.get("stages"), dict) else {}
+        files = dict(record.get("files", {})) if isinstance(record.get("files"), dict) else {}
+        if action == "skip":
+            state = {"status": "NOT_REQUIRED", "source": "manual_legacy_resolution", "confirmed_by_user": True}
+            files.pop(role, None)
+        elif action == "download":
+            state = {"status": "MISSING", "source": "manual_download_requested", "confirmed_by_user": True}
+            files.pop(role, None)
+        else:
+            if not selected_path or not selected_path.is_file():
+                raise ValidationError("Выбранный файл не существует.")
+            token = cancellation or CancellationToken()
+            if role in {"maximum", "proxy"}:
+                probe = self.validator.validate_video(selected_path, token)
+            else:
+                probe = self.validator.validate_expected_audio(
+                    selected_path,
+                    token,
+                    duration=metadata.duration,
+                    require_flac=role == "instrumental",
+                )
+            state = {
+                "status": "VALID",
+                "path": str(selected_path),
+                "size": selected_path.stat().st_size,
+                "source": "manual_legacy_resolution",
+                "confirmed_by_user": True,
+                "probe": probe,
+                "validated_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            }
+            files[role] = str(selected_path)
+        stages[role] = state
+        record.update({
+            "created_by": "CreatorAssistant",
+            "video_id": metadata.video_id,
+            "url": metadata.webpage_url,
+            "title": metadata.title,
+            "project_path": str(project_path),
+            "materials_path": str(project_path / "Материалы"),
+            "files": files,
+            "stages": stages,
+            "status": "bound",
+            "updated_at": dt.datetime.now().isoformat(timespec="seconds"),
+        })
+        self.job_store.save(metadata.video_id, record)
+        self._write_manifest(project_path, metadata, "bound", files=files, stages=stages)
+        return state
 
     @staticmethod
     def _partial_files(template: Path) -> List[Path]:
@@ -635,8 +789,6 @@ class ProjectService:
     ) -> ProjectResult:
         if options.dry_run:
             return self.dry_run(destination, metadata, options)
-        if options.create_reaper_project and not (options.create_proxy and options.create_instrumental):
-            raise ValidationError(f"Для проекта REAPER нужны видео {options.reaper_proxy_height}p и инструментальная дорожка.")
         plan = build_format_plan(metadata.formats, options.reaper_proxy_height)
         state = JobState()
         state.start()
@@ -762,6 +914,13 @@ class ProjectService:
                 else:
                     files.pop(key, None)
             record["files"] = {key: str(value) for key, value in files.items()}
+            ambiguous = [
+                (key, details) for key, details in inspected.items()
+                if key in self.required_roles(options) and details.get("status") == "AMBIGUOUS"
+            ]
+            if ambiguous:
+                key, details = ambiguous[0]
+                raise MediaRoleResolutionRequired(key, details.get("candidates", []))
 
         def stage(job_stage: JobStage, message: str, percent: Optional[float] = None) -> None:
             cancellation.raise_if_cancelled()
@@ -1068,6 +1227,10 @@ class ProjectService:
                 checkpoint()
             if options.create_reaper_project:
                 stage(JobStage.CREATE_REAPER, "Создаю RPP с двумя дорожками")
+                if "proxy" not in files or "instrumental" not in files:
+                    raise ValidationError(
+                        f"Для проекта REAPER нужны существующие видео {options.reaper_proxy_height}p и Instrumental."
+                    )
                 rpp = paths.root / safe_file_name(paths.base_name, "{title}", "rpp")
                 duration = metadata.duration or 0.001
                 if files.get("reaper") and self.reaper.validate_project(files["reaper"], files["proxy"], files["instrumental"]):
@@ -1139,14 +1302,7 @@ class ProjectService:
                     same_path = str(previous.get("path") or "").casefold() == str(details.get("path") or "").casefold()
                     if same_path:
                         final_stages[key] = {**previous, **details}
-            required_stages = {
-                "maximum": options.download_maximum,
-                "proxy": options.create_proxy,
-                "audio": options.download_audio,
-                "instrumental": options.create_instrumental,
-                "reaper": options.create_reaper_project,
-                "vegas": options.create_vegas_project,
-            }
+            required_stages = {key: True for key in self.required_roles(options)}
             incomplete = [
                 key for key, enabled in required_stages.items()
                 if enabled and final_stages.get(key, {}).get("status") != "VALID"

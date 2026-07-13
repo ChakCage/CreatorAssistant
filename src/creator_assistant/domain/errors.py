@@ -69,6 +69,13 @@ class MediaValidationError(ValidationError):
     pass
 
 
+class MediaRoleResolutionRequired(CreatorAssistantError):
+    def __init__(self, role: str, candidates=None) -> None:
+        super().__init__("Найдено несколько файлов для выбранной роли. Подтвердите нужный файл перед продолжением.")
+        self.role = str(role)
+        self.candidates = list(candidates or [])
+
+
 class VegasProjectError(CreatorAssistantError):
     def __init__(self, message="Ошибка создания проекта VEGAS.", details="") -> None:
         super().__init__(message)

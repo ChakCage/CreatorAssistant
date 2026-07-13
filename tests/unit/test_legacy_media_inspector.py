@@ -64,12 +64,12 @@ def audio_probe(codec: str):
 
 def test_detects_non_template_legacy_media_by_content(tmp_path: Path):
     project = tmp_path / "Legacy Project"
-    materials = project / "Anything"
+    materials = project / "Материалы"
     materials.mkdir(parents=True)
     paths = {
         "maximum": materials / "episode final max render.mp4",
         "proxy": materials / "edit proxy.mp4",
-        "audio": materials / "voice source.m4a",
+        "audio": materials / "original source.m4a",
         "instrumental": materials / "music inst.flac",
     }
     for path in paths.values():

@@ -52,6 +52,7 @@ from creator_assistant.services.author_preset_resolver import AuthorPresetResolv
 from creator_assistant.ui.settings_dialog import SettingsDialog
 from creator_assistant.ui.youtube_auth_dialog import YouTubeAuthDialog
 from creator_assistant.ui.manual_uvr_dialog import ManualUvrDialog
+from creator_assistant.ui.media_role_resolution_dialog import MediaRoleResolutionDialog
 from creator_assistant.ui.widgets.error_dialog import ErrorDialog
 from creator_assistant.ui.workers import FunctionWorker, UiWorkerBridge
 
@@ -66,6 +67,7 @@ class UiJobState(str, Enum):
     COMPLETED = "COMPLETED"
     ABANDONED = "ABANDONED"
     WAITING_FOR_DISK_SPACE = "WAITING_FOR_DISK_SPACE"
+    WAITING_FOR_MEDIA_SELECTION = "WAITING_FOR_MEDIA_SELECTION"
 
 
 class ProjectPrepTab(QWidget):
@@ -277,20 +279,24 @@ class ProjectPrepTab(QWidget):
         self.open_rpp_button = QPushButton("Открыть RPP")
         self.open_vegas_button = QPushButton("Открыть проект VEGAS")
         self.open_folder_button = QPushButton("Открыть папку проекта")
+        self.rebuild_index_button = QPushButton("Пересоздать индекс материалов")
         self.open_rpp_button.setEnabled(False)
         self.open_vegas_button.setEnabled(False)
         self.open_folder_button.setEnabled(False)
+        self.rebuild_index_button.setEnabled(False)
         self.create_button.clicked.connect(self._safe_ui_action("continue_or_create_project", self.create_project))
         self.cancel_button.clicked.connect(self._safe_ui_action("cancel", self.cancel_job))
         self.new_project_button.clicked.connect(self._safe_ui_action("new_project", self.new_project))
         self.open_rpp_button.clicked.connect(self._safe_ui_action("open_current_rpp", self.open_current_rpp))
         self.open_vegas_button.clicked.connect(self._safe_ui_action("open_current_vegas", self.open_current_vegas))
         self.open_folder_button.clicked.connect(self._safe_ui_action("open_current_project_folder", self.open_current_project_folder))
+        self.rebuild_index_button.clicked.connect(self._safe_ui_action("rebuild_media_index", self.rebuild_media_index))
         actions.addWidget(self.create_button, 1)
         actions.addWidget(self.cancel_button)
         actions.addWidget(self.open_rpp_button)
         actions.addWidget(self.open_vegas_button)
         actions.addWidget(self.open_folder_button)
+        actions.addWidget(self.rebuild_index_button)
         actions.addWidget(self.new_project_button)
         left_layout.addLayout(actions)
         self._refresh_proxy_labels()
@@ -1190,16 +1196,19 @@ class ProjectPrepTab(QWidget):
         rpps = list(self.current_project_path.glob("*.rpp"))
         self.current_rpp_path = rpps[0] if len(rpps) == 1 else None
         discovered = result.get("discovered_files", [])
+        scan_stats = result.get("scan_stats", {})
         self._resume_states = result.get("states", {})
         vegas_state = self._resume_states.get("vegas", {})
         vegas_value = vegas_state.get("path") if vegas_state.get("status") == "VALID" else None
         self.current_veg_path = Path(vegas_value) if vegas_value else None
         self._sync_project_actions()
-        unknown = [item for item in discovered if item.classification in {"UNKNOWN", "MEDIA_UNKNOWN"}]
         self.progress_label.setText(
-            f"Существующий проект подключён. Найдено файлов: {len(discovered)}; неизвестных: {len(unknown)}."
+            "Существующий проект подключён. "
+            f"Разрешённых файлов: {scan_stats.get('allowed_files', len(discovered))}; "
+            f"FFprobe: {scan_stats.get('ffprobe_calls', 0)}; "
+            f"sidecar проигнорировано: {scan_stats.get('ignored_sidecar_files', 0)}."
         )
-        self.create_button.setText("Продолжить проект")
+        self.create_button.setText("Подтвердить план и продолжить")
         self.create_button.setEnabled(True)
         self.dry_run_button.setEnabled(True)
         enabled = {
@@ -1208,6 +1217,8 @@ class ProjectPrepTab(QWidget):
             "reaper": self.reaper_check.isChecked(), "vegas": self.vegas_check.isChecked(),
         }
         completed = [key for key, details in self._resume_states.items() if details.get("status") == "VALID"]
+        ambiguous = [key for key, details in self._resume_states.items() if details.get("status") == "AMBIGUOUS"]
+        not_required = [key for key, details in self._resume_states.items() if details.get("status") == "NOT_REQUIRED"]
         planned = [
             key for key, active in enabled.items()
             if active and self._resume_states.get(key, {}).get("status") != "VALID"
@@ -1219,6 +1230,8 @@ class ProjectPrepTab(QWidget):
         self.preflight_label.setText(
             f"Автор: {project_preset}\nСуществующий проект: да\n"
             f"Готово: {', '.join(completed) or 'нет подтверждённых этапов'}\n"
+            f"Требует выбора: {', '.join(ambiguous) or 'нет'}\n"
+            f"Не требуется: {', '.join(not_required) or 'нет'}\n"
             f"Запланировано: {', '.join(planned) or 'ничего'}"
         )
         self.update_project_path()
@@ -1325,6 +1338,7 @@ class ProjectPrepTab(QWidget):
             and self._belongs_to_current_project(self.current_veg_path)
         )
         self.open_folder_button.setEnabled(project_ok and not busy)
+        self.rebuild_index_button.setEnabled(project_ok and not busy)
         self.open_rpp_button.setEnabled(rpp_ok and not busy)
         self.open_vegas_button.setEnabled(vegas_ok and not busy)
 
@@ -1344,6 +1358,24 @@ class ProjectPrepTab(QWidget):
             self._sync_project_actions()
             return
         os.startfile(str(path))
+
+    def rebuild_media_index(self) -> None:
+        path = self.current_project_path
+        if not path or not path.is_dir():
+            return
+        answer = QMessageBox.question(
+            self,
+            "Пересоздать индекс материалов",
+            "Будут удалены только scan_index.json и media_probe_cache.json. "
+            "Manifest, медиа, RPP и VEGAS не изменятся. Продолжить?",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        removed = self.container.projects.clear_media_index(path)
+        self.log.appendPlainText(f"Удалено служебных файлов индекса: {removed}. Запускается повторная проверка.")
+        self._start_project_migration(path)
 
     def open_current_rpp(self) -> None:
         rpp = self.current_rpp_path
@@ -1508,6 +1540,9 @@ class ProjectPrepTab(QWidget):
                 return
             if loaded_manifest.manifest:
                 options.reaper_proxy_height = loaded_manifest.manifest.reaper_proxy_height
+            if not self._resolve_preflight_ambiguities(options):
+                return
+            resume_states = dict(self._resume_states)
         elif new_project_path is None:
             new_project_path = self.container.projects.planned_path(destination, self.metadata)
             if new_project_path.exists():
@@ -1541,6 +1576,89 @@ class ProjectPrepTab(QWidget):
 
         self._start_worker(work, self._project_ready, self._task_failed, self._progress)
 
+    def _resolve_preflight_ambiguities(self, options: ProjectOptions) -> bool:
+        if not self.metadata or not self.selected_project_path:
+            return True
+        required = self.container.projects.required_roles(options)
+        while True:
+            ambiguous = next(
+                (
+                    (key, details) for key, details in self._resume_states.items()
+                    if key in required and details.get("status") == "AMBIGUOUS"
+                ),
+                None,
+            )
+            if not ambiguous:
+                break
+            role, details = ambiguous
+            if role != "audio":
+                QMessageBox.warning(
+                    self,
+                    "Требуется выбор материала",
+                    "Найдено несколько файлов для роли " + role + ". "
+                    "Отключите этот этап или назначьте файл вручную перед продолжением.",
+                )
+                self._set_job_state(UiJobState.WAITING_FOR_MEDIA_SELECTION)
+                return False
+            dialog = MediaRoleResolutionDialog(
+                title=self.metadata.title,
+                duration=self.metadata.duration,
+                candidates=list(details.get("candidates", [])),
+                project_path=self.selected_project_path,
+                parent=self,
+            )
+            if dialog.exec() != dialog.Accepted or dialog.resolution_action == "cancel":
+                self._set_job_state(UiJobState.WAITING_FOR_MEDIA_SELECTION)
+                self.progress_label.setText("Ожидание выбора оригинальной аудиодорожки. Новые файлы не создавались.")
+                self.create_button.setText("Продолжить")
+                self.create_button.setEnabled(True)
+                return False
+            try:
+                state = self.container.projects.resolve_media_role(
+                    self.metadata,
+                    self.selected_project_path,
+                    role,
+                    selected_path=dialog.selected_path,
+                    action=dialog.resolution_action,
+                    cancellation=CancellationToken(),
+                )
+            except Exception as exc:
+                ErrorDialog(str(exc), str(exc), self, folder=self.selected_project_path).exec()
+                self._set_job_state(UiJobState.WAITING_FOR_MEDIA_SELECTION)
+                return False
+            self._resume_states[role] = state
+            if dialog.resolution_action == "skip":
+                self.audio_check.setChecked(False)
+                if self._resume_states.get("instrumental", {}).get("status") == "VALID":
+                    self.instrumental_check.setChecked(False)
+                options.download_audio = False
+                options.create_instrumental = self.instrumental_check.isChecked()
+                required = self.container.projects.required_roles(options)
+            elif dialog.resolution_action == "download":
+                self.audio_check.setChecked(True)
+                options.download_audio = True
+        producers = {
+            "maximum": options.download_maximum,
+            "proxy": options.create_proxy,
+            "audio": options.download_audio,
+            "instrumental": options.create_instrumental,
+        }
+        missing_unproducible = [
+            key for key in required
+            if key in producers
+            and self._resume_states.get(key, {}).get("status") not in {"VALID", "NOT_REQUIRED"}
+            and not producers[key]
+        ]
+        if missing_unproducible:
+            QMessageBox.warning(
+                self,
+                "Неполный план",
+                "Для выбранных этапов не найдены готовые зависимости: " + ", ".join(missing_unproducible) +
+                ". Включите их создание или выберите готовые файлы.",
+            )
+            return False
+        return True
+
     def _choose_existing_project(self, path: Path, options: ProjectOptions):
         assert self.metadata is not None
         try:
@@ -1555,8 +1673,9 @@ class ProjectPrepTab(QWidget):
             "instrumental": "Инструментал",
             "thumbnail": "Превью",
             "reaper": "Проект REAPER",
+            "vegas": "Проект VEGAS",
         }
-        symbols = {"VALID": "✓", "PARTIAL": "◐", "INVALID": "✕", "DISABLED": "—", "MISSING": "○"}
+        symbols = {"VALID": "✓", "PARTIAL": "◐", "INVALID": "✕", "DISABLED": "—", "NOT_REQUIRED": "—", "AMBIGUOUS": "?", "MISSING": "○"}
         lines = []
         for key, label in labels.items():
             details = states.get(key, {"status": "MISSING"})
@@ -1571,6 +1690,10 @@ class ProjectPrepTab(QWidget):
                 suffix = " — не прошёл проверку"
             elif status == "DISABLED":
                 suffix = " — отключено"
+            elif status == "NOT_REQUIRED":
+                suffix = " — не требуется выбранным планом"
+            elif status == "AMBIGUOUS":
+                suffix = " — требуется выбор файла"
             else:
                 suffix = " — отсутствует"
             lines.append(f"{symbols.get(status, '○')} {label}{suffix}")
@@ -1782,6 +1905,24 @@ class ProjectPrepTab(QWidget):
             retry_callback=lambda: QTimer.singleShot(0, self._safe_ui_action("retry_project", self.create_project)),
             folder=folder,
         ).exec()
+
+    def _media_resolution_required(self, request) -> None:
+        self.token = None
+        self._set_busy(False)
+        self._set_job_state(UiJobState.WAITING_FOR_MEDIA_SELECTION)
+        self._resume_states[str(request.role)] = {
+            "status": "AMBIGUOUS",
+            "candidates": list(request.candidates),
+            "reason": str(request),
+        }
+        self.create_button.setEnabled(True)
+        self.create_button.setText("Продолжить")
+        self.progress_label.setText("Ожидание выбора материала. Проект не переведён в FAILED.")
+        QMessageBox.information(
+            self,
+            "Требуется выбор материала",
+            "Найдено несколько подходящих файлов. Нажмите «Продолжить», чтобы выбрать нужный файл.",
+        )
 
     def _waiting_for_disk_space(self, error) -> None:
         self.token = None
@@ -2015,6 +2156,7 @@ class ProjectPrepTab(QWidget):
                 "gpu_memory_required": self._resource_memory_error,
                 "system_memory_required": self._resource_memory_error,
                 "audio_output_missing": self._audio_output_missing,
+                "media_resolution_required": self._media_resolution_required,
             }
             callback = terminal_callbacks.get(kind)
             if callback:
@@ -2033,6 +2175,7 @@ class ProjectPrepTab(QWidget):
             "gpu_memory_required": lambda value: queue_terminal("gpu_memory_required", value),
             "system_memory_required": lambda value: queue_terminal("system_memory_required", value),
             "audio_output_missing": lambda value: queue_terminal("audio_output_missing", value),
+            "media_resolution_required": lambda value: queue_terminal("media_resolution_required", value),
             "thread_finished": cleanup,
         }
         if progress:
@@ -2059,6 +2202,7 @@ class ProjectPrepTab(QWidget):
         worker.gpu_memory_required.connect(bridge.gpu_memory_required)
         worker.system_memory_required.connect(bridge.system_memory_required)
         worker.audio_output_missing.connect(bridge.audio_output_missing)
+        worker.media_resolution_required.connect(bridge.media_resolution_required)
         if progress:
             worker.progress.connect(bridge.progress)
         for signal in (
@@ -2066,7 +2210,7 @@ class ProjectPrepTab(QWidget):
             worker.runtime_install_required, worker.authentication_required,
             worker.cookies_unavailable, worker.media_forbidden,
             worker.waiting_for_disk_space, worker.gpu_memory_required,
-            worker.system_memory_required, worker.audio_output_missing,
+            worker.system_memory_required, worker.audio_output_missing, worker.media_resolution_required,
         ):
             signal.connect(worker.deleteLater)
             signal.connect(thread.quit)

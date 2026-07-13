@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from creator_assistant.domain.job import CancellationToken
 from creator_assistant.domain.models import FormatPlan, VideoMetadata
+from creator_assistant.infrastructure.manifest_store import LegacyProjectScanner, project_metadata_dir
 
 
 ProbeCallable = Callable[[Path, Optional[CancellationToken]], Dict[str, Any]]
@@ -107,19 +111,37 @@ class LegacyProjectMediaInspector:
         ".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v",
         ".m4a", ".mp3", ".wav", ".flac", ".ogg", ".opus",
     }
-    PARTIAL_EXTENSIONS = {".part", ".ytdl", ".tmp", ".crdownload"}
-    IGNORED_DIR_MARKERS = {
-        "shorts cache", "shorts renders", "renders", "render",
-        "fixture", "fixtures", "backup", "backups", "temp", "tmp",
-    }
-    WEAK_INSTRUMENTAL_MARKERS = ("instrumental", "inst", "karaoke", "no vocal")
-    WEAK_AUDIO_MARKERS = ("audio", "original", "source", "vocals")
+    AUDIO_EXTENSIONS = {".m4a", ".mp3", ".wav", ".flac", ".ogg", ".opus", ".webm", ".aac"}
+    VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}
+    WEAK_INSTRUMENTAL_MARKERS = (
+        "instrumental", "instrument", "inst", "karaoke", "no vocals", "accompaniment",
+        "инструментал", "без голоса",
+    )
+    INSTRUMENTAL_NEGATIVE_MARKERS = (
+        "vocals", "vocal", "voice", "voiceover", "озвучка", "original audio", "final mix", "master",
+    )
+    WEAK_AUDIO_MARKERS = (
+        "[audio]", "original audio", "original", "source", "orig", "оригинал", "исходный звук",
+    )
+    ORIGINAL_AUDIO_NEGATIVE_MARKERS = (
+        "instrumental", "instrument", "inst", "vocals", "vocal", "voice", "voiceover", "озвучка",
+        "голос", "дубляж", "mix", "master", "final", "render", "готово", "edited", "processed",
+        "normalized", "shorts", "music", "background", "bgm", "reaper", "vegas", "stem", "accompaniment",
+    )
     WEAK_PROXY_MARKERS = ("proxy", "720p", "480p", "1080p")
     WEAK_MAX_MARKERS = ("max", "maximum", "source", "original")
 
-    def __init__(self, probe: ProbeCallable) -> None:
+    ROLE_LIMITS = {"maximum": 10, "proxy": 10, "audio": 15, "instrumental": 10}
+
+    def __init__(self, probe: ProbeCallable, cache_path: Optional[Path] = None) -> None:
         self.probe = probe
         self._cache: Dict[str, LegacyMediaProbe] = {}
+        self.cache_path = cache_path
+        self.stats: Dict[str, int] = {
+            "allowed_files": 0, "shortlist": 0, "ffprobe_calls": 0,
+            "cache_hits": 0, "ignored_sidecar_files": 0, "excluded_directories": 0,
+        }
+        self._persistent_cache = self._load_cache()
 
     def inspect(
         self,
@@ -129,98 +151,127 @@ class LegacyProjectMediaInspector:
         *,
         proxy_height: int,
         cancellation: Optional[CancellationToken] = None,
+        required_roles: Optional[Iterable[str]] = None,
+        assigned_paths: Optional[Dict[str, Path]] = None,
     ) -> Dict[str, LegacyRoleMatch]:
-        probes = [probe for probe in self._scan(project_path, cancellation) if not probe.error]
+        required = set(required_roles or {"maximum", "proxy", "audio", "instrumental"})
+        assigned = {key: Path(value) for key, value in (assigned_paths or {}).items() if value}
+        probes = [probe for probe in self._scan(project_path, cancellation, required, assigned) if not probe.error]
         now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
-        return {
-            "maximum": self._select(
+        result: Dict[str, LegacyRoleMatch] = {
+            key: LegacyRoleMatch(role, "NOT_REQUIRED", confidence="NOT_REQUIRED", reason="Role is not required by the selected plan.")
+            for key, role in {
+                "maximum": "MAX_VIDEO", "proxy": "REAPER_PROXY",
+                "audio": "ORIGINAL_AUDIO", "instrumental": "INSTRUMENTAL",
+            }.items()
+        }
+        if "maximum" in required:
+            result["maximum"] = self._select(
                 "MAX_VIDEO",
                 probes,
                 lambda item: self._score_maximum(item, metadata, plan),
                 now,
-            ),
-            "proxy": self._select(
+                preferred=assigned.get("maximum"),
+            )
+        if "proxy" in required:
+            result["proxy"] = self._select(
                 "REAPER_PROXY",
                 probes,
                 lambda item: self._score_proxy(item, metadata, plan, proxy_height),
                 now,
-            ),
-            "audio": self._select(
-                "ORIGINAL_AUDIO",
-                probes,
-                lambda item: self._score_audio(item, metadata, instrumental=False),
-                now,
-            ),
-            "instrumental": self._select(
+                preferred=assigned.get("proxy"),
+            )
+        occupied = {
+            str(path.resolve()).casefold(): role for role, path in assigned.items() if path.exists()
+        }
+        if "instrumental" in required:
+            result["instrumental"] = self._select(
                 "INSTRUMENTAL",
                 probes,
                 lambda item: self._score_audio(item, metadata, instrumental=True),
                 now,
-            ),
-        }
+                preferred=assigned.get("instrumental"),
+            )
+            if result["instrumental"].status == "VALID":
+                occupied[str(Path(result["instrumental"].path).resolve()).casefold()] = "instrumental"
+        if "audio" in required:
+            available = [
+                item for item in probes
+                if occupied.get(str(item.path.resolve()).casefold()) in (None, "audio")
+            ]
+            result["audio"] = self._select(
+                "ORIGINAL_AUDIO",
+                available,
+                lambda item: self._score_audio(item, metadata, instrumental=False),
+                now,
+                preferred=assigned.get("audio"),
+            )
+        self._save_cache()
+        return result
 
-    def _scan(self, project_path: Path, cancellation: Optional[CancellationToken]) -> List[LegacyMediaProbe]:
+    def _scan(
+        self,
+        project_path: Path,
+        cancellation: Optional[CancellationToken],
+        required_roles: set[str],
+        assigned_paths: Dict[str, Path],
+    ) -> List[LegacyMediaProbe]:
         probes: List[LegacyMediaProbe] = []
-        for path in self._candidate_files(project_path):
+        paths = self._candidate_files(project_path)
+        shortlisted: Dict[str, Path] = {}
+        for role in required_roles:
+            scored_paths = sorted(
+                ((self._cheap_score(path, role), path) for path in paths),
+                key=lambda item: item[0],
+                reverse=True,
+            )
+            positive = [item for item in scored_paths if item[0] > 0]
+            if len(positive) > 1 and positive[0][0] >= 45 and positive[0][0] - positive[1][0] >= 10:
+                positive = [item for item in positive if item[0] >= positive[0][0] - 4]
+            for score, path in positive[: self.ROLE_LIMITS.get(role, 10)]:
+                if score > 0:
+                    shortlisted[str(path.resolve()).casefold()] = path
+        for role, path in assigned_paths.items():
+            if role in required_roles and path.is_file():
+                shortlisted[str(path.resolve()).casefold()] = path
+        self.stats["shortlist"] = len(shortlisted)
+        for path in shortlisted.values():
             if cancellation:
                 cancellation.raise_if_cancelled()
-            cache_key = str(path.resolve()).casefold()
+            stat = path.stat()
+            cache_key = self._cache_key(path, stat.st_size, stat.st_mtime)
             cached = self._cache.get(cache_key)
             if cached:
                 probes.append(cached)
                 continue
-            probe = self._probe_file(path, cancellation)
+            persistent = self._persistent_cache.get(cache_key)
+            if isinstance(persistent, dict):
+                probe = self._probe_from_dict(path, persistent)
+                self.stats["cache_hits"] += 1
+            else:
+                probe = self._probe_file(path, cancellation)
+                self.stats["ffprobe_calls"] += 1
             self._cache[cache_key] = probe
+            if not probe.error:
+                self._persistent_cache[cache_key] = probe.to_dict()
             probes.append(probe)
         return probes
 
-    def _candidate_files(self, project_path: Path) -> Iterable[Path]:
-        seen: set[str] = set()
-        roots = [project_path, project_path / "Материалы"]
-        for root in roots:
-            if not root.is_dir():
-                continue
-            for path in self._files_one_level(root):
-                key = str(path).casefold()
-                if key not in seen and self._is_candidate(path):
-                    seen.add(key)
-                    yield path
-
-    def _files_one_level(self, root: Path) -> Iterable[Path]:
-        try:
-            children = list(root.iterdir())
-        except OSError:
-            return
-        for child in children:
-            if child.is_file():
-                yield child
-            elif child.is_dir() and not self._ignored_path(child):
-                try:
-                    for nested in child.iterdir():
-                        if nested.is_file():
-                            yield nested
-                except OSError:
-                    continue
+    def _candidate_files(self, project_path: Path) -> List[Path]:
+        paths, excluded, sidecars = LegacyProjectScanner._allowed_files(project_path)
+        self.stats["excluded_directories"] = excluded
+        self.stats["ignored_sidecar_files"] = sidecars
+        candidates = [path for path in paths if self._is_candidate(path)]
+        self.stats["allowed_files"] = len(paths)
+        return candidates
 
     def _is_candidate(self, path: Path) -> bool:
-        if self._ignored_path(path):
-            return False
-        suffixes = {suffix.casefold() for suffix in path.suffixes}
-        if suffixes & self.PARTIAL_EXTENSIONS:
-            return False
         try:
             if path.stat().st_size <= 0:
                 return False
         except OSError:
             return False
         return path.suffix.casefold() in self.MEDIA_EXTENSIONS
-
-    def _ignored_path(self, path: Path) -> bool:
-        directory_names = [path.name.casefold()] if path.is_dir() else [path.parent.name.casefold()]
-        if any(marker in part for part in directory_names for marker in self.IGNORED_DIR_MARKERS):
-            return True
-        stem = path.name.casefold()
-        return any(marker in stem for marker in (".part", ".ytdl", ".tmp"))
 
     def _probe_file(self, path: Path, cancellation: Optional[CancellationToken]) -> LegacyMediaProbe:
         try:
@@ -267,6 +318,7 @@ class LegacyProjectMediaInspector:
         probes: List[LegacyMediaProbe],
         score_func: Callable[[LegacyMediaProbe], Optional[tuple[int, float, str]]],
         validated_at: str,
+        preferred: Optional[Path] = None,
     ) -> LegacyRoleMatch:
         scored: List[tuple[int, float, str, LegacyMediaProbe]] = []
         for item in probes:
@@ -276,8 +328,18 @@ class LegacyProjectMediaInspector:
         if not scored:
             return LegacyRoleMatch(role, "NOT_MATCHED", reason="No content-compatible files were found.")
         scored.sort(key=lambda item: (item[0], item[1], item[3].size), reverse=True)
+        if preferred:
+            preferred_key = str(preferred.resolve()).casefold()
+            chosen = next((item for item in scored if str(item[3].path.resolve()).casefold() == preferred_key), None)
+            if chosen:
+                _rank, _weight, reason, probe = chosen
+                return LegacyRoleMatch(
+                    role, "VALID", str(probe.path), probe.size, "HIGH", source="manifest",
+                    reason="Previously confirmed manifest path. " + reason,
+                    probe=probe.to_dict(), validated_at=validated_at,
+                )
         high = [item for item in scored if item[0] >= 100]
-        if len(high) == 1:
+        if high and (len(high) == 1 or high[0][0] - high[1][0] >= 8):
             _rank, _weight, reason, probe = high[0]
             return LegacyRoleMatch(
                 role,
@@ -328,6 +390,10 @@ class LegacyProjectMediaInspector:
         rank = 100
         if self._weak_name(item.path, self.WEAK_MAX_MARKERS):
             rank += 4
+        if item.path.parent.name.casefold() in {"материалы", "materials", "source", "sources"}:
+            rank += 8
+        if expected_height and (f"{expected_height}p" in item.path.name.casefold() or f"x{expected_height}" in item.path.name.casefold()):
+            rank += 4
         return rank, float(item.height or 0), "Duration, SDR, video/audio streams, resolution and FPS match MAX_VIDEO."
 
     def _score_proxy(
@@ -350,6 +416,8 @@ class LegacyProjectMediaInspector:
         rank = 100
         if self._weak_name(item.path, self.WEAK_PROXY_MARKERS):
             rank += 4
+        if item.path.parent.name.casefold() in {"материалы", "materials", "source", "sources"}:
+            rank += 8
         return rank, float(item.height or 0), "Duration, SDR, video/audio streams, horizontal frame, height and FPS match REAPER_PROXY."
 
     def _score_audio(
@@ -363,15 +431,81 @@ class LegacyProjectMediaInspector:
             return None
         if not self._duration_matches(item.duration, metadata.duration):
             return None
-        if instrumental and item.path.suffix.casefold() != ".flac":
-            return None
-        name_markers = self.WEAK_INSTRUMENTAL_MARKERS if instrumental else self.WEAK_AUDIO_MARKERS
         if instrumental:
-            rank = 104 if self._weak_name(item.path, name_markers) else 100
+            if item.path.suffix.casefold() != ".flac":
+                return None
+            if self._name_has_markers(item.path, self.INSTRUMENTAL_NEGATIVE_MARKERS):
+                return None
+        elif self._name_has_markers(item.path, self.ORIGINAL_AUDIO_NEGATIVE_MARKERS):
+            return None
+        if instrumental:
+            rank = 115 if self._name_has_markers(item.path, self.WEAK_INSTRUMENTAL_MARKERS) else 92
         else:
-            rank = 104 if self._weak_name(item.path, name_markers) else (80 if item.path.suffix.casefold() == ".flac" else 100)
-        reason = "Duration and audio-only stream match " + ("INSTRUMENTAL." if instrumental else "ORIGINAL_AUDIO.")
+            positive = self._name_has_markers(item.path, self.WEAK_AUDIO_MARKERS)
+            downloaded_container = item.path.suffix.casefold() in {".m4a", ".webm", ".opus", ".ogg"}
+            in_materials = item.path.parent.name.casefold() in {"материалы", "materials", "source", "sources"}
+            rank = 112 if positive else (102 if downloaded_container and in_materials else 85)
+        reason = (
+            "Audio-only FLAC, duration and Instrumental naming match INSTRUMENTAL."
+            if instrumental and rank >= 100 else
+            "Audio-only duration and role-specific naming/container match ORIGINAL_AUDIO."
+            if not instrumental and rank >= 100 else
+            "Audio-only duration matches, but the filename is not role-specific."
+        )
         return rank, float(item.bit_rate or item.size), reason
+
+    def _cheap_score(self, path: Path, role: str) -> int:
+        suffix = path.suffix.casefold()
+        if role in {"maximum", "proxy"}:
+            if suffix not in self.VIDEO_EXTENSIONS:
+                return 0
+            if role == "maximum" and self._name_has_markers(path, (*self.WEAK_PROXY_MARKERS, "short", "preview")):
+                return 0
+            if role == "proxy" and self._name_has_markers(path, self.WEAK_MAX_MARKERS) and not self._name_has_markers(path, self.WEAK_PROXY_MARKERS):
+                return 0
+            markers = self.WEAK_MAX_MARKERS if role == "maximum" else self.WEAK_PROXY_MARKERS
+            in_materials = path.parent.name.casefold() in {"материалы", "materials", "source", "sources"}
+            return 30 + (20 if self._name_has_markers(path, markers) else 0) + (15 if in_materials else 0)
+        if role == "instrumental":
+            if suffix != ".flac" or self._name_has_markers(path, self.INSTRUMENTAL_NEGATIVE_MARKERS):
+                return 0
+            return 40 + (40 if self._name_has_markers(path, self.WEAK_INSTRUMENTAL_MARKERS) else 0)
+        if role == "audio":
+            if suffix not in self.AUDIO_EXTENSIONS or self._name_has_markers(path, self.ORIGINAL_AUDIO_NEGATIVE_MARKERS):
+                return 0
+            return 30 + (40 if self._name_has_markers(path, self.WEAK_AUDIO_MARKERS) else 0)
+        return 0
+
+    @staticmethod
+    def _cache_key(path: Path, size: int, mtime: float) -> str:
+        return f"{str(path.resolve()).casefold()}|{size}|{mtime:.6f}"
+
+    def _load_cache(self) -> Dict[str, Dict[str, Any]]:
+        if not self.cache_path or not self.cache_path.is_file():
+            return {}
+        try:
+            raw = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            return raw if isinstance(raw, dict) else {}
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return {}
+
+    def _save_cache(self) -> None:
+        if not self.cache_path:
+            return
+        if self.cache_path.parent.is_file():
+            return
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.cache_path.with_suffix(self.cache_path.suffix + ".tmp")
+        temporary.write_text(json.dumps(self._persistent_cache, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(str(temporary), str(self.cache_path))
+
+    @staticmethod
+    def _probe_from_dict(path: Path, data: Dict[str, Any]) -> LegacyMediaProbe:
+        fields = {
+            key: value for key, value in data.items()
+            if key in LegacyMediaProbe.__dataclass_fields__ and key != "path"
+        }
+        return LegacyMediaProbe(path=path, **fields)
 
     def _looks_like_proxy_or_short(self, item: LegacyMediaProbe) -> bool:
         name = item.path.name.casefold()
@@ -401,6 +535,19 @@ class LegacyProjectMediaInspector:
     def _weak_name(path: Path, markers: Iterable[str]) -> bool:
         name = path.name.casefold()
         return any(marker in name for marker in markers)
+
+    @staticmethod
+    def _name_has_markers(path: Path, markers: Iterable[str]) -> bool:
+        name = path.stem.casefold()
+        words = set(re.findall(r"[\wа-яё]+", name, flags=re.IGNORECASE))
+        for marker in markers:
+            normalized = marker.casefold()
+            if " " in normalized or any(ch in normalized for ch in "[]"):
+                if normalized in name:
+                    return True
+            elif normalized in words:
+                return True
+        return False
 
     @staticmethod
     def _int(value: Any) -> Optional[int]:
