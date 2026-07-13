@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -22,10 +23,12 @@ from creator_assistant.app import ServiceContainer
 from creator_assistant.domain.job import CancellationToken
 from creator_assistant.domain.shorts.models import SourceInfo
 from creator_assistant.services.shorts.cache import ShortsCache
+from creator_assistant.services.shorts.candidate_generator import CandidateSettings
 from creator_assistant.services.shorts.manifest import ShortsManifestStore
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectPaths, ShortsProjectStore
 from creator_assistant.services.shorts.source_service import ShortsSourceService
 from creator_assistant.ui.shorts.analysis_progress_panel import AnalysisProgressPanel
+from creator_assistant.ui.shorts.analysis_settings_panel import AnalysisSettingsPanel
 from creator_assistant.ui.shorts.source_panel import SourcePanel
 from creator_assistant.ui.widgets.error_dialog import ErrorDialog
 
@@ -53,9 +56,10 @@ class _AnalysisWorker(QObject):
     cancelled = Signal()
     progress = Signal(str, str, int)
 
-    def __init__(self, container: ServiceContainer, source: SourceInfo, paths: ShortsProjectPaths, token: CancellationToken) -> None:
+    def __init__(self, container: ServiceContainer, source: SourceInfo, paths: ShortsProjectPaths, token: CancellationToken, candidate_settings: CandidateSettings) -> None:
         super().__init__()
         self.container, self.source, self.paths, self.token = container, source, paths, token
+        self.candidate_settings = candidate_settings
 
     @Slot()
     def run(self) -> None:
@@ -99,8 +103,40 @@ class _AnalysisWorker(QObject):
                 manifest.whisper_model = transcript.model
                 cache.mark_complete("transcription", transcription_settings)
                 store.save(manifest)
-            self.progress.emit("Транскрипция готова", f"{len(transcript.segments)} сегментов · язык {transcript.language} · сохранены JSON/TXT/SRT/VTT.", 58)
-            self.finished.emit(transcript)
+            self.progress.emit("6. Анализ сцен", "FFmpeg определяет реальные смены сцен без тяжёлой CV-модели.", 62)
+            scenes_path = self.paths.analysis / "scenes.json"
+            scene_settings = {"threshold": self.container.shorts_scenes.threshold}
+            if cache.stage_valid("scenes", scenes_path, scene_settings):
+                scenes = self.container.shorts_scenes.load(scenes_path)
+            else:
+                scenes = self.container.shorts_scenes.detect(proxy, self.source.duration, scenes_path, self.token)
+                cache.mark_complete("scenes", scene_settings)
+                store.save(manifest)
+            self.progress.emit("7. Анализ звука", "Определяются речь, тишина и средняя громкость.", 72)
+            audio_features_path = self.paths.analysis / "audio_features.json"
+            activity_settings = {"silence_db": -35, "minimum_pause": 0.7}
+            if cache.stage_valid("audio_activity", audio_features_path, activity_settings):
+                audio_features = self.container.shorts_audio_activity.load(audio_features_path)
+            else:
+                audio_features = self.container.shorts_audio_activity.analyse(audio, self.source.duration, audio_features_path, self.token)
+                cache.mark_complete("audio_activity", activity_settings)
+                store.save(manifest)
+            self.progress.emit("8–10. Кандидаты", "Границы по фразам, паузам и сценам; затем эвристическая оценка и дедупликация.", 84)
+            candidates_path = self.paths.analysis / "candidates.json"
+            candidate_config = asdict(self.candidate_settings)
+            if cache.stage_valid("candidates", candidates_path, candidate_config):
+                from creator_assistant.domain.shorts.models import Candidate
+                candidates = [Candidate(**item) for item in json.loads(candidates_path.read_text(encoding="utf-8"))]
+            else:
+                raw_candidates = self.container.shorts_candidate_generator.generate(transcript, scenes, audio_features, self.candidate_settings)
+                scored = [self.container.shorts_candidate_scorer.score(item, scenes, audio_features) for item in raw_candidates]
+                candidates = self.container.shorts_duplicate_filter.filter(scored, self.candidate_settings.count)
+                candidates_path.write_text(json.dumps([asdict(item) for item in candidates], ensure_ascii=False, indent=2), encoding="utf-8")
+                cache.mark_complete("candidates", candidate_config)
+                manifest.candidates = [asdict(item) for item in candidates]
+                store.save(manifest)
+            self.progress.emit("11. Ожидание пользователя", f"Подготовлено {len(candidates)} непохожих кандидатов для ручной проверки.", 90)
+            self.finished.emit({"transcript": transcript, "candidates": candidates, "scenes": scenes, "audio_features": audio_features})
         except Exception as exc:
             from creator_assistant.domain.errors import JobCancelledError
             if isinstance(exc, JobCancelledError) or self.token.is_cancelled:
@@ -135,6 +171,7 @@ class ShortsTab(QWidget):
         left_layout = QVBoxLayout(left)
         self.source_panel = SourcePanel()
         self.progress_panel = AnalysisProgressPanel()
+        self.analysis_settings = AnalysisSettingsPanel()
         self.start_button = QPushButton("Запустить анализ")
         self.start_button.setEnabled(False)
         self.cancel_button = QPushButton("Отменить")
@@ -144,6 +181,7 @@ class ShortsTab(QWidget):
         action_row.addWidget(self.cancel_button)
         left_layout.addWidget(self.source_panel)
         left_layout.addWidget(self.progress_panel)
+        left_layout.addWidget(self.analysis_settings)
         left_layout.addLayout(action_row)
         left_layout.addStretch(1)
         self.workspace = QTabWidget()
@@ -232,7 +270,7 @@ class ShortsTab(QWidget):
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         thread = QThread(self)
-        worker = _AnalysisWorker(self.container, self.source, self.paths, self._token)
+        worker = _AnalysisWorker(self.container, self.source, self.paths, self._token, self.analysis_settings.value())
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self.progress_panel.update_state)
@@ -255,8 +293,9 @@ class ShortsTab(QWidget):
         self.progress_panel.update_state("Отмена", "Останавливаю текущий внешний процесс; готовый cache сохранится.", self.progress_panel.progress.value())
 
     @Slot(object)
-    def _analysis_finished(self, transcript) -> None:
-        self.progress_panel.update_state("Расшифровка готова", transcript.text[:400], 58)
+    def _analysis_finished(self, payload) -> None:
+        candidates = payload["candidates"]
+        self.progress_panel.update_state("Анализ готов", f"Найдено {len(candidates)} кандидатов. Эвристическая оценка требует проверки человеком.", 90)
 
     @Slot()
     def _analysis_cancelled(self) -> None:

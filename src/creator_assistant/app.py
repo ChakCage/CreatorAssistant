@@ -31,7 +31,12 @@ from creator_assistant.services.yt_dlp_service import YtDlpService
 from creator_assistant.services.storage_service import StoragePolicy, StorageService, default_temp_root
 from creator_assistant.services.settings_service import SettingsService
 from creator_assistant.services.shorts.audio_extract_service import TranscriptionAudioService
+from creator_assistant.services.shorts.audio_activity_service import AudioActivityService
+from creator_assistant.services.shorts.candidate_generator import CandidateGenerator
+from creator_assistant.services.shorts.candidate_scorer import HeuristicCandidateScorer
+from creator_assistant.services.shorts.duplicate_filter import DuplicateFilter
 from creator_assistant.services.shorts.proxy_service import AnalysisProxyService
+from creator_assistant.services.shorts.scene_detection_service import SceneDetectionService
 from creator_assistant.services.shorts.transcription.disabled import DisabledTranscriptionBackend
 from creator_assistant.services.shorts.transcription.existing_whisper import ExistingWhisperBackend
 from creator_assistant.services.shorts.transcription.managed_whisper import ManagedWhisperBackend
@@ -133,6 +138,11 @@ class ServiceContainer:
             and self.detector.nvenc_available(ffmpeg_path),
         )
         self.shorts_audio = TranscriptionAudioService(self.runner, ffmpeg_path)
+        self.shorts_scenes = SceneDetectionService(self.runner, ffmpeg_path)
+        self.shorts_audio_activity = AudioActivityService(self.runner, ffmpeg_path)
+        self.shorts_candidate_generator = CandidateGenerator()
+        self.shorts_candidate_scorer = HeuristicCandidateScorer()
+        self.shorts_duplicate_filter = DuplicateFilter()
 
     def save_settings(self, settings: Dict[str, Any], started_at: float | None = None) -> None:
         candidate = deepcopy(settings)
