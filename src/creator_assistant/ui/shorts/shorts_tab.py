@@ -25,10 +25,13 @@ from creator_assistant.domain.shorts.models import SourceInfo
 from creator_assistant.services.shorts.cache import ShortsCache
 from creator_assistant.services.shorts.candidate_generator import CandidateSettings
 from creator_assistant.services.shorts.manifest import ShortsManifestStore
+from creator_assistant.services.shorts.review_service import CandidateReviewService
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectPaths, ShortsProjectStore
 from creator_assistant.services.shorts.source_service import ShortsSourceService
 from creator_assistant.ui.shorts.analysis_progress_panel import AnalysisProgressPanel
 from creator_assistant.ui.shorts.analysis_settings_panel import AnalysisSettingsPanel
+from creator_assistant.ui.shorts.candidate_editor import CandidateEditor
+from creator_assistant.ui.shorts.candidate_list import CandidateList
 from creator_assistant.ui.shorts.source_panel import SourcePanel
 from creator_assistant.ui.widgets.error_dialog import ErrorDialog
 
@@ -156,6 +159,8 @@ class ShortsTab(QWidget):
         self.project_store = ShortsProjectStore()
         self.source: Optional[SourceInfo] = None
         self.paths: Optional[ShortsProjectPaths] = None
+        self.candidates = []
+        self.review_service: Optional[CandidateReviewService] = None
         self._pending_root: Optional[Path] = None
         self._thread: Optional[QThread] = None
         self._token: Optional[CancellationToken] = None
@@ -185,8 +190,10 @@ class ShortsTab(QWidget):
         left_layout.addLayout(action_row)
         left_layout.addStretch(1)
         self.workspace = QTabWidget()
-        self.workspace.addTab(self._placeholder("После анализа здесь появятся реальные кандидаты."), "Кандидаты")
-        self.workspace.addTab(self._placeholder("Выберите кандидата для просмотра и правки границ."), "Редактор")
+        self.candidate_list = CandidateList()
+        self.candidate_editor = CandidateEditor()
+        self.workspace.addTab(self.candidate_list, "Кандидаты")
+        self.workspace.addTab(self.candidate_editor, "Редактор")
         self.workspace.addTab(self._placeholder("Субтитры создаются отдельно для каждого Short."), "Субтитры")
         self.workspace.addTab(self._placeholder("Одобренные фрагменты попадут в последовательную очередь."), "Рендер")
         splitter.addWidget(left)
@@ -198,6 +205,10 @@ class ShortsTab(QWidget):
         self.source_panel.choose_project_requested.connect(self.choose_project)
         self.start_button.clicked.connect(self.start_analysis)
         self.cancel_button.clicked.connect(self.cancel_analysis)
+        self.candidate_list.selected.connect(self._edit_candidate)
+        self.candidate_list.status_changed.connect(self._set_candidate_status)
+        self.candidate_editor.status_changed.connect(self._set_candidate_status)
+        self.candidate_editor.boundaries_saved.connect(self._save_boundaries)
 
     @staticmethod
     def _placeholder(text: str) -> QWidget:
@@ -295,7 +306,41 @@ class ShortsTab(QWidget):
     @Slot(object)
     def _analysis_finished(self, payload) -> None:
         candidates = payload["candidates"]
+        self.candidates = candidates
+        self.candidate_list.set_candidates(candidates)
         self.progress_panel.update_state("Анализ готов", f"Найдено {len(candidates)} кандидатов. Эвристическая оценка требует проверки человеком.", 90)
+
+    @Slot(object)
+    def _edit_candidate(self, candidate) -> None:
+        if not self.paths:
+            return
+        self.candidate_editor.set_candidate(candidate, self.paths.cache / "analysis_proxy.mp4")
+        self.workspace.setCurrentWidget(self.candidate_editor)
+
+    @Slot(object, str)
+    def _set_candidate_status(self, candidate, status: str) -> None:
+        if not self.review_service:
+            return
+        candidate.status = status
+        try:
+            self.review_service.save(self.candidates)
+            self.candidate_list.refresh()
+            label = "одобрен" if status == "approved" else "отклонён"
+            self.progress_panel.update_state("Проверка кандидатов", f"{candidate.id}: {label}. Решение сохранено.", 92)
+        except Exception as exc:
+            ErrorDialog(str(exc), repr(exc), self).exec()
+
+    @Slot(object, float, float)
+    def _save_boundaries(self, candidate, start: float, end: float) -> None:
+        if not self.review_service:
+            return
+        try:
+            self.review_service.update_boundaries(candidate, start, end)
+            self.review_service.save(self.candidates)
+            self.candidate_list.refresh()
+            self.progress_panel.update_state("Границы сохранены", f"{candidate.id}: {start:.3f}–{end:.3f} сек.", 92)
+        except Exception as exc:
+            ErrorDialog(str(exc), repr(exc), self).exec()
 
     @Slot()
     def _analysis_cancelled(self) -> None:
@@ -316,11 +361,22 @@ class ShortsTab(QWidget):
         assert self._pending_root is not None
         self.source = source
         self.paths = self.project_store.open_or_create(self._pending_root, source)
+        self.review_service = CandidateReviewService(self.paths, source.duration)
         source_json = self.paths.analysis / "source_info.json"
         source_json.write_text(json.dumps(source.__dict__, ensure_ascii=False, indent=2), encoding="utf-8")
         self.source_panel.show_source(source, self.paths.root)
         self.progress_panel.update_state("Источник готов", "Manifest и структура проекта сохранены атомарно.", 8)
         self.start_button.setEnabled(True)
+        candidates_path = self.paths.analysis / "candidates.json"
+        if candidates_path.is_file():
+            from creator_assistant.domain.shorts.models import Candidate
+            try:
+                self.candidates = [Candidate(**item) for item in json.loads(candidates_path.read_text(encoding="utf-8"))]
+                self.candidate_list.set_candidates(self.candidates)
+                if self.candidates:
+                    self.progress_panel.update_state("Проект восстановлен", f"Загружено {len(self.candidates)} кандидатов; завершённые этапы будут взяты из cache.", 90)
+            except (OSError, ValueError, TypeError):
+                self.candidates = []
 
     @Slot(str, str)
     def _probe_failed(self, message: str, details: str) -> None:
