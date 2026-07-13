@@ -36,6 +36,7 @@ from creator_assistant.services.shorts.candidate_generator import CandidateGener
 from creator_assistant.services.shorts.candidate_scorer import HeuristicCandidateScorer
 from creator_assistant.services.shorts.duplicate_filter import DuplicateFilter
 from creator_assistant.services.shorts.proxy_service import AnalysisProxyService
+from creator_assistant.services.shorts.render_service import ShortsRenderService
 from creator_assistant.services.shorts.scene_detection_service import SceneDetectionService
 from creator_assistant.services.shorts.transcription.disabled import DisabledTranscriptionBackend
 from creator_assistant.services.shorts.transcription.existing_whisper import ExistingWhisperBackend
@@ -143,6 +144,11 @@ class ServiceContainer:
         self.shorts_candidate_generator = CandidateGenerator()
         self.shorts_candidate_scorer = HeuristicCandidateScorer()
         self.shorts_duplicate_filter = DuplicateFilter()
+        self.shorts_render = ShortsRenderService(
+            self.runner, ffmpeg_path, ffprobe_path,
+            bool(self.settings.get("prefer_nvenc", True)) and self.detector.nvenc_available(ffmpeg_path),
+            int(float(self.settings.get("disk_reserve_gb", 5)) * 1024**3),
+        )
 
     def save_settings(self, settings: Dict[str, Any], started_at: float | None = None) -> None:
         candidate = deepcopy(settings)

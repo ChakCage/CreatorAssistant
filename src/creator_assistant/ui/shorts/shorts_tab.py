@@ -21,11 +21,13 @@ from PySide6.QtWidgets import (
 
 from creator_assistant.app import ServiceContainer
 from creator_assistant.domain.job import CancellationToken
-from creator_assistant.domain.shorts.models import SourceInfo
+from creator_assistant.domain.shorts.models import RenderJob, SourceInfo
 from creator_assistant.services.shorts.cache import ShortsCache
 from creator_assistant.services.shorts.candidate_generator import CandidateSettings
 from creator_assistant.services.shorts.manifest import ShortsManifestStore
 from creator_assistant.services.shorts.review_service import CandidateReviewService
+from creator_assistant.services.shorts.render_service import unique_output_path
+from creator_assistant.services.shorts.subtitle_service import SubtitleService
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectPaths, ShortsProjectStore
 from creator_assistant.services.shorts.source_service import ShortsSourceService
 from creator_assistant.ui.shorts.analysis_progress_panel import AnalysisProgressPanel
@@ -34,6 +36,7 @@ from creator_assistant.ui.shorts.candidate_editor import CandidateEditor
 from creator_assistant.ui.shorts.candidate_list import CandidateList
 from creator_assistant.ui.shorts.source_panel import SourcePanel
 from creator_assistant.ui.shorts.subtitle_editor import SubtitleEditor
+from creator_assistant.ui.shorts.render_queue import RenderQueue
 from creator_assistant.ui.widgets.error_dialog import ErrorDialog
 
 
@@ -150,6 +153,70 @@ class _AnalysisWorker(QObject):
                 self.failed.emit(str(exc), traceback.format_exc())
 
 
+class _RenderWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str, str)
+    cancelled = Signal()
+    job_updated = Signal(object)
+
+    def __init__(self, container: ServiceContainer, source: SourceInfo, paths: ShortsProjectPaths, transcript, candidates, token: CancellationToken) -> None:
+        super().__init__()
+        self.container, self.source, self.paths = container, source, paths
+        self.transcript, self.candidates, self.token = transcript, candidates, token
+
+    def _persist(self, jobs: list[RenderJob]) -> None:
+        manifest_store = ShortsManifestStore(self.paths.manifest)
+        manifest = manifest_store.load()
+        if manifest:
+            merged = {str(item.get("candidate_id")): item for item in manifest.render_jobs}
+            merged.update({job.candidate_id: asdict(job) for job in jobs})
+            manifest.render_jobs = list(merged.values())
+            manifest_store.save(manifest)
+
+    @Slot()
+    def run(self) -> None:
+        jobs: list[RenderJob] = []
+        subtitle_service = SubtitleService()
+        try:
+            for candidate in self.candidates:
+                self.token.raise_if_cancelled()
+                try:
+                    index = int(candidate.id.rsplit("_", 1)[-1])
+                except ValueError:
+                    index = len(jobs) + 1
+                target = unique_output_path(self.paths.renders, Path(self.source.name).stem, index, candidate.title)
+                job = RenderJob(f"render_{candidate.id}", candidate.id, str(target), "rendering", 0.0)
+                jobs.append(job)
+                self.job_updated.emit(job)
+                ass = self.paths.subtitles / f"{candidate.id}.ass"
+                if not ass.is_file():
+                    settings = candidate.subtitle_settings or {"style": "clean", "position": "lower", "size": 58}
+                    cues = subtitle_service.generate(self.transcript, candidate, int(settings.get("maximum", 36)), int(settings.get("lines", 2)))
+                    subtitle_service.write(cues, self.paths.subtitles / f"{candidate.id}.srt", ass, settings)
+
+                def update(value: float, current=job):
+                    current.progress = round(value, 1)
+                    self.job_updated.emit(current)
+
+                try:
+                    self.container.shorts_render.render(self.source, candidate, ass, target, self.token, update)
+                    job.status, job.progress = "done", 100.0
+                except Exception as exc:
+                    if self.token.is_cancelled:
+                        job.status, job.error = "cancelled", "Операция отменена пользователем."
+                        self.job_updated.emit(job)
+                        self._persist(jobs)
+                        self.cancelled.emit()
+                        return
+                    job.status, job.error = "error", str(exc)
+                self.job_updated.emit(job)
+                self._persist(jobs)
+            self.finished.emit(jobs)
+        except Exception as exc:
+            import traceback
+            self.failed.emit(str(exc), traceback.format_exc())
+
+
 class ShortsTab(QWidget):
     """Independent Shorts workspace; later stages plug into its inner tabs."""
 
@@ -195,10 +262,11 @@ class ShortsTab(QWidget):
         self.candidate_list = CandidateList()
         self.candidate_editor = CandidateEditor()
         self.subtitle_editor = SubtitleEditor()
+        self.render_queue = RenderQueue()
         self.workspace.addTab(self.candidate_list, "Кандидаты")
         self.workspace.addTab(self.candidate_editor, "Редактор")
         self.workspace.addTab(self.subtitle_editor, "Субтитры и кадр")
-        self.workspace.addTab(self._placeholder("Одобренные фрагменты попадут в последовательную очередь."), "Рендер")
+        self.workspace.addTab(self.render_queue, "Рендер")
         splitter.addWidget(left)
         splitter.addWidget(self.workspace)
         splitter.setStretchFactor(0, 2)
@@ -213,6 +281,9 @@ class ShortsTab(QWidget):
         self.candidate_editor.status_changed.connect(self._set_candidate_status)
         self.candidate_editor.boundaries_saved.connect(self._save_boundaries)
         self.subtitle_editor.saved.connect(self._subtitle_saved)
+        self.render_queue.render_requested.connect(self._start_render)
+        self.render_queue.retry_requested.connect(self._start_render)
+        self.render_queue.cancel_requested.connect(self.cancel_analysis)
 
     @staticmethod
     def _placeholder(text: str) -> QWidget:
@@ -313,6 +384,8 @@ class ShortsTab(QWidget):
         self.transcript = payload["transcript"]
         self.candidates = candidates
         self.candidate_list.set_candidates(candidates)
+        if self.paths:
+            self.render_queue.set_context(candidates, self.paths.renders)
         self.progress_panel.update_state("Анализ готов", f"Найдено {len(candidates)} кандидатов. Эвристическая оценка требует проверки человеком.", 90)
 
     @Slot(object)
@@ -332,10 +405,42 @@ class ShortsTab(QWidget):
         try:
             self.review_service.save(self.candidates)
             self.candidate_list.refresh()
+            if self.paths:
+                self.render_queue.set_context(self.candidates, self.paths.renders)
             label = "одобрен" if status == "approved" else "отклонён"
             self.progress_panel.update_state("Проверка кандидатов", f"{candidate.id}: {label}. Решение сохранено.", 92)
         except Exception as exc:
             ErrorDialog(str(exc), repr(exc), self).exec()
+
+    @Slot(object)
+    def _start_render(self, candidates) -> None:
+        if not self.source or not self.paths or not self.transcript or (self._thread and self._thread.isRunning()):
+            return
+        self._token = CancellationToken()
+        self.start_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.progress_panel.update_state("12. Рендер", f"В очереди {len(candidates)} Short; обработка последовательная.", 95)
+        thread = QThread(self)
+        worker = _RenderWorker(self.container, self.source, self.paths, self.transcript, candidates, self._token)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.job_updated.connect(self.render_queue.update_job)
+        worker.finished.connect(self._render_finished)
+        worker.failed.connect(self._probe_failed)
+        worker.cancelled.connect(self._analysis_cancelled)
+        for signal in (worker.finished, worker.failed, worker.cancelled):
+            signal.connect(thread.quit)
+            signal.connect(worker.deleteLater)
+        thread.finished.connect(self._analysis_thread_finished)
+        self._thread = thread
+        self._thread.worker = worker
+        thread.start()
+
+    @Slot(object)
+    def _render_finished(self, jobs) -> None:
+        done = sum(job.status == "done" for job in jobs)
+        failed = sum(job.status == "error" for job in jobs)
+        self.progress_panel.update_state("Рендер завершён", f"Готово: {done}; ошибок: {failed}. Encoder последнего файла: {self.container.shorts_render.last_encoder}.", 100 if not failed else 98)
 
     @Slot(object)
     def _subtitle_saved(self, candidate) -> None:
@@ -396,6 +501,9 @@ class ShortsTab(QWidget):
             try:
                 self.candidates = [Candidate(**item) for item in json.loads(candidates_path.read_text(encoding="utf-8"))]
                 self.candidate_list.set_candidates(self.candidates)
+                manifest = ShortsManifestStore(self.paths.manifest).load()
+                jobs = [RenderJob(**item) for item in (manifest.render_jobs if manifest else [])]
+                self.render_queue.set_context(self.candidates, self.paths.renders, jobs)
                 if self.candidates:
                     self.progress_panel.update_state("Проект восстановлен", f"Загружено {len(self.candidates)} кандидатов; завершённые этапы будут взяты из cache.", 90)
             except (OSError, ValueError, TypeError):
