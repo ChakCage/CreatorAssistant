@@ -95,7 +95,9 @@ class SubtitleEditor(QWidget):
             except (AttributeError, ValueError):
                 continue
             text = self.table.item(row, 2).text() if self.table.item(row, 2) else ""
-            if text.strip() and end > start >= 0:
+            clip_duration = self.candidate.duration if self.candidate else end
+            end = min(end, clip_duration)
+            if text.strip() and end > start >= 0 and start < clip_duration:
                 result.append(SubtitleCue(start, end, text.strip()))
         return result
 

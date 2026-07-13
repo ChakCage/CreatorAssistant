@@ -1,5 +1,14 @@
 # Журнал изменений
 
+## Unreleased — Shorts MVP (`feature/shorts-mvp`)
+
+- локальный headless Whisper с CUDA/FP16, word timestamps, словарём и cache;
+- source/FFprobe, analysis proxy, сцены, активность звука, candidates/scoring/dedupe;
+- QtMultimedia preview, approve/reject и ручные границы;
+- UTF-8 SRT/ASS, редактор, Center Crop и Blur Background;
+- последовательный NVENC/libx264 рендер 1080×1920 с отменой, resume и FFprobe-валидацией;
+- стабильная вкладка «Подготовка проекта» остаётся в `main`, stable-ветке и теге без merge Shorts.
+
 ## 0.1.0 — Project Preparation MVP
 
 Стабильная первая версия вкладки «Подготовка проекта»:

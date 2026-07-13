@@ -32,6 +32,13 @@ def test_hdr_blur_graph_includes_tonemap():
     assert "boxblur" in graph and "tonemap=hable" in graph and "p=bt709" in graph
 
 
+def test_rotation_metadata_swaps_geometry_before_crop():
+    rotated = source(Path("rotated.mp4"))
+    rotated.width, rotated.height, rotated.rotation = 1920, 1080, 90
+    graph = ShortsFilterGraphBuilder().build(Candidate("id", 0, 10, 1, ""), rotated)
+    assert "scale=1080:1920,crop=1080:1920:0:0" in graph
+
+
 def test_command_is_argument_list_with_unicode_apostrophe_paths(tmp_path):
     service = ShortsRenderService(None, "ffmpeg.exe", "ffprobe.exe", True, 0)
     video = tmp_path / "ролик автора's.mp4"

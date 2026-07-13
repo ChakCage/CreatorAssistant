@@ -14,7 +14,7 @@ a = Analysis(
         str(SOURCE_ROOT / 'creator_assistant' / 'workers' / 'audio_separator_worker.py'),
         'creator_assistant\\workers',
     )],
-    hiddenimports=[],
+    hiddenimports=['PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

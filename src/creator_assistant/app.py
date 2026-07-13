@@ -40,6 +40,7 @@ from creator_assistant.services.shorts.render_service import ShortsRenderService
 from creator_assistant.services.shorts.scene_detection_service import SceneDetectionService
 from creator_assistant.services.shorts.transcription.disabled import DisabledTranscriptionBackend
 from creator_assistant.services.shorts.transcription.existing_whisper import ExistingWhisperBackend
+from creator_assistant.services.shorts.transcription.faster_whisper import FasterWhisperBackend
 from creator_assistant.services.shorts.transcription.managed_whisper import ManagedWhisperBackend
 from creator_assistant.services.shorts.transcription.runtime_manager import WhisperRuntimeManager
 from creator_assistant.services.shorts.transcription_service import TranscriptionService
@@ -123,14 +124,26 @@ class ServiceContainer:
         )
         self.whisper_runtime = WhisperRuntimeManager(self.runner)
         backend_choice = str(self.settings.get("whisper_backend", "auto"))
+        existing_backend = ExistingWhisperBackend(self.runner, self.settings)
         if backend_choice == "disabled":
             self.shorts_transcription_backend = DisabledTranscriptionBackend()
         elif backend_choice == "managed":
             self.shorts_transcription_backend = ManagedWhisperBackend(
                 self.runner, self.settings, self.whisper_runtime
             )
+        elif backend_choice == "faster":
+            self.shorts_transcription_backend = FasterWhisperBackend(self.runner, self.settings)
+        elif backend_choice == "auto":
+            if existing_backend.capabilities().available:
+                self.shorts_transcription_backend = existing_backend
+            elif self.whisper_runtime.is_ready():
+                self.shorts_transcription_backend = ManagedWhisperBackend(
+                    self.runner, self.settings, self.whisper_runtime
+                )
+            else:
+                self.shorts_transcription_backend = DisabledTranscriptionBackend()
         else:
-            self.shorts_transcription_backend = ExistingWhisperBackend(self.runner, self.settings)
+            self.shorts_transcription_backend = existing_backend
         self.shorts_transcription = TranscriptionService(self.shorts_transcription_backend)
         self.shorts_proxy = AnalysisProxyService(
             self.runner,

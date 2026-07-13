@@ -40,6 +40,23 @@ class SceneDetectionService:
         output.write_text(json.dumps([asdict(scene) for scene in scenes], ensure_ascii=False, indent=2), encoding="utf-8")
         return scenes
 
+    def generate_thumbnails(self, source: Path, scenes: list[Scene], folder: Path, cancellation: CancellationToken, limit: int = 120) -> list[Scene]:
+        folder.mkdir(parents=True, exist_ok=True)
+        for index, scene in enumerate(scenes[:limit], 1):
+            target = folder / f"scene_{index:04d}.jpg"
+            if not target.is_file() or target.stat().st_size == 0:
+                at = min(scene.end - 0.01, scene.start + min(0.5, max(0.05, (scene.end - scene.start) / 2)))
+                self.runner.run([
+                    self.ffmpeg_path, "-hide_banner", "-y", "-ss", f"{max(0, at):.3f}", "-i", str(source),
+                    "-frames:v", "1", "-vf", "scale=320:-2", "-q:v", "3", str(target),
+                ], cancellation=cancellation)
+            scene.thumbnail = str(target)
+        return scenes
+
+    @staticmethod
+    def save(path: Path, scenes: list[Scene]) -> None:
+        path.write_text(json.dumps([asdict(scene) for scene in scenes], ensure_ascii=False, indent=2), encoding="utf-8")
+
     @staticmethod
     def load(path: Path) -> list[Scene]:
         return [Scene(**item) for item in json.loads(path.read_text(encoding="utf-8"))]

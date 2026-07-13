@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QComboBox, QHBoxLayout, QHeaderView, QPushButton, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
@@ -64,17 +67,23 @@ class CandidateList(QWidget):
             for column, value in enumerate(cells):
                 item = QTableWidgetItem(str(value))
                 item.setData(256, candidate)
+                if column == 0 and candidate.thumbnail and Path(candidate.thumbnail).is_file():
+                    item.setIcon(QIcon(candidate.thumbnail))
                 self.table.setItem(row, column, item)
             actions = QWidget()
             action_layout = QHBoxLayout(actions)
             action_layout.setContentsMargins(0, 0, 0, 0)
             view = QPushButton("Просмотреть")
+            alternatives = QPushButton("Альтернативы")
+            alternatives.setEnabled(bool(candidate.alternatives))
             approve = QPushButton("✓")
             reject = QPushButton("✕")
             view.clicked.connect(lambda _checked=False, item=candidate: self.selected.emit(item))
+            alternatives.clicked.connect(lambda _checked=False, item=candidate: self.selected.emit(item))
             approve.clicked.connect(lambda _checked=False, item=candidate: self.status_changed.emit(item, "approved"))
             reject.clicked.connect(lambda _checked=False, item=candidate: self.status_changed.emit(item, "rejected"))
             action_layout.addWidget(view)
+            action_layout.addWidget(alternatives)
             action_layout.addWidget(approve)
             action_layout.addWidget(reject)
             self.table.setCellWidget(row, 8, actions)

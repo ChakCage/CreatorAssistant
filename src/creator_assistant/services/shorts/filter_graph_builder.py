@@ -14,7 +14,10 @@ class ShortsFilterGraphBuilder:
             reframe = BlurBackgroundReframe(int(layout.get("foreground_scale", 100)))
         else:
             reframe = CenterCropReframe(int(layout.get("crop_center", 50)))
-        video = reframe.video_filter(source.width, source.height)
+        width, height = source.width, source.height
+        if abs(source.rotation) % 180 == 90:
+            width, height = height, width
+        video = reframe.video_filter(width, height)
         tone_map = ""
         if source.dynamic_range == "HDR":
             tone_map = ",zscale=t=linear:npl=100,tonemap=hable,zscale=p=bt709:t=bt709:m=bt709:r=tv"

@@ -39,9 +39,11 @@ class CandidateGenerator:
             if end - start > settings.maximum + 3:
                 start, end = first.start, last.end
             text = " ".join(item.text.strip() for item in segments[left:best_right + 1])
+            thumbnail = next((scene.thumbnail for scene in scenes if scene.start <= start < scene.end and scene.thumbnail), "")
             candidates.append(Candidate(
                 id=f"short_{len(candidates) + 1:03d}", start=round(max(0.0, start), 3), end=round(end, 3),
                 score=0.0, text=text, reasons=["Границы совпадают с законченными фразами"],
+                thumbnail=thumbnail,
             ))
         # Generate extra windows before scoring so the ranker has real alternatives.
         return candidates[: max(settings.count * 4, settings.count)]

@@ -69,9 +69,12 @@ class CandidateEditor(QWidget):
             control.setDecimals(3)
             control.setSuffix(" сек")
         self.duration = QLabel("0.000 сек")
+        self.alternatives = QComboBox()
+        self.alternatives.currentIndexChanged.connect(self._choose_alternative)
         form.addRow("Начало", self._boundary_row(self.start, "start"))
         form.addRow("Конец", self._boundary_row(self.end, "end"))
         form.addRow("Длительность", self.duration)
+        form.addRow("Альтернативные границы", self.alternatives)
         layout.addLayout(form)
         self.warning = QLabel()
         self.warning.setWordWrap(True)
@@ -111,6 +114,12 @@ class CandidateEditor(QWidget):
         self.heading.setText(f"{candidate.id} · score {candidate.score:.1f}\n{candidate.text}")
         self.start.setValue(candidate.start)
         self.end.setValue(candidate.end)
+        self.alternatives.blockSignals(True)
+        self.alternatives.clear()
+        self.alternatives.addItem(f"Основные: {candidate.start:.3f}–{candidate.end:.3f}", [candidate.start, candidate.end])
+        for start, end in candidate.alternatives:
+            self.alternatives.addItem(f"{start:.3f}–{end:.3f}", [start, end])
+        self.alternatives.blockSignals(False)
         if self.player:
             self.player.setSource(QUrl.fromLocalFile(str(proxy)))
             self.player.setPosition(round(candidate.start * 1000))
@@ -143,6 +152,12 @@ class CandidateEditor(QWidget):
             self.warning.setText("Длительность больше 60 секунд. Сохранение разрешено, но проверьте лимиты площадки.")
         else:
             self.warning.setText("")
+
+    def _choose_alternative(self) -> None:
+        value = self.alternatives.currentData()
+        if value and len(value) == 2:
+            self.start.setValue(float(value[0]))
+            self.end.setValue(float(value[1]))
 
     def _save(self) -> None:
         if self.candidate:

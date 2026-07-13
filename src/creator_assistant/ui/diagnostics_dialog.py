@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import re
 import struct
 import wave
 import shutil
@@ -228,6 +229,24 @@ class DiagnosticsDialog(QDialog):
             f"Модели: {', '.join(whisper.models) or 'не найдены'}; CUDA выбрана: {'да' if whisper.cuda else 'нет'}; word timestamps: {'да' if whisper.word_timestamps else 'нет'}; {whisper.details}",
             "локальный headless backend",
         ))
+        ffmpeg_path = self.container.paths.get("ffmpeg", "")
+        if ffmpeg_path:
+            try:
+                filters = self.container.runner.run([ffmpeg_path, "-hide_banner", "-filters"], timeout=30).output.casefold()
+                required_filters = ("crop", "scale", "boxblur", "subtitles", "trim", "atrim")
+                missing = [name for name in required_filters if not re.search(rf"\b{name}\b", filters)]
+                filter_status = "ok" if not missing else "error"
+                filter_details = "Доступны: " + ", ".join(required_filters) if not missing else "Не найдены: " + ", ".join(missing)
+            except Exception as exc:
+                filter_status, filter_details = "error", str(exc)
+            items.append(DependencyInfo("shorts_ffmpeg", "FFmpeg Shorts filters", filter_status, ffmpeg_path, "", filter_details, "FFmpeg -filters"))
+        try:
+            from creator_assistant.ui.shorts.candidate_editor import MULTIMEDIA_AVAILABLE
+            multimedia_status = "ok" if MULTIMEDIA_AVAILABLE else "error"
+            multimedia_details = "QMediaPlayer/QAudioOutput/QVideoWidget доступны" if MULTIMEDIA_AVAILABLE else "QtMultimedia не импортирован"
+        except Exception as exc:
+            multimedia_status, multimedia_details = "error", str(exc)
+        items.append(DependencyInfo("qt_multimedia", "QtMultimedia preview", multimedia_status, "", "PySide6", multimedia_details, "сборка приложения"))
         if runtime.is_ready():
             environment = runtime.environment_info()
             details = f"Runtime: {runtime.root}; Python: {runtime.python_executable}; {environment.get('onnxruntime', '')}"

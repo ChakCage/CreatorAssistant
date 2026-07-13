@@ -8,6 +8,6 @@ Current stable release: **0.1.0 — Project Preparation MVP**.
 
 The Project Preparation module supports metadata discovery, maximum SDR video, configurable 480p/720p/1080p REAPER proxies, original audio, previews, Instrumental FLAC, manifests, resume, progress, cancellation, disk-space checks, and REAPER project creation.
 
-The Shorts module is planned for the future and is not included in version 0.1.0.
+The independent local Shorts MVP is available on `feature/shorts-mvp`: real local Whisper transcription, candidate analysis/review, subtitles, vertical layouts, and validated 1080×1920 batch rendering. It has not been merged into `main`.
 
 User settings, cookies, media, logs, external runtimes, and models are not stored in this repository.

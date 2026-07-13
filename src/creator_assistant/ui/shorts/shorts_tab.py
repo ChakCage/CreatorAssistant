@@ -80,6 +80,8 @@ class _AnalysisWorker(QObject):
             proxy_settings = {"height": 720, "codec": "h264"}
             if not cache.stage_valid("proxy", proxy, proxy_settings):
                 self.progress.emit("2. Создание proxy", "FFmpeg готовит H.264 720p для быстрого предпросмотра.", 12)
+                estimated_proxy = max(256 * 1024**2, int(self.source.size * min(1.0, 720 / max(1, self.source.height))))
+                self.container.projects.storage.require("Analysis proxy Shorts", self.paths.cache, estimated_proxy)
                 self.container.shorts_proxy.create(Path(self.source.path), proxy, self.token)
                 cache.mark_complete("proxy", proxy_settings)
                 store.save(manifest)
@@ -87,6 +89,7 @@ class _AnalysisWorker(QObject):
             audio_settings = {"channels": 1, "sample_rate": 16000, "codec": "pcm_s16le"}
             if not cache.stage_valid("audio", audio, audio_settings):
                 self.progress.emit("3. Извлечение аудио", "Создаётся mono PCM 16 kHz без изменения таймингов.", 24)
+                self.container.projects.storage.require("Аудио Whisper Shorts", self.paths.cache, int(self.source.duration * 16000 * 2 + 64 * 1024**2))
                 self.container.shorts_audio.extract(Path(self.source.path), audio, self.token)
                 cache.mark_complete("audio", audio_settings)
                 store.save(manifest)
@@ -105,6 +108,7 @@ class _AnalysisWorker(QObject):
             else:
                 capabilities = self.container.shorts_transcription_backend.capabilities()
                 self.progress.emit("4–5. Whisper", f"{capabilities.name}; модель {self.container.settings.get('whisper_model')}; прогресс backend не сообщает.", 32)
+                self.container.projects.storage.require("Транскрипция Shorts", self.paths.analysis, 256 * 1024**2)
                 transcript = self.container.shorts_transcription.transcribe(audio, self.paths.analysis, self.token)
                 manifest.transcription_backend = transcript.backend
                 manifest.whisper_model = transcript.model
@@ -115,8 +119,13 @@ class _AnalysisWorker(QObject):
             scene_settings = {"threshold": self.container.shorts_scenes.threshold}
             if cache.stage_valid("scenes", scenes_path, scene_settings):
                 scenes = self.container.shorts_scenes.load(scenes_path)
+                if scenes and not any(scene.thumbnail and Path(scene.thumbnail).is_file() for scene in scenes):
+                    scenes = self.container.shorts_scenes.generate_thumbnails(proxy, scenes, self.paths.thumbnails, self.token)
+                    self.container.shorts_scenes.save(scenes_path, scenes)
             else:
                 scenes = self.container.shorts_scenes.detect(proxy, self.source.duration, scenes_path, self.token)
+                scenes = self.container.shorts_scenes.generate_thumbnails(proxy, scenes, self.paths.thumbnails, self.token)
+                self.container.shorts_scenes.save(scenes_path, scenes)
                 cache.mark_complete("scenes", scene_settings)
                 store.save(manifest)
             self.progress.emit("7. Анализ звука", "Определяются речь, тишина и средняя громкость.", 72)
@@ -150,7 +159,7 @@ class _AnalysisWorker(QObject):
                 self.cancelled.emit()
             else:
                 import traceback
-                self.failed.emit(str(exc), traceback.format_exc())
+                self.failed.emit(_friendly_error(exc), traceback.format_exc())
 
 
 class _RenderWorker(QObject):
@@ -208,13 +217,25 @@ class _RenderWorker(QObject):
                         self._persist(jobs)
                         self.cancelled.emit()
                         return
-                    job.status, job.error = "error", str(exc)
+                    job.status, job.error = "error", _friendly_error(exc)
                 self.job_updated.emit(job)
                 self._persist(jobs)
             self.finished.emit(jobs)
         except Exception as exc:
             import traceback
-            self.failed.emit(str(exc), traceback.format_exc())
+            self.failed.emit(_friendly_error(exc), traceback.format_exc())
+
+
+def _friendly_error(exc: Exception) -> str:
+    from creator_assistant.domain.errors import DiskSpaceError
+    if isinstance(exc, DiskSpaceError):
+        gib = 1024**3
+        return (
+            f"Недостаточно места для операции «{exc.operation}» на {exc.path}. "
+            f"Требуется {exc.required_bytes / gib:.2f} ГиБ + резерв {exc.reserve_bytes / gib:.2f} ГиБ; "
+            f"свободно {exc.free_bytes / gib:.2f} ГиБ."
+        )
+    return str(exc)
 
 
 class ShortsTab(QWidget):
@@ -353,6 +374,12 @@ class ShortsTab(QWidget):
         if not self.source or not self.paths or (self._thread and self._thread.isRunning()):
             return
         self._token = CancellationToken()
+        capabilities = self.container.shorts_transcription_backend.capabilities()
+        self.progress_panel.start_operation(
+            capabilities.name,
+            str(self.container.settings.get("whisper_model", "—")),
+            "GPU/CUDA" if capabilities.cuda else "CPU",
+        )
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         thread = QThread(self)
@@ -420,6 +447,9 @@ class ShortsTab(QWidget):
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.progress_panel.update_state("12. Рендер", f"В очереди {len(candidates)} Short; обработка последовательная.", 95)
+        self.progress_panel.start_operation(
+            "FFmpeg", "H.264", "NVENC" if self.container.shorts_render.prefer_nvenc else "CPU/libx264"
+        )
         thread = QThread(self)
         worker = _RenderWorker(self.container, self.source, self.paths, self.transcript, candidates, self._token)
         worker.moveToThread(thread)
@@ -473,6 +503,7 @@ class ShortsTab(QWidget):
         thread = self._thread
         self._thread = None
         self._token = None
+        self.progress_panel.finish_operation()
         self.start_button.setEnabled(bool(self.source))
         self.cancel_button.setEnabled(False)
         if thread:
