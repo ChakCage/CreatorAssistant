@@ -254,3 +254,34 @@ def test_completed_project_has_separate_exact_folder_and_rpp_actions(monkeypatch
     assert not tab.open_rpp_button.isEnabled()
     tab.close()
     app.processEvents()
+
+
+def test_completed_project_opens_exact_vegas_path_from_result(monkeypatch, tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    container = ContainerStub(tmp_path)
+    vegas_exe = tmp_path / "VEGAS" / "vegas220.exe"
+    vegas_exe.parent.mkdir()
+    vegas_exe.write_bytes(b"exe")
+    container.settings["vegas_path"] = str(vegas_exe)
+    project = tmp_path / "exact vegas project"
+    project.mkdir()
+    veg = project / "manifest-selected.veg"
+    veg.write_bytes(b"veg")
+    (project / "another.veg").write_bytes(b"do not open")
+    launched = []
+    monkeypatch.setattr(
+        "creator_assistant.ui.project_prep_tab.subprocess.Popen",
+        lambda args, **kwargs: launched.append((args, kwargs)),
+    )
+    monkeypatch.setattr("creator_assistant.ui.project_prep_tab.QMessageBox.information", lambda *_args: 0)
+    tab = ProjectPrepTab(container)
+    tab._project_ready(ProjectResult(project, [], {"vegas": veg}))
+
+    assert tab.open_vegas_button.isEnabled()
+    tab.open_current_vegas()
+    assert launched[0][0] == [str(vegas_exe), str(veg)]
+    tab.reset_for_new_project()
+    assert tab.current_veg_path is None
+    assert not tab.open_vegas_button.isEnabled()
+    tab.close()
+    app.processEvents()

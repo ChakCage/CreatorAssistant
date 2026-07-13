@@ -100,6 +100,7 @@ class ProjectOptions:
     download_audio: bool = True
     create_instrumental: bool = True
     create_reaper_project: bool = True
+    create_vegas_project: bool = False
     dry_run: bool = False
     reaper_proxy_height: int = 720
     temp_root: str = ""

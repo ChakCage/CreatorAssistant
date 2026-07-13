@@ -100,6 +100,8 @@ class ProjectPrepTab(QWidget):
         self.selected_project_path: Optional[Path] = None
         self.current_project_path: Optional[Path] = None
         self.current_rpp_path: Optional[Path] = None
+        self.current_veg_path: Optional[Path] = None
+        self._auto_opened_vegas_path = ""
         self.project_selection = "new"
         self._resume_states = {}
         self._active_project_url = ""
@@ -243,16 +245,21 @@ class ProjectPrepTab(QWidget):
         self.audio_check = QCheckBox("Оригинальная аудиодорожка")
         self.instrumental_check = QCheckBox("Инструментал через UVR")
         self.reaper_check = QCheckBox("Проект REAPER")
+        self.vegas_check = QCheckBox("Проект VEGAS")
         for check in (self.max_check, self.proxy_check, self.audio_check, self.instrumental_check, self.reaper_check):
             check.setChecked(True)
+        self.vegas_check.setChecked(bool(self.container.settings.get("create_vegas_project_default", True)))
         self.audio_check.toggled.connect(self._sync_options)
         self.proxy_check.toggled.connect(self._sync_options)
         self.instrumental_check.toggled.connect(self._sync_options)
+        self.max_check.toggled.connect(self._sync_options)
+        self.vegas_check.toggled.connect(self._sync_options)
         options_layout.addWidget(self.max_check, 0, 0)
         options_layout.addWidget(self.proxy_check, 0, 1)
         options_layout.addWidget(self.audio_check, 1, 0)
         options_layout.addWidget(self.instrumental_check, 1, 1)
         options_layout.addWidget(self.reaper_check, 2, 0)
+        options_layout.addWidget(self.vegas_check, 2, 1)
         self.backend_label = QLabel()
         self.backend_label.setProperty("class", "muted")
         self.backend_label.setWordWrap(True)
@@ -268,17 +275,21 @@ class ProjectPrepTab(QWidget):
         self.new_project_button = QPushButton("Новый проект")
         self.new_project_button.setEnabled(False)
         self.open_rpp_button = QPushButton("Открыть RPP")
+        self.open_vegas_button = QPushButton("Открыть проект VEGAS")
         self.open_folder_button = QPushButton("Открыть папку проекта")
         self.open_rpp_button.setEnabled(False)
+        self.open_vegas_button.setEnabled(False)
         self.open_folder_button.setEnabled(False)
         self.create_button.clicked.connect(self._safe_ui_action("continue_or_create_project", self.create_project))
         self.cancel_button.clicked.connect(self._safe_ui_action("cancel", self.cancel_job))
         self.new_project_button.clicked.connect(self._safe_ui_action("new_project", self.new_project))
         self.open_rpp_button.clicked.connect(self._safe_ui_action("open_current_rpp", self.open_current_rpp))
+        self.open_vegas_button.clicked.connect(self._safe_ui_action("open_current_vegas", self.open_current_vegas))
         self.open_folder_button.clicked.connect(self._safe_ui_action("open_current_project_folder", self.open_current_project_folder))
         actions.addWidget(self.create_button, 1)
         actions.addWidget(self.cancel_button)
         actions.addWidget(self.open_rpp_button)
+        actions.addWidget(self.open_vegas_button)
         actions.addWidget(self.open_folder_button)
         actions.addWidget(self.new_project_button)
         left_layout.addLayout(actions)
@@ -423,6 +434,10 @@ class ProjectPrepTab(QWidget):
         self.reaper_check.setEnabled(reaper_available)
         if not reaper_available:
             self.reaper_check.setChecked(False)
+        vegas_available = self.max_check.isChecked() and self.instrumental_check.isChecked()
+        self.vegas_check.setEnabled(vegas_available)
+        if not vegas_available:
+            self.vegas_check.setChecked(False)
 
     def current_destination(self) -> Optional[Path]:
         raw = self.author_combo.currentData()
@@ -1174,9 +1189,12 @@ class ProjectPrepTab(QWidget):
         self.current_project_path = self.selected_project_path
         rpps = list(self.current_project_path.glob("*.rpp"))
         self.current_rpp_path = rpps[0] if len(rpps) == 1 else None
-        self._sync_project_actions()
         discovered = result.get("discovered_files", [])
         self._resume_states = result.get("states", {})
+        vegas_state = self._resume_states.get("vegas", {})
+        vegas_value = vegas_state.get("path") if vegas_state.get("status") == "VALID" else None
+        self.current_veg_path = Path(vegas_value) if vegas_value else None
+        self._sync_project_actions()
         unknown = [item for item in discovered if item.classification in {"UNKNOWN", "MEDIA_UNKNOWN"}]
         self.progress_label.setText(
             f"Существующий проект подключён. Найдено файлов: {len(discovered)}; неизвестных: {len(unknown)}."
@@ -1187,7 +1205,7 @@ class ProjectPrepTab(QWidget):
         enabled = {
             "maximum": self.max_check.isChecked(), "proxy": self.proxy_check.isChecked(),
             "audio": self.audio_check.isChecked(), "instrumental": self.instrumental_check.isChecked(),
-            "reaper": self.reaper_check.isChecked(),
+            "reaper": self.reaper_check.isChecked(), "vegas": self.vegas_check.isChecked(),
         }
         completed = [key for key, details in self._resume_states.items() if details.get("status") == "VALID"]
         planned = [
@@ -1301,8 +1319,23 @@ class ProjectPrepTab(QWidget):
         busy = self.job_state in {UiJobState.PREPARING, UiJobState.RUNNING, UiJobState.CANCELLING}
         project_ok = bool(self.current_project_path and self.current_project_path.is_dir())
         rpp_ok = bool(self.current_rpp_path and self.current_rpp_path.is_file())
+        vegas_ok = bool(
+            self.current_veg_path
+            and self.current_veg_path.is_file()
+            and self._belongs_to_current_project(self.current_veg_path)
+        )
         self.open_folder_button.setEnabled(project_ok and not busy)
         self.open_rpp_button.setEnabled(rpp_ok and not busy)
+        self.open_vegas_button.setEnabled(vegas_ok and not busy)
+
+    def _belongs_to_current_project(self, path: Path) -> bool:
+        if not self.current_project_path:
+            return False
+        try:
+            path.resolve().relative_to(self.current_project_path.resolve())
+            return True
+        except (OSError, ValueError):
+            return False
 
     def open_current_project_folder(self) -> None:
         path = self.current_project_path
@@ -1324,6 +1357,30 @@ class ProjectPrepTab(QWidget):
         else:
             os.startfile(str(rpp))
 
+    def open_current_vegas(self) -> None:
+        veg = self.current_veg_path
+        if not veg or not veg.is_file() or not self._belongs_to_current_project(veg):
+            QMessageBox.warning(self, "Creator Assistant", "Файл VEGAS текущего проекта не найден или находится вне папки проекта.")
+            self._sync_project_actions()
+            return
+        configured = Path(str(self.container.settings.get("vegas_path", "")))
+        if not configured.is_file():
+            selected, _ = QFileDialog.getOpenFileName(
+                self,
+                "Выберите VEGAS Pro",
+                str(configured.parent) if str(configured) else "",
+                "VEGAS Pro (vegas*.exe);;Программы (*.exe)",
+            )
+            if selected:
+                updated = dict(self.container.settings)
+                updated["vegas_path"] = selected
+                self.container.save_settings(updated)
+                configured = Path(selected)
+        if configured.is_file():
+            subprocess.Popen([str(configured), str(veg)], shell=False)
+        else:
+            os.startfile(str(veg))
+
     def reset_for_new_project(self, url: str = "") -> None:
         """Detach the UI from the previous job while preserving author/settings/options."""
         self._job_generation += 1
@@ -1342,6 +1399,8 @@ class ProjectPrepTab(QWidget):
         self.selected_project_path = None
         self.current_project_path = None
         self.current_rpp_path = None
+        self.current_veg_path = None
+        self._auto_opened_vegas_path = ""
         self.project_selection = "new"
         self._resume_states = {}
         self.progress_tracker = None
@@ -1407,6 +1466,7 @@ class ProjectPrepTab(QWidget):
             download_audio=self.audio_check.isChecked(),
             create_instrumental=self.instrumental_check.isChecked(),
             create_reaper_project=self.reaper_check.isChecked(),
+            create_vegas_project=self.vegas_check.isChecked(),
             dry_run=dry_run,
             reaper_proxy_height=self._proxy_height(),
             temp_root=str(self.container.settings.get("temp_root", "")),
@@ -1558,6 +1618,7 @@ class ProjectPrepTab(QWidget):
             "audio": JobStage.DOWNLOAD_AUDIO,
             "instrumental": JobStage.SEPARATE_STEMS,
             "reaper": JobStage.CREATE_REAPER,
+            "vegas": JobStage.CREATE_VEGAS,
         }
         for key, stage in role_stages.items():
             if states.get(key, {}).get("status") == "VALID":
@@ -1641,6 +1702,8 @@ class ProjectPrepTab(QWidget):
             active.append(JobStage.SEPARATE_STEMS)
         if options.create_reaper_project:
             active.append(JobStage.CREATE_REAPER)
+        if options.create_vegas_project:
+            active.append(JobStage.CREATE_VEGAS)
         active.extend((JobStage.FINAL_VALIDATION, JobStage.DONE))
         self.progress_tracker = WeightedProgressTracker(active)
         self.progress_tracker.mark_complete(JobStage.VALIDATE_URL)
@@ -1671,10 +1734,15 @@ class ProjectPrepTab(QWidget):
         path = result.project_path
         self.current_project_path = Path(path) if path else None
         rpp_value = result.files.get("reaper") if getattr(result, "files", None) else None
+        veg_value = result.files.get("vegas") if getattr(result, "files", None) else None
         self.current_rpp_path = Path(rpp_value) if rpp_value else None
+        self.current_veg_path = Path(veg_value) if veg_value else None
         if self.current_project_path and not self.current_rpp_path:
             rpps = list(self.current_project_path.glob("*.rpp"))
             self.current_rpp_path = rpps[0] if len(rpps) == 1 else None
+        if self.current_project_path and not self.current_veg_path:
+            vegs = list(self.current_project_path.glob("*.veg"))
+            self.current_veg_path = vegs[0] if len(vegs) == 1 else None
         self._sync_project_actions()
         self.log.appendPlainText("Проект успешно подготовлен: " + str(path))
         if path and self.container.settings.get("open_folder_after_completion", True):
@@ -1682,6 +1750,13 @@ class ProjectPrepTab(QWidget):
                 os.startfile(str(path))
             except OSError as exc:
                 self.log.appendPlainText("Не удалось открыть Проводник: " + str(exc))
+        if (
+            self.current_veg_path
+            and self.container.settings.get("auto_open_vegas_project", False)
+            and self._auto_opened_vegas_path.casefold() != str(self.current_veg_path).casefold()
+        ):
+            self._auto_opened_vegas_path = str(self.current_veg_path)
+            self.open_current_vegas()
         QMessageBox.information(self, "Creator Assistant", f"Проект готов:\n{path}")
 
     def _task_failed(self, message: str, details: str) -> None:

@@ -12,6 +12,7 @@ from creator_assistant.infrastructure.windows_paths import NamingTemplates
 from creator_assistant.services.project_service import ProjectService
 from creator_assistant.services.reaper_service import ReaperService
 from creator_assistant.services.storage_service import GIB, StoragePolicy, StorageService
+from creator_assistant.services.vegas_service import VegasProjectResult
 from creator_assistant.infrastructure.manifest_store import MANIFEST_NAME, ManifestLoader, ManifestStatus
 
 
@@ -35,7 +36,7 @@ class FakeFfmpeg:
     def __init__(self, executable: Path):
         self.ffmpeg_path = str(executable)
 
-    def create_proxy(self, source, target, cancellation, transcode_video=True):
+    def create_proxy(self, source, target, cancellation, transcode_video=True, **kwargs):
         target.write_bytes(b"proxy")
         return target
 
@@ -103,6 +104,68 @@ class FakeSeparator:
 class CancelSeparator(FakeSeparator):
     def separate(self, source, expected_output, cancellation, on_message=None):
         raise JobCancelledError("Операция отменена пользователем.")
+
+
+class FakeVegas:
+    available = True
+
+    def __init__(self):
+        self.calls = []
+
+    @staticmethod
+    def project_path(project_root, title):
+        return Path(project_root) / f"{title}.veg"
+
+    @staticmethod
+    def validate_project(path):
+        return Path(path).is_file() and Path(path).stat().st_size > 0
+
+    def create_project(self, *, output, max_video, instrumental, **kwargs):
+        self.calls.append((Path(max_video), Path(instrumental), dict(kwargs)))
+        output.write_bytes(b"veg")
+        return VegasProjectResult(
+            output, 1, 1, 1, 1, 0, str(max_video), str(instrumental),
+            0, 0, 2160, 3840, 60.0,
+            {"success": True, "vegas_version": "22.0.248"},
+        )
+
+
+def test_pipeline_passes_max_and_only_instrumental_to_vegas(tmp_path: Path):
+    yt = tmp_path / "yt-dlp.exe"
+    ffmpeg = tmp_path / "ffmpeg.exe"
+    ffprobe = tmp_path / "ffprobe.exe"
+    for executable in (yt, ffmpeg, ffprobe):
+        executable.write_bytes(b"exe")
+    jobs = JobStore(tmp_path / "state")
+    separator = FakeSeparator()
+    vegas = FakeVegas()
+    service = ProjectService(
+        FakeYtDlp(yt), FakeFfmpeg(ffmpeg), FakeValidator(ffprobe), FakeThumbnail(),
+        ReaperService(), separator, separator, jobs, NamingTemplates(), vegas=vegas,
+    )
+    metadata = VideoMetadata(
+        "vegas-id", "Тест VEGAS", 12, "https://youtu.be/abcdefghijk",
+        formats=[
+            VideoFormat("maximum", "webm", height=2160, fps=60, vcodec="vp9"),
+            VideoFormat("proxy", "mp4", height=720, fps=60, vcodec="avc1"),
+            VideoFormat("audio", "webm", acodec="opus", abr=160),
+        ],
+    )
+    options = ProjectOptions(create_vegas_project=True, job_id="vegas-job")
+
+    result = service.execute(tmp_path, metadata, options, CancellationToken(), lambda _event: None)
+
+    assert len(vegas.calls) == 1
+    maximum, instrumental, arguments = vegas.calls[0]
+    assert maximum == result.files["maximum"]
+    assert maximum != result.files["proxy"]
+    assert instrumental == result.files["instrumental"]
+    assert arguments["job_id"] == "vegas-job"
+    assert result.files["vegas"].is_file()
+    manifest = ManifestLoader().load(result.project_path / MANIFEST_NAME).manifest
+    assert manifest.files["vegas"]["role"] == "VEGAS_PROJECT"
+    assert manifest.files["vegas"]["video_path"] == str(maximum)
+    assert manifest.files["vegas"]["instrumental_path"] == str(instrumental)
 
 
 def test_fake_disk_full_sets_waiting_state_and_preserves_job_temp(tmp_path: Path):

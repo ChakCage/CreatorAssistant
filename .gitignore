@@ -42,6 +42,7 @@ cache/
 temp/
 tmp/
 _test_output/
+.test-output/
 *.part
 *.ytdl
 *.tmp

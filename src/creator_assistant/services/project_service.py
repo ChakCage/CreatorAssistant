@@ -37,6 +37,7 @@ from .format_selector import build_format_plan, is_reaper_compatible
 from .legacy_media_inspector import LegacyProjectMediaInspector
 from .media_validation_service import MediaValidationService
 from .reaper_service import ReaperService
+from .vegas_service import VegasService
 from .stem_separation.base import StemSeparatorBackend
 from .stem_separation.uvr_manual_fallback import UvrManualFallbackBackend
 from .thumbnail_service import ThumbnailService
@@ -62,6 +63,7 @@ class ProjectService:
         job_store: JobStore,
         naming: NamingTemplates,
         initial_audio: str = "original",
+        vegas: Optional[VegasService] = None,
         storage: Optional[StorageService] = None,
         project_index: Optional[ProjectIndex] = None,
         project_roots: Optional[List[Dict[str, Any]]] = None,
@@ -76,6 +78,7 @@ class ProjectService:
         self.job_store = job_store
         self.naming = naming
         self.initial_audio = initial_audio
+        self.vegas = vegas or VegasService()
         self.storage = storage or StorageService()
         self.project_index = project_index
         self.project_roots = project_roots or []
@@ -342,6 +345,7 @@ class ProjectService:
             "audio": "ORIGINAL_AUDIO",
             "instrumental": "INSTRUMENTAL",
             "reaper": "REAPER_PROJECT",
+            "vegas": "VEGAS_PROJECT",
             "thumbnail": "THUMBNAIL",
         }
         for key, value in files.items():
@@ -353,7 +357,14 @@ class ProjectService:
                 "source": "job_record",
             }
             if isinstance(details, dict):
-                for field in ("size", "confidence", "source", "validated_at", "probe"):
+                for field in (
+                    "size", "confidence", "source", "validated_at", "probe",
+                    "video_path", "instrumental_path", "created_by_creator_assistant",
+                    "created_at", "vegas_version", "video_only_from_max",
+                    "video_track_count", "audio_track_count", "video_events", "audio_events",
+                    "max_audio_events", "video_start_nanos", "audio_start_nanos",
+                    "width", "height", "fps",
+                ):
                     if details.get(field) is not None:
                         entry[field] = details[field]
             result[key] = entry
@@ -415,6 +426,8 @@ class ProjectService:
         if not project_path:
             return {}
         paths = ProjectPaths(project_path, project_path / "Материалы", project_path.name)
+        if options.create_vegas_project and not (options.download_maximum and options.create_instrumental):
+            raise ValidationError("Для проекта VEGAS нужны максимальное видео и Instrumental FLAC.")
         plan = build_format_plan(metadata.formats, options.reaper_proxy_height)
         states: Dict[str, Dict[str, Any]] = {}
 
@@ -495,12 +508,20 @@ class ProjectService:
             states["reaper"] = {"status": "INVALID", "path": str(rpp), "size": rpp.stat().st_size, "reason": f"RPP не ссылается на проверенные {options.reaper_proxy_height}p и Instrumental"}
         else:
             states["reaper"] = {"status": "MISSING"}
+        veg = self.vegas.project_path(paths.root, paths.base_name)
+        if veg.is_file() and veg.stat().st_size > 0:
+            states["vegas"] = {"status": "VALID", "path": str(veg), "size": veg.stat().st_size}
+        elif veg.is_file():
+            states["vegas"] = {"status": "INVALID", "path": str(veg), "size": veg.stat().st_size, "reason": "VEGAS project file is empty."}
+        else:
+            states["vegas"] = {"status": "MISSING"}
         enabled = {
             "maximum": options.download_maximum,
             "proxy": options.create_proxy,
             "audio": options.download_audio,
             "instrumental": options.create_instrumental,
             "reaper": options.create_reaper_project,
+            "vegas": options.create_vegas_project,
         }
         for key, is_enabled in enabled.items():
             if not is_enabled:
@@ -725,6 +746,11 @@ class ProjectService:
             previous_stages = saved_record.get("stages", {}) if isinstance(saved_record, dict) else {}
             for key, details in inspected.items():
                 previous = previous_stages.get(key, {}) if isinstance(previous_stages, dict) else {}
+                if details.get("status") == "VALID" and isinstance(previous, dict):
+                    same_path = str(previous.get("path") or "").casefold() == str(details.get("path") or "").casefold()
+                    if same_path:
+                        details = {**previous, **details}
+                        inspected[key] = details
                 if details.get("status") == "PARTIAL" and isinstance(previous, dict):
                     for field in ("video_id", "role", "format_id", "output_template"):
                         if previous.get(field):
@@ -1058,15 +1084,68 @@ class ProjectService:
                 if not self.reaper.validate_project(rpp, files["proxy"], files["instrumental"]):
                     raise ValidationError("Созданный проект REAPER не прошёл проверку.")
                 checkpoint()
+            if options.create_vegas_project:
+                stage(JobStage.CREATE_VEGAS, "Создаю проект VEGAS с MAX video и Instrumental")
+                if "maximum" not in files or "instrumental" not in files:
+                    raise ValidationError("Для проекта VEGAS нужны MAX video и Instrumental.")
+                vegas_project = self.vegas.project_path(paths.root, paths.base_name)
+                existing = files.get("vegas")
+                if existing and self.vegas.validate_project(existing):
+                    on_progress(ProgressInfo(JobStage.CREATE_VEGAS.value, "Готовый проект VEGAS найден — пропущено", 100.0))
+                else:
+                    result = self.vegas.create_project(
+                        output=vegas_project,
+                        max_video=files["maximum"],
+                        instrumental=files["instrumental"],
+                        duration=metadata.duration or 0.001,
+                        temp_dir=job_temp_path / "vegas",
+                        cancellation=cancellation,
+                        auto_open=False,
+                        job_id=job_id,
+                    )
+                    files["vegas"] = result.path
+                    record.setdefault("stages", {})["vegas"] = {
+                        "status": "VALID",
+                        "path": str(result.path),
+                        "size": result.path.stat().st_size,
+                        "role": "VEGAS_PROJECT",
+                        "source": "vegas_script",
+                        "video_path": str(files["maximum"]),
+                        "instrumental_path": str(files["instrumental"]),
+                        "created_by_creator_assistant": True,
+                        "created_at": dt.datetime.now().isoformat(timespec="seconds"),
+                        "vegas_version": str(result.details.get("vegas_version") or ""),
+                        "video_only_from_max": True,
+                        "tracks": result.tracks,
+                        "video_track_count": result.video_track_count,
+                        "audio_track_count": result.audio_track_count,
+                        "video_events": result.video_events,
+                        "audio_events": result.audio_events,
+                        "max_audio_events": result.max_audio_events,
+                        "video_start_nanos": result.video_start_nanos,
+                        "audio_start_nanos": result.audio_start_nanos,
+                        "width": result.width,
+                        "height": result.height,
+                        "fps": result.fps,
+                    }
+                checkpoint()
             stage(JobStage.FINAL_VALIDATION, "Проверяю итоговые файлы")
             cancellation.raise_if_cancelled()
             final_stages = self.inspect_existing(metadata, options, paths.root, cancellation)
+            previous_stages = record.get("stages", {})
+            for key, details in list(final_stages.items()):
+                previous = previous_stages.get(key, {}) if isinstance(previous_stages, dict) else {}
+                if details.get("status") == "VALID" and isinstance(previous, dict):
+                    same_path = str(previous.get("path") or "").casefold() == str(details.get("path") or "").casefold()
+                    if same_path:
+                        final_stages[key] = {**previous, **details}
             required_stages = {
                 "maximum": options.download_maximum,
                 "proxy": options.create_proxy,
                 "audio": options.download_audio,
                 "instrumental": options.create_instrumental,
                 "reaper": options.create_reaper_project,
+                "vegas": options.create_vegas_project,
             }
             incomplete = [
                 key for key, enabled in required_stages.items()
@@ -1168,6 +1247,8 @@ class ProjectService:
         if options.create_instrumental and not self.direct_separator.available():
             runtime_path = getattr(getattr(self.direct_separator, "runtime", None), "root", "")
             raise AudioSeparatorRuntimeMissingError(runtime_path)
+        if options.create_vegas_project and not self.vegas.available:
+            missing.append("VEGAS Pro")
         if missing:
             raise DependencyMissingError("Не найдены зависимости: " + ", ".join(missing))
 
@@ -1236,4 +1317,6 @@ class ProjectService:
             lines.append("UVR: MDX-Net / UVR-MDX-NET Inst HQ 3 / Instrumental Only / FLAC.")
         if options.create_reaper_project:
             lines.append(f"REAPER: две дорожки с позиции 0 — VIDEO {options.reaper_proxy_height}P — ORIGINAL и INSTRUMENTAL.")
+        if options.create_vegas_project:
+            lines.append("VEGAS: защищённый отдельный процесс, только MAX video stream + Instrumental FLAC с 0.")
         return lines

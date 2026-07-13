@@ -88,6 +88,44 @@ class SettingsDialog(QDialog):
         paths_form.addRow("", self.auto_find_button)
         content_layout.addWidget(paths_group)
 
+        vegas_group = QGroupBox("VEGAS Pro")
+        vegas_form = QFormLayout(vegas_group)
+        self.vegas_edit = QLineEdit(str(settings.get("vegas_path", "")))
+        self._show_full_path(self.vegas_edit, self.vegas_edit.text())
+        vegas_browse = QPushButton("Обзор…")
+        vegas_browse.clicked.connect(lambda: self._browse(self.vegas_edit, False))
+        vegas_path_row = QHBoxLayout()
+        vegas_path_row.addWidget(self.vegas_edit, 1)
+        vegas_path_row.addWidget(vegas_browse)
+        vegas_form.addRow("Путь к VEGAS Pro", vegas_path_row)
+        self.path_edits["vegas_path"] = self.vegas_edit
+        self.vegas_version = QLabel("Не проверено")
+        self.vegas_version.setProperty("class", "muted")
+        vegas_form.addRow("Версия", self.vegas_version)
+        self.create_vegas_default = QCheckBox("Создавать проект VEGAS по умолчанию")
+        self.create_vegas_default.setChecked(bool(settings.get("create_vegas_project_default", True)))
+        self.auto_open_vegas = QCheckBox("Автоматически открывать VEGAS-проект после завершения")
+        self.auto_open_vegas.setChecked(bool(settings.get("auto_open_vegas_project", False)))
+        vegas_form.addRow(self.create_vegas_default)
+        vegas_form.addRow("Видео для проекта", QLabel("Максимальное SDR-видео"))
+        vegas_form.addRow("Звук", QLabel("Instrumental Only"))
+        vegas_form.addRow(self.auto_open_vegas)
+        vegas_actions = QHBoxLayout()
+        find_vegas = QPushButton("Найти VEGAS автоматически")
+        verify_vegas = QPushButton("Проверить VEGAS")
+        test_vegas = QPushButton("Создать тестовый проект")
+        open_vegas_script = QPushButton("Открыть папку скрипта")
+        find_vegas.clicked.connect(self._find_vegas)
+        verify_vegas.clicked.connect(self._verify_vegas)
+        test_vegas.clicked.connect(self._open_vegas_diagnostics)
+        open_vegas_script.clicked.connect(self._open_vegas_script_folder)
+        for button in (find_vegas, verify_vegas, test_vegas, open_vegas_script):
+            button.setEnabled(self.container is not None)
+            vegas_actions.addWidget(button)
+        vegas_form.addRow(vegas_actions)
+        content_layout.addWidget(vegas_group)
+        self._update_vegas_status()
+
         authors_group = QGroupBox("Авторы и проекты")
         authors_form = QFormLayout(authors_group)
         self.suggest_remember_author = QCheckBox("Предлагать запомнить выбор автора")
@@ -284,6 +322,56 @@ class SettingsDialog(QDialog):
             selected, _ = QFileDialog.getOpenFileName(self, "Выберите программу", current, "Программы (*.exe);;Все файлы (*)")
         if selected:
             self._show_full_path(edit, selected)
+            if edit is self.vegas_edit:
+                self._update_vegas_status()
+
+    def _update_vegas_status(self) -> None:
+        path = Path(self.vegas_edit.text().strip())
+        if not path.is_file():
+            self.vegas_version.setText("VEGAS не найден")
+            return
+        api = path.with_name("ScriptPortal.Vegas.dll")
+        version = ""
+        if self.container is not None:
+            version = self.container.detector._windows_file_version(path)
+        api_status = "Script API найден" if api.is_file() else "Script API не найден"
+        self.vegas_version.setText(f"{version or 'версия не определена'}; {api_status}")
+
+    def _find_vegas(self) -> None:
+        if self.container is None:
+            return
+        candidate = dict(self.result_settings)
+        candidate["vegas_path"] = self.vegas_edit.text().strip()
+        resolution = self.container.detector.discover(candidate).get("vegas")
+        if resolution and resolution.path:
+            self._show_full_path(self.vegas_edit, resolution.path)
+            self._update_vegas_status()
+            QMessageBox.information(self, "VEGAS Pro", "Найден VEGAS Pro:\n" + resolution.path)
+        else:
+            QMessageBox.warning(self, "VEGAS Pro", "VEGAS Pro не найден автоматически.")
+
+    def _verify_vegas(self) -> None:
+        self._update_vegas_status()
+        path = Path(self.vegas_edit.text().strip())
+        if path.is_file() and path.with_name("ScriptPortal.Vegas.dll").is_file():
+            QMessageBox.information(self, "VEGAS Pro", "VEGAS Pro и официальный ScriptPortal API доступны.\n" + self.vegas_version.text())
+        else:
+            QMessageBox.warning(self, "VEGAS Pro", "Укажите vegas.exe из папки, где находится ScriptPortal.Vegas.dll.")
+
+    def _open_vegas_diagnostics(self) -> None:
+        if self.container is None:
+            return
+        from creator_assistant.ui.diagnostics_dialog import DiagnosticsDialog
+        dialog = DiagnosticsDialog(self.container, self)
+        dialog.exec()
+
+    def _open_vegas_script_folder(self) -> None:
+        if self.container is None:
+            return
+        from creator_assistant.services.vegas_service import VegasService
+        service = VegasService(self.vegas_edit.text().strip())
+        script = service.ensure_script()
+        os.startfile(str(script.parent))
 
     def _browse_cookies_file(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(
@@ -468,7 +556,7 @@ class SettingsDialog(QDialog):
         self.resize(width, height)
 
     def _has_missing_or_invalid_paths(self) -> bool:
-        for key in ("yt_dlp_path", "ffmpeg_path", "ffprobe_path", "uvr_path", "reaper_path"):
+        for key in ("yt_dlp_path", "ffmpeg_path", "ffprobe_path", "uvr_path", "reaper_path", "vegas_path"):
             value = str(self.result_settings.get(key, ""))
             if not value or not Path(value).is_file():
                 return True
@@ -623,6 +711,7 @@ class SettingsDialog(QDialog):
             "ffprobe_path": "FFprobe",
             "uvr_path": "UVR",
             "reaper_path": "REAPER",
+            "vegas_path": "VEGAS",
         }
         for key, label in labels.items():
             value = str(self.result_settings.get(key, ""))
@@ -652,6 +741,8 @@ class SettingsDialog(QDialog):
         self.result_settings["reaper_proxy_height"] = proxy_height
         self.result_settings["prefer_nvenc"] = self.nvenc.isChecked()
         self.result_settings["open_folder_after_completion"] = self.open_folder.isChecked()
+        self.result_settings["create_vegas_project_default"] = self.create_vegas_default.isChecked()
+        self.result_settings["auto_open_vegas_project"] = self.auto_open_vegas.isChecked()
         self.result_settings["suggest_remember_author"] = self.suggest_remember_author.isChecked()
         self.result_settings["reaper_initial_audio"] = self.initial_audio.currentData()
         self.result_settings["whisper_backend"] = self.whisper_backend.currentData()

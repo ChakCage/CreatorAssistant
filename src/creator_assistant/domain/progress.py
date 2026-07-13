@@ -17,6 +17,7 @@ STAGE_WEIGHTS: Dict[JobStage, float] = {
     JobStage.DOWNLOAD_AUDIO: 10.0,
     JobStage.SEPARATE_STEMS: 25.0,
     JobStage.CREATE_REAPER: 3.0,
+    JobStage.CREATE_VEGAS: 3.0,
     JobStage.FINAL_VALIDATION: 2.0,
     JobStage.DONE: 1.0,
 }

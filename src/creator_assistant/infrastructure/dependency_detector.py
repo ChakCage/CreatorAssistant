@@ -28,6 +28,7 @@ SETTING_KEYS = {
     "ffprobe": "ffprobe_path",
     "uvr": "uvr_path",
     "reaper": "reaper_path",
+    "vegas": "vegas_path",
 }
 
 
@@ -135,6 +136,15 @@ class DependencyDetector:
             path_names=("reaper.exe", "reaper"),
             standard=tuple(self._reaper_standard_paths()),
         )
+        result["vegas"] = self._find(
+            "vegas",
+            str(settings.get("vegas_path", "")),
+            str(sources.get("vegas", "")),
+            managed=(managed / "vegas.exe",),
+            standalone=(app_dir / "vegas220.exe", app_dir / "vegas210.exe", app_dir / "vegas200.exe"),
+            path_names=("vegas220.exe", "vegas210.exe", "vegas200.exe", "vegas.exe"),
+            standard=tuple(self._vegas_standard_paths()),
+        )
         return result
 
     def apply_to_settings(
@@ -232,8 +242,8 @@ class DependencyDetector:
     def _check(self, key: str, path: Path) -> str:
         if not path.is_file():
             return ""
-        if key in ("uvr", "reaper"):
-            expected = "uvr" if key == "uvr" else "reaper"
+        if key in ("uvr", "reaper", "vegas"):
+            expected = "uvr" if key == "uvr" else ("reaper" if key == "reaper" else "vegas")
             if expected not in path.name.casefold():
                 return ""
             return self._windows_file_version(path) or "найден"
@@ -350,6 +360,18 @@ class DependencyDetector:
             items.append(DependencyInfo("reaper", "REAPER", "ok", reaper.path, reaper.version, "Генератор RPP доступен", reaper.source))
         else:
             items.append(DependencyInfo("reaper", "REAPER", "warning", details="Не найден; RPP всё равно можно создать"))
+        vegas = resolved.get("vegas", DependencyResolution("vegas"))
+        if vegas.path:
+            script_api = Path(vegas.path).with_name("ScriptPortal.Vegas.dll")
+            details = (
+                "ScriptPortal.Vegas.dll найден; /SCRIPT и JSON job доступны; "
+                "для VEGAS 22 build 248 используется отдельный PID-защищённый процесс"
+                if script_api.is_file()
+                else "ScriptPortal.Vegas.dll не найден рядом с EXE"
+            )
+            items.append(DependencyInfo("vegas", "VEGAS Pro", "ok" if script_api.is_file() else "warning", vegas.path, vegas.version, details, vegas.source))
+        else:
+            items.append(DependencyInfo("vegas", "VEGAS Pro", "warning", details="Не найден; .veg проекты не будут создаваться"))
         return items
 
     @staticmethod
@@ -377,6 +399,39 @@ class DependencyDetector:
             root = os.environ.get(env_name)
             if root:
                 yielded.extend((Path(root) / "REAPER (x64)" / "reaper.exe", Path(root) / "REAPER" / "reaper.exe"))
+        return yielded
+
+    @staticmethod
+    def _vegas_standard_paths() -> Iterable[Path]:
+        yielded: List[Path] = []
+        if os.name == "nt":
+            try:
+                import winreg
+
+                for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                    for key_name in (
+                        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\vegas220.exe",
+                        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\vegas210.exe",
+                        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\vegas200.exe",
+                        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\vegas220.exe",
+                        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\vegas210.exe",
+                        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\vegas200.exe",
+                    ):
+                        try:
+                            with winreg.OpenKey(hive, key_name) as key:
+                                value = winreg.QueryValue(key, None)
+                                if value:
+                                    yielded.append(Path(value))
+                        except OSError:
+                            pass
+            except ImportError:
+                pass
+        for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+            root = os.environ.get(env_name)
+            if root:
+                for version in ("22.0", "21.0", "20.0"):
+                    executable = "vegas" + version.split(".", 1)[0] + "0.exe"
+                    yielded.append(Path(root) / "VEGAS" / f"VEGAS Pro {version}" / executable)
         return yielded
 
     @staticmethod

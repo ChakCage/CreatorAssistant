@@ -25,6 +25,7 @@ from creator_assistant.services.metadata_service import MetadataService
 from creator_assistant.services.metadata_request_controller import MetadataRequestController
 from creator_assistant.services.project_service import ProjectService
 from creator_assistant.services.reaper_service import ReaperService
+from creator_assistant.services.vegas_service import VegasService
 from creator_assistant.services.stem_separation.audio_separator_backend import AudioSeparatorBackend
 from creator_assistant.services.stem_separation.uvr_manual_fallback import UvrManualFallbackBackend
 from creator_assistant.services.thumbnail_service import ThumbnailService
@@ -118,6 +119,7 @@ class ServiceContainer:
             JobStore(),
             naming,
             self.settings.get("reaper_initial_audio", "original"),
+            VegasService(self.paths.get("vegas", "")),
             StorageService(StoragePolicy(
                 reserve_bytes=int(float(self.settings.get("disk_reserve_gb", 5)) * 1024**3),
                 separator_safety_factor=float(self.settings.get("separator_temp_safety_factor", 4.0)),

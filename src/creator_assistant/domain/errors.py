@@ -69,6 +69,48 @@ class MediaValidationError(ValidationError):
     pass
 
 
+class VegasProjectError(CreatorAssistantError):
+    def __init__(self, message="Ошибка создания проекта VEGAS.", details="") -> None:
+        super().__init__(message)
+        self.details = details
+
+
+class VegasProjectValidationError(ValidationError):
+    pass
+
+
+class VegasNotFoundError(VegasProjectError):
+    pass
+
+
+class VegasScriptApiUnavailableError(VegasProjectError):
+    pass
+
+
+class VegasUnsupportedVersionError(VegasProjectError):
+    pass
+
+
+class VegasMediaUnsupportedError(VegasProjectError):
+    pass
+
+
+class VegasProjectCreationError(VegasProjectError):
+    pass
+
+
+class VegasProjectSaveError(VegasProjectError):
+    pass
+
+
+class VegasProjectAlreadyExistsError(VegasProjectError):
+    pass
+
+
+class VegasScriptTimeoutError(VegasProjectError):
+    pass
+
+
 class StemSeparationUnavailableError(CreatorAssistantError):
     pass
 

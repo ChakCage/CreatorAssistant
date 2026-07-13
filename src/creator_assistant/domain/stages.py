@@ -13,6 +13,7 @@ class JobStage(str, Enum):
     DOWNLOAD_AUDIO = "Скачивание аудио"
     SEPARATE_STEMS = "Разделение аудио через UVR"
     CREATE_REAPER = "Создание проекта REAPER"
+    CREATE_VEGAS = "CREATE_VEGAS_PROJECT"
     FINAL_VALIDATION = "Финальная проверка"
     DONE = "Готово"
 
@@ -25,4 +26,6 @@ def stage_display_name(stage: JobStage, proxy_height: int = 720) -> str:
     if stage == JobStage.CREATE_PROXY:
         height = proxy_height if proxy_height in {480, 720, 1080} else 720
         return f"Создание видео {height}p"
+    if stage == JobStage.CREATE_VEGAS:
+        return "Создание проекта VEGAS"
     return stage.value

@@ -42,6 +42,7 @@ PATH_KEYS = {
     "ffprobe": "ffprobe_path",
     "uvr": "uvr_path",
     "reaper": "reaper_path",
+    "vegas": "vegas_path",
 }
 
 
@@ -66,18 +67,21 @@ class DiagnosticsDialog(QDialog):
         self.check_button = QPushButton("Проверить")
         self.update_button = QPushButton("Обновить yt-dlp сейчас")
         self.uvr_test_button = QPushButton("Проверить автоматическое разделение")
+        self.vegas_test_button = QPushButton("Проверить создание VEGAS-проекта")
         self.youtube_test_button = QPushButton("Проверить доступ к YouTube")
         self.shorts_test_button = QPushButton("Проверить модуль Shorts")
         close_button = QPushButton("Закрыть")
         self.check_button.clicked.connect(self.run_diagnostics)
         self.update_button.clicked.connect(self.update_yt_dlp)
         self.uvr_test_button.clicked.connect(self.test_uvr_backend)
+        self.vegas_test_button.clicked.connect(self.test_vegas_project)
         self.youtube_test_button.clicked.connect(self.test_youtube_access)
         self.shorts_test_button.clicked.connect(self.test_shorts_module)
         close_button.clicked.connect(self.accept)
         actions.addWidget(self.check_button)
         actions.addWidget(self.update_button)
         actions.addWidget(self.uvr_test_button)
+        actions.addWidget(self.vegas_test_button)
         actions.addWidget(self.youtube_test_button)
         actions.addWidget(self.shorts_test_button)
         actions.addStretch(1)
@@ -113,6 +117,7 @@ class DiagnosticsDialog(QDialog):
             self.check_button.setEnabled(True)
             self.update_button.setEnabled(True)
             self.uvr_test_button.setEnabled(True)
+            self.vegas_test_button.setEnabled(True)
             self.youtube_test_button.setEnabled(True)
             self.shorts_test_button.setEnabled(True)
 
@@ -381,6 +386,64 @@ class DiagnosticsDialog(QDialog):
             self.uvr_test_button.setEnabled(True)
             self.summary.setText("Автоматический тест разделения завершён успешно.")
             QMessageBox.information(self, "Audio Separator backend", str(message))
+
+        self._start(work, done)
+
+    def test_vegas_project(self) -> None:
+        from creator_assistant.services.vegas_service import VegasService
+
+        vegas_path = self.container.paths.get("vegas", "")
+        ffmpeg_path = self.container.paths.get("ffmpeg", "")
+        service = VegasService(vegas_path)
+        if not service.available or not Path(ffmpeg_path).is_file():
+            QMessageBox.warning(self, "VEGAS Pro", "Для теста нужны найденные VEGAS Pro, ScriptPortal.Vegas.dll и FFmpeg.")
+            return
+        self.vegas_test_button.setEnabled(False)
+        self.summary.setText("Создаётся безопасный тестовый проект VEGAS…")
+        token = CancellationToken()
+
+        def work(progress):
+            stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            test_dir = local_data_root() / "_test_output" / "vegas" / stamp
+            test_dir.mkdir(parents=True, exist_ok=False)
+            video = test_dir / "Тест MAX's video.mp4"
+            audio = test_dir / "Тест Instrumental.flac"
+            output = test_dir / "Тест Creator Assistant.veg"
+            self.container.runner.run([
+                ffmpeg_path, "-hide_banner", "-y",
+                "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+                "-t", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-shortest", str(video),
+            ], cancellation=token, timeout=90)
+            self.container.runner.run([
+                ffmpeg_path, "-hide_banner", "-y", "-f", "lavfi", "-i",
+                "sine=frequency=220:sample_rate=48000", "-t", "2", "-c:a", "flac", str(audio),
+            ], cancellation=token, timeout=60)
+            result = service.create_project(
+                output=output,
+                max_video=video,
+                instrumental=audio,
+                duration=2.0,
+                temp_dir=test_dir / "job",
+                cancellation=token,
+                job_id="diagnostics-" + stamp,
+            )
+            return result, test_dir
+
+        def done(payload):
+            result, test_dir = payload
+            self.vegas_test_button.setEnabled(True)
+            self.summary.setText("Тест VEGAS завершён: 1 video track, 1 audio track, звук MAX не добавлен.")
+            QMessageBox.information(
+                self,
+                "VEGAS Pro",
+                "Тестовый проект успешно создан и проверен.\n\n"
+                f"Видео: {result.video_media_path}\n"
+                f"Аудио: {result.audio_media_path}\n"
+                f"Проект: {result.path}\n\n"
+                f"Тестовые файлы оставлены в: {test_dir}",
+            )
 
         self._start(work, done)
 

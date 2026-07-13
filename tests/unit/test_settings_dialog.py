@@ -50,6 +50,20 @@ def test_temp_root_and_proxy_height_are_saved(tmp_path):
     application.processEvents()
 
 
+def test_vegas_defaults_and_auto_open_setting_are_saved():
+    application = app()
+    dialog = SettingsDialog(dict(DEFAULT_SETTINGS))
+    assert dialog.create_vegas_default.isChecked()
+    assert not dialog.auto_open_vegas.isChecked()
+    dialog.create_vegas_default.setChecked(False)
+    dialog.auto_open_vegas.setChecked(True)
+    dialog._save()
+    assert dialog.result_settings["create_vegas_project_default"] is False
+    assert dialog.result_settings["auto_open_vegas_project"] is True
+    dialog.close()
+    application.processEvents()
+
+
 def test_diagnostics_dialog_uses_supported_header_resize_mode(monkeypatch):
     application = app()
     monkeypatch.setattr(DiagnosticsDialog, "run_diagnostics", lambda self: None)
