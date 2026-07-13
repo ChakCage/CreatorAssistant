@@ -17,7 +17,7 @@ from creator_assistant.domain.youtube_auth import YtDlpAuthContext
 from creator_assistant.infrastructure.job_store import JobStore
 from creator_assistant.services.project_service import ProjectService
 from creator_assistant.ui.project_prep_tab import ProjectPrepTab, UiJobState
-from creator_assistant.infrastructure.manifest_store import ManifestLoader, ManifestMigrator, ManifestStatus, ManifestWriter
+from creator_assistant.infrastructure.manifest_store import LEGACY_MANIFEST_NAME, ManifestLoader, ManifestMigrator, ManifestStatus, ManifestWriter
 
 
 def metadata(video_id="5nTuu0FzAUg", title="100 Players Simulate Minecraft's Magical Purge"):
@@ -67,7 +67,7 @@ def test_manifest_discovery_and_explicit_legacy_binding(tmp_path: Path):
     item = metadata()
     project = tmp_path / "legacy name"
     project.mkdir()
-    (project / service.MANIFEST_NAME).write_text(json.dumps({"video_id": item.video_id}), encoding="utf-8")
+    (project / LEGACY_MANIFEST_NAME).write_text(json.dumps({"video_id": item.video_id}), encoding="utf-8")
     assert service.find_existing_projects(tmp_path, item)[0]["path"] == project
 
     legacy = tmp_path / item.title

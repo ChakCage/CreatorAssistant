@@ -5,6 +5,7 @@ import pytest
 
 from creator_assistant.infrastructure.manifest_store import (
     CURRENT_SCHEMA_VERSION,
+    LEGACY_MANIFEST_NAME,
     MANIFEST_NAME,
     LegacyProjectScanner,
     ManifestLoader,
@@ -33,6 +34,7 @@ def test_missing_and_corrupted_manifest_are_safe(tmp_path: Path):
     loader = ManifestLoader()
     path = tmp_path / MANIFEST_NAME
     assert loader.load(path).status == ManifestStatus.MISSING
+    path.parent.mkdir()
     path.write_text("{broken", encoding="utf-8")
     result = loader.load(path)
     assert result.status == ManifestStatus.CORRUPTED
@@ -42,6 +44,7 @@ def test_missing_and_corrupted_manifest_are_safe(tmp_path: Path):
 def test_legacy_incomplete_and_unsupported_statuses(tmp_path: Path):
     loader = ManifestLoader()
     path = tmp_path / MANIFEST_NAME
+    path.parent.mkdir()
     path.write_text(json.dumps({"schema_version": 1, "video_id": "id"}), encoding="utf-8")
     assert loader.load(path).status == ManifestStatus.LEGACY
     path.write_text(json.dumps({"schema_version": 2, "video_id": "id"}), encoding="utf-8")
@@ -56,6 +59,7 @@ def test_optional_fields_use_defaults_without_key_error(tmp_path: Path):
     for key in ("author_preset", "job_id", "stages", "files", "discovered_files", "created_at"):
         data.pop(key)
     path = tmp_path / MANIFEST_NAME
+    path.parent.mkdir()
     path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     result = ManifestLoader().load(path)
     assert result.status == ManifestStatus.VALID
@@ -80,9 +84,10 @@ def test_existing_manifest_is_backed_up_before_replace(tmp_path: Path):
     project.mkdir()
     path = project / MANIFEST_NAME
     original = b'{"schema_version":1,"video_id":"old"}'
+    path.parent.mkdir()
     path.write_bytes(original)
     ManifestWriter().write(path, valid_manifest(project), backup_existing=True)
-    assert path.with_name(path.name + ".bak").read_bytes() == original
+    assert (path.parent / "backups" / "manifest.json.bak").read_bytes() == original
     assert ManifestLoader().load(path).status == ManifestStatus.VALID
 
 

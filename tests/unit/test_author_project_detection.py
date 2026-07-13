@@ -133,7 +133,9 @@ def test_search_uses_every_configured_root_and_finds_other_preset(tmp_path: Path
     myles.mkdir(parents=True)
     project = beppo / "renamed"
     project.mkdir(parents=True)
-    (project / MANIFEST_NAME).write_text(json.dumps({
+    manifest_path = project / MANIFEST_NAME
+    manifest_path.parent.mkdir()
+    manifest_path.write_text(json.dumps({
         "schema_version": 2, "video_id": "7e09O9pzSG8", "title": "renamed",
         "project_path": str(project), "materials_path": str(project / "Материалы"),
     }, ensure_ascii=False), encoding="utf-8")
