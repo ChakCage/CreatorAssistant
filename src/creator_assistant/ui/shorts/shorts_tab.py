@@ -19,7 +19,10 @@ from PySide6.QtWidgets import (
 )
 
 from creator_assistant.app import ServiceContainer
+from creator_assistant.domain.job import CancellationToken
 from creator_assistant.domain.shorts.models import SourceInfo
+from creator_assistant.services.shorts.cache import ShortsCache
+from creator_assistant.services.shorts.manifest import ShortsManifestStore
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectPaths, ShortsProjectStore
 from creator_assistant.services.shorts.source_service import ShortsSourceService
 from creator_assistant.ui.shorts.analysis_progress_panel import AnalysisProgressPanel
@@ -44,6 +47,69 @@ class _ProbeWorker(QObject):
             self.failed.emit(str(exc), repr(exc))
 
 
+class _AnalysisWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str, str)
+    cancelled = Signal()
+    progress = Signal(str, str, int)
+
+    def __init__(self, container: ServiceContainer, source: SourceInfo, paths: ShortsProjectPaths, token: CancellationToken) -> None:
+        super().__init__()
+        self.container, self.source, self.paths, self.token = container, source, paths, token
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            store = ShortsManifestStore(self.paths.manifest)
+            manifest = store.load()
+            if manifest is None:
+                raise RuntimeError("Manifest проекта Shorts не найден.")
+            cache = ShortsCache(manifest)
+            proxy = self.paths.cache / "analysis_proxy.mp4"
+            proxy_settings = {"height": 720, "codec": "h264"}
+            if not cache.stage_valid("proxy", proxy, proxy_settings):
+                self.progress.emit("2. Создание proxy", "FFmpeg готовит H.264 720p для быстрого предпросмотра.", 12)
+                self.container.shorts_proxy.create(Path(self.source.path), proxy, self.token)
+                cache.mark_complete("proxy", proxy_settings)
+                store.save(manifest)
+            audio = self.paths.cache / "transcription_audio.wav"
+            audio_settings = {"channels": 1, "sample_rate": 16000, "codec": "pcm_s16le"}
+            if not cache.stage_valid("audio", audio, audio_settings):
+                self.progress.emit("3. Извлечение аудио", "Создаётся mono PCM 16 kHz без изменения таймингов.", 24)
+                self.container.shorts_audio.extract(Path(self.source.path), audio, self.token)
+                cache.mark_complete("audio", audio_settings)
+                store.save(manifest)
+            transcript_path = self.paths.analysis / "transcript.json"
+            transcription_settings = {
+                key: self.container.settings.get(key)
+                for key in (
+                    "whisper_backend", "whisper_model", "whisper_language", "whisper_device",
+                    "whisper_profile", "whisper_use_gpu", "whisper_fp16", "whisper_word_timestamps",
+                    "whisper_use_dictionary", "whisper_dictionary",
+                )
+            }
+            if cache.stage_valid("transcription", transcript_path, transcription_settings):
+                transcript = self.container.shorts_transcription.load(transcript_path)
+                self.progress.emit("Транскрипция из cache", "Исходник и настройки не изменились — Whisper не запускается повторно.", 55)
+            else:
+                capabilities = self.container.shorts_transcription_backend.capabilities()
+                self.progress.emit("4–5. Whisper", f"{capabilities.name}; модель {self.container.settings.get('whisper_model')}; прогресс backend не сообщает.", 32)
+                transcript = self.container.shorts_transcription.transcribe(audio, self.paths.analysis, self.token)
+                manifest.transcription_backend = transcript.backend
+                manifest.whisper_model = transcript.model
+                cache.mark_complete("transcription", transcription_settings)
+                store.save(manifest)
+            self.progress.emit("Транскрипция готова", f"{len(transcript.segments)} сегментов · язык {transcript.language} · сохранены JSON/TXT/SRT/VTT.", 58)
+            self.finished.emit(transcript)
+        except Exception as exc:
+            from creator_assistant.domain.errors import JobCancelledError
+            if isinstance(exc, JobCancelledError) or self.token.is_cancelled:
+                self.cancelled.emit()
+            else:
+                import traceback
+                self.failed.emit(str(exc), traceback.format_exc())
+
+
 class ShortsTab(QWidget):
     """Independent Shorts workspace; later stages plug into its inner tabs."""
 
@@ -56,6 +122,7 @@ class ShortsTab(QWidget):
         self.paths: Optional[ShortsProjectPaths] = None
         self._pending_root: Optional[Path] = None
         self._thread: Optional[QThread] = None
+        self._token: Optional[CancellationToken] = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -70,9 +137,14 @@ class ShortsTab(QWidget):
         self.progress_panel = AnalysisProgressPanel()
         self.start_button = QPushButton("Запустить анализ")
         self.start_button.setEnabled(False)
+        self.cancel_button = QPushButton("Отменить")
+        self.cancel_button.setEnabled(False)
+        action_row = QHBoxLayout()
+        action_row.addWidget(self.start_button)
+        action_row.addWidget(self.cancel_button)
         left_layout.addWidget(self.source_panel)
         left_layout.addWidget(self.progress_panel)
-        left_layout.addWidget(self.start_button)
+        left_layout.addLayout(action_row)
         left_layout.addStretch(1)
         self.workspace = QTabWidget()
         self.workspace.addTab(self._placeholder("После анализа здесь появятся реальные кандидаты."), "Кандидаты")
@@ -86,6 +158,8 @@ class ShortsTab(QWidget):
         layout.addWidget(splitter, 1)
         self.source_panel.choose_file_requested.connect(self.choose_file)
         self.source_panel.choose_project_requested.connect(self.choose_project)
+        self.start_button.clicked.connect(self.start_analysis)
+        self.cancel_button.clicked.connect(self.cancel_analysis)
 
     @staticmethod
     def _placeholder(text: str) -> QWidget:
@@ -150,6 +224,54 @@ class ShortsTab(QWidget):
         self._thread.worker = worker
         thread.start()
 
+    @Slot()
+    def start_analysis(self) -> None:
+        if not self.source or not self.paths or (self._thread and self._thread.isRunning()):
+            return
+        self._token = CancellationToken()
+        self.start_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        thread = QThread(self)
+        worker = _AnalysisWorker(self.container, self.source, self.paths, self._token)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self.progress_panel.update_state)
+        worker.finished.connect(self._analysis_finished)
+        worker.failed.connect(self._probe_failed)
+        worker.cancelled.connect(self._analysis_cancelled)
+        for signal in (worker.finished, worker.failed, worker.cancelled):
+            signal.connect(thread.quit)
+            signal.connect(worker.deleteLater)
+        thread.finished.connect(self._analysis_thread_finished)
+        self._thread = thread
+        self._thread.worker = worker
+        thread.start()
+
+    @Slot()
+    def cancel_analysis(self) -> None:
+        if self._token:
+            self._token.cancel()
+        self.container.runner.cancel_active()
+        self.progress_panel.update_state("Отмена", "Останавливаю текущий внешний процесс; готовый cache сохранится.", self.progress_panel.progress.value())
+
+    @Slot(object)
+    def _analysis_finished(self, transcript) -> None:
+        self.progress_panel.update_state("Расшифровка готова", transcript.text[:400], 58)
+
+    @Slot()
+    def _analysis_cancelled(self) -> None:
+        self.progress_panel.update_state("Анализ отменён", "Готовые этапы сохранены. Можно нажать «Запустить анализ» и продолжить.", self.progress_panel.progress.value())
+
+    @Slot()
+    def _analysis_thread_finished(self) -> None:
+        thread = self._thread
+        self._thread = None
+        self._token = None
+        self.start_button.setEnabled(bool(self.source))
+        self.cancel_button.setEnabled(False)
+        if thread:
+            thread.deleteLater()
+
     @Slot(object)
     def _probe_finished(self, source: SourceInfo) -> None:
         assert self._pending_root is not None
@@ -178,5 +300,7 @@ class ShortsTab(QWidget):
         if not self._thread or not self._thread.isRunning():
             return True
         self.container.runner.cancel_active()
+        if self._token:
+            self._token.cancel()
         self._thread.quit()
         return self._thread.wait(5000)

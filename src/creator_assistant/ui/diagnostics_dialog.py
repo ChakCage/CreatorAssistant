@@ -4,6 +4,8 @@ import datetime as dt
 import math
 import struct
 import wave
+import shutil
+import time
 from copy import deepcopy
 from pathlib import Path
 from typing import Dict
@@ -64,16 +66,19 @@ class DiagnosticsDialog(QDialog):
         self.update_button = QPushButton("Обновить yt-dlp сейчас")
         self.uvr_test_button = QPushButton("Проверить автоматическое разделение")
         self.youtube_test_button = QPushButton("Проверить доступ к YouTube")
+        self.shorts_test_button = QPushButton("Проверить модуль Shorts")
         close_button = QPushButton("Закрыть")
         self.check_button.clicked.connect(self.run_diagnostics)
         self.update_button.clicked.connect(self.update_yt_dlp)
         self.uvr_test_button.clicked.connect(self.test_uvr_backend)
         self.youtube_test_button.clicked.connect(self.test_youtube_access)
+        self.shorts_test_button.clicked.connect(self.test_shorts_module)
         close_button.clicked.connect(self.accept)
         actions.addWidget(self.check_button)
         actions.addWidget(self.update_button)
         actions.addWidget(self.uvr_test_button)
         actions.addWidget(self.youtube_test_button)
+        actions.addWidget(self.shorts_test_button)
         actions.addStretch(1)
         actions.addWidget(close_button)
         layout.addLayout(actions)
@@ -108,6 +113,7 @@ class DiagnosticsDialog(QDialog):
             self.update_button.setEnabled(True)
             self.uvr_test_button.setEnabled(True)
             self.youtube_test_button.setEnabled(True)
+            self.shorts_test_button.setEnabled(True)
 
         def cleanup():
             if thread in self._threads:
@@ -214,6 +220,13 @@ class DiagnosticsDialog(QDialog):
             "",
             f"Статус: {po_status}; {po_details}",
             "managed tools Creator Assistant",
+        ))
+        whisper = self.container.shorts_transcription_backend.capabilities()
+        items.append(DependencyInfo(
+            "whisper", "Whisper Shorts", "ok" if whisper.available else "error",
+            whisper.executable, whisper.version,
+            f"Модели: {', '.join(whisper.models) or 'не найдены'}; CUDA выбрана: {'да' if whisper.cuda else 'нет'}; word timestamps: {'да' if whisper.word_timestamps else 'нет'}; {whisper.details}",
+            "локальный headless backend",
         ))
         if runtime.is_ready():
             environment = runtime.environment_info()
@@ -377,3 +390,46 @@ class DiagnosticsDialog(QDialog):
             ).metadata,
             done,
         )
+
+    def test_shorts_module(self) -> None:
+        self.shorts_test_button.setEnabled(False)
+        self.summary.setText("Выполняется реальный локальный тест Whisper (10–20 секунд)…")
+        token = CancellationToken()
+
+        def work(progress):
+            test_dir = local_data_root() / "jobs" / "diagnostics" / "shorts-test"
+            shutil.rmtree(test_dir, ignore_errors=True)
+            test_dir.mkdir(parents=True, exist_ok=True)
+            source = test_dir / "whisper_test_ru.wav"
+            escaped = str(source).replace("'", "''")
+            script = (
+                "Add-Type -AssemblyName System.Speech; "
+                "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                "$s.SelectVoice('Microsoft Irina Desktop'); "
+                f"$s.SetOutputToWaveFile('{escaped}'); "
+                "$s.Speak('Это реальная проверка локального распознавания речи. Minecraft, редстоун и хардкор.'); "
+                "$s.Dispose()"
+            )
+            started = time.monotonic()
+            try:
+                self.container.runner.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], cancellation=token, timeout=60)
+                transcript = self.container.shorts_transcription.transcribe(source, test_dir / "Analysis", token)
+                elapsed = time.monotonic() - started
+                if transcript.language != "ru" or not any("а" <= char.casefold() <= "я" for char in transcript.text):
+                    raise RuntimeError("Whisper не подтвердил русский язык или кириллицу.")
+                capabilities = self.container.shorts_transcription_backend.capabilities()
+                return (
+                    f"Headless Whisper работает: {len(transcript.segments)} сегм., {elapsed:.1f} с.\n"
+                    f"Язык: {transcript.language}; модель: {transcript.model}; устройство: "
+                    f"{'GPU/CUDA' if capabilities.cuda else 'CPU'}; word timestamps: "
+                    f"{'да' if any(segment.words for segment in transcript.segments) else 'нет'}.\n\n{transcript.text}"
+                )
+            finally:
+                shutil.rmtree(test_dir, ignore_errors=True)
+
+        def done(message):
+            self.shorts_test_button.setEnabled(True)
+            self.summary.setText("Реальный тест модуля Shorts завершён успешно.")
+            QMessageBox.information(self, "Диагностика Shorts", str(message))
+
+        self._start(work, done)

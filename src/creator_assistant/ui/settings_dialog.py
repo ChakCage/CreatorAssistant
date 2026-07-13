@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import os
 from pathlib import Path
 import time
 from typing import Any, Dict
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -160,6 +162,73 @@ class SettingsDialog(QDialog):
         options_form.addRow("Звук при первом открытии RPP", self.initial_audio)
         content_layout.addWidget(options_group)
 
+        whisper_group = QGroupBox("Распознавание речи")
+        whisper_form = QFormLayout(whisper_group)
+        self.whisper_backend = QComboBox()
+        for label, value in (
+            ("Автоматически", "auto"), ("Найденный локальный Whisper", "existing"),
+            ("Управляемый Whisper", "managed"), ("Faster Whisper", "faster"), ("Отключено", "disabled"),
+        ):
+            self.whisper_backend.addItem(label, value)
+        self.whisper_backend.setCurrentIndex(max(0, self.whisper_backend.findData(settings.get("whisper_backend", "auto"))))
+        self.whisper_model = QComboBox()
+        models_dir = Path(str(settings.get("whisper_model_dir") or (Path.home() / ".cache" / "whisper")))
+        discovered_models = [item.stem for item in models_dir.glob("*.pt")]
+        configured_model = str(settings.get("whisper_model", "large-v3-turbo"))
+        for model in dict.fromkeys(discovered_models + [configured_model, "turbo", "medium", "small"]):
+            self.whisper_model.addItem(model, model)
+        self.whisper_model.setCurrentIndex(max(0, self.whisper_model.findData(configured_model)))
+        self.whisper_language = QComboBox()
+        for label, value in (("Русский", "ru"), ("Английский", "en"), ("Автоматически", "auto")):
+            self.whisper_language.addItem(label, value)
+        self.whisper_language.setCurrentIndex(max(0, self.whisper_language.findData(settings.get("whisper_language", "ru"))))
+        self.whisper_device = QComboBox()
+        for label, value in (("Автоматически", "auto"), ("GPU", "gpu"), ("CPU", "cpu")):
+            self.whisper_device.addItem(label, value)
+        self.whisper_device.setCurrentIndex(max(0, self.whisper_device.findData(settings.get("whisper_device", "auto"))))
+        self.whisper_profile = QComboBox()
+        for label, value in (("Быстро", "fast"), ("Сбалансированно", "balanced"), ("Максимальная точность", "accurate")):
+            self.whisper_profile.addItem(label, value)
+        self.whisper_profile.setCurrentIndex(max(0, self.whisper_profile.findData(settings.get("whisper_profile", "balanced"))))
+        self.whisper_use_gpu = QCheckBox("Использовать GPU")
+        self.whisper_use_gpu.setChecked(bool(settings.get("whisper_use_gpu", True)))
+        self.whisper_fp16 = QCheckBox("Использовать FP16, если поддерживается")
+        self.whisper_fp16.setChecked(bool(settings.get("whisper_fp16", True)))
+        self.whisper_words = QCheckBox("Получать word timestamps")
+        self.whisper_words.setChecked(bool(settings.get("whisper_word_timestamps", True)))
+        self.whisper_dictionary_enabled = QCheckBox("Использовать пользовательский словарь")
+        self.whisper_dictionary_enabled.setChecked(bool(settings.get("whisper_use_dictionary", True)))
+        self.whisper_dictionary = QPlainTextEdit("\n".join(settings.get("whisper_dictionary", [])))
+        self.whisper_dictionary.setMaximumHeight(100)
+        self.whisper_status = QLabel("Модели: " + str(models_dir))
+        self.whisper_status.setWordWrap(True)
+        whisper_form.addRow("Backend", self.whisper_backend)
+        whisper_form.addRow("Модель", self.whisper_model)
+        whisper_form.addRow("Язык", self.whisper_language)
+        whisper_form.addRow("Устройство", self.whisper_device)
+        whisper_form.addRow("Профиль", self.whisper_profile)
+        whisper_form.addRow(self.whisper_use_gpu)
+        whisper_form.addRow(self.whisper_fp16)
+        whisper_form.addRow(self.whisper_words)
+        whisper_form.addRow(self.whisper_dictionary_enabled)
+        whisper_form.addRow("Словарь (по одному термину)", self.whisper_dictionary)
+        whisper_form.addRow(self.whisper_status)
+        whisper_actions = QHBoxLayout()
+        self.whisper_find_button = QPushButton("Найти Whisper")
+        self.whisper_test_button = QPushButton("Проверить Whisper")
+        self.whisper_models_button = QPushButton("Открыть модели")
+        self.whisper_install_button = QPushButton("Установить управляемый backend")
+        self.whisper_cache_button = QPushButton("Очистить временный кэш")
+        self.whisper_find_button.clicked.connect(self._find_whisper)
+        self.whisper_test_button.clicked.connect(self._open_whisper_diagnostics)
+        self.whisper_models_button.clicked.connect(self._open_whisper_models)
+        self.whisper_install_button.clicked.connect(self._managed_whisper_info)
+        self.whisper_cache_button.clicked.connect(self._clear_whisper_temp)
+        for button in (self.whisper_find_button, self.whisper_test_button, self.whisper_models_button, self.whisper_install_button, self.whisper_cache_button):
+            whisper_actions.addWidget(button)
+        whisper_form.addRow(whisper_actions)
+        content_layout.addWidget(whisper_group)
+
         naming_group = QGroupBox("Шаблоны имён")
         naming_form = QFormLayout(naming_group)
         naming = settings.get("naming", {})
@@ -224,6 +293,53 @@ class SettingsDialog(QDialog):
         from creator_assistant.ui.diagnostics_dialog import DiagnosticsDialog
 
         DiagnosticsDialog(self.container, self).exec()
+
+    def _find_whisper(self) -> None:
+        if not self.container:
+            return
+        from creator_assistant.services.shorts.transcription.existing_whisper import ExistingWhisperBackend
+        backend = ExistingWhisperBackend(self.container.runner, self.result_settings)
+        capabilities = backend.capabilities()
+        self.result_settings["whisper_python"] = backend.python
+        self.result_settings["whisper_model_dir"] = str(backend.model_dir)
+        self.whisper_status.setText(
+            f"{'Найден' if capabilities.available else 'Не найден'}: {capabilities.executable}\n"
+            f"Версия: {capabilities.version or 'не определена'}; модели: {', '.join(capabilities.models) or 'нет'}"
+        )
+
+    def _open_whisper_diagnostics(self) -> None:
+        if not self.container:
+            return
+        from creator_assistant.ui.diagnostics_dialog import DiagnosticsDialog
+        dialog = DiagnosticsDialog(self.container, self)
+        dialog.exec()
+
+    def _open_whisper_models(self) -> None:
+        folder = Path(str(self.result_settings.get("whisper_model_dir") or (Path.home() / ".cache" / "whisper")))
+        folder.mkdir(parents=True, exist_ok=True)
+        if os.name == "nt":
+            os.startfile(str(folder))
+
+    def _managed_whisper_info(self) -> None:
+        if not self.container:
+            return
+        runtime = self.container.whisper_runtime
+        runtime.prepare_directories()
+        QMessageBox.information(
+            self, "Управляемый Whisper",
+            "Изолированный runtime подготовлен. Пакеты не будут устанавливаться в системный Python.\n\n"
+            f"Runtime: {runtime.root}\nМодели: {runtime.models}\n\n"
+            "На этом компьютере уже найден совместимый локальный Whisper, поэтому повторная загрузка сейчас не требуется.",
+        )
+
+    def _clear_whisper_temp(self) -> None:
+        if not self.container:
+            return
+        temp = self.container.whisper_runtime.root.parent / "temp"
+        if temp.is_dir():
+            import shutil
+            shutil.rmtree(temp)
+        QMessageBox.information(self, "Whisper", "Временный кэш Whisper очищен. Модели и расшифровки проектов сохранены.")
 
     def _reset_youtube_access(self) -> None:
         index = self.youtube_auth_mode.findData("automatic")
@@ -393,6 +509,16 @@ class SettingsDialog(QDialog):
         self.result_settings["prefer_nvenc"] = self.nvenc.isChecked()
         self.result_settings["open_folder_after_completion"] = self.open_folder.isChecked()
         self.result_settings["reaper_initial_audio"] = self.initial_audio.currentData()
+        self.result_settings["whisper_backend"] = self.whisper_backend.currentData()
+        self.result_settings["whisper_model"] = self.whisper_model.currentData()
+        self.result_settings["whisper_language"] = self.whisper_language.currentData()
+        self.result_settings["whisper_device"] = self.whisper_device.currentData()
+        self.result_settings["whisper_profile"] = self.whisper_profile.currentData()
+        self.result_settings["whisper_use_gpu"] = self.whisper_use_gpu.isChecked()
+        self.result_settings["whisper_fp16"] = self.whisper_fp16.isChecked()
+        self.result_settings["whisper_word_timestamps"] = self.whisper_words.isChecked()
+        self.result_settings["whisper_use_dictionary"] = self.whisper_dictionary_enabled.isChecked()
+        self.result_settings["whisper_dictionary"] = [line.strip() for line in self.whisper_dictionary.toPlainText().splitlines() if line.strip()]
         selected_access_mode = str(self.youtube_auth_mode.currentData())
         stored_mode = "browser" if selected_access_mode in BROWSERS else selected_access_mode
         stored_browser = selected_access_mode if selected_access_mode in BROWSERS else ""

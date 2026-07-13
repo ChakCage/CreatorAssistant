@@ -30,6 +30,13 @@ from creator_assistant.services.thumbnail_service import ThumbnailService
 from creator_assistant.services.yt_dlp_service import YtDlpService
 from creator_assistant.services.storage_service import StoragePolicy, StorageService, default_temp_root
 from creator_assistant.services.settings_service import SettingsService
+from creator_assistant.services.shorts.audio_extract_service import TranscriptionAudioService
+from creator_assistant.services.shorts.proxy_service import AnalysisProxyService
+from creator_assistant.services.shorts.transcription.disabled import DisabledTranscriptionBackend
+from creator_assistant.services.shorts.transcription.existing_whisper import ExistingWhisperBackend
+from creator_assistant.services.shorts.transcription.managed_whisper import ManagedWhisperBackend
+from creator_assistant.services.shorts.transcription.runtime_manager import WhisperRuntimeManager
+from creator_assistant.services.shorts.transcription_service import TranscriptionService
 
 
 class ServiceContainer:
@@ -108,6 +115,24 @@ class ServiceContainer:
                 separator_safety_factor=float(self.settings.get("separator_temp_safety_factor", 4.0)),
             )),
         )
+        self.whisper_runtime = WhisperRuntimeManager(self.runner)
+        backend_choice = str(self.settings.get("whisper_backend", "auto"))
+        if backend_choice == "disabled":
+            self.shorts_transcription_backend = DisabledTranscriptionBackend()
+        elif backend_choice == "managed":
+            self.shorts_transcription_backend = ManagedWhisperBackend(
+                self.runner, self.settings, self.whisper_runtime
+            )
+        else:
+            self.shorts_transcription_backend = ExistingWhisperBackend(self.runner, self.settings)
+        self.shorts_transcription = TranscriptionService(self.shorts_transcription_backend)
+        self.shorts_proxy = AnalysisProxyService(
+            self.runner,
+            ffmpeg_path,
+            bool(self.settings.get("prefer_nvenc", True))
+            and self.detector.nvenc_available(ffmpeg_path),
+        )
+        self.shorts_audio = TranscriptionAudioService(self.runner, ffmpeg_path)
 
     def save_settings(self, settings: Dict[str, Any], started_at: float | None = None) -> None:
         candidate = deepcopy(settings)
