@@ -34,6 +34,7 @@ from creator_assistant.infrastructure.windows_paths import NamingTemplates, exac
 
 from .ffmpeg_service import FfmpegService
 from .format_selector import build_format_plan, is_reaper_compatible
+from .legacy_media_inspector import LegacyProjectMediaInspector
 from .media_validation_service import MediaValidationService
 from .reaper_service import ReaperService
 from .stem_separation.base import StemSeparatorBackend
@@ -280,7 +281,15 @@ class ProjectService:
         on_progress(ProgressInfo("migration", "Готово к продолжению", 100.0))
         return {"manifest": saved, "discovered_files": discovered, "project_path": project_path}
 
-    def _write_manifest(self, project_path: Path, metadata: VideoMetadata, status: str, proxy_height: int = 720) -> None:
+    def _write_manifest(
+        self,
+        project_path: Path,
+        metadata: VideoMetadata,
+        status: str,
+        proxy_height: int = 720,
+        files: Optional[Dict[str, Any]] = None,
+        stages: Optional[Dict[str, Any]] = None,
+    ) -> None:
         if not project_path.is_dir():
             return
         target = project_path / self.MANIFEST_NAME
@@ -315,10 +324,40 @@ class ProjectService:
                 updated_at=now,
                 reaper_proxy_height=proxy_height if proxy_height in {480, 720, 1080} else 720,
             )
+        if stages is not None:
+            manifest.stages = stages
+        if files is not None:
+            manifest.files = self._manifest_files_from_record(files, stages or manifest.stages)
         # Legacy/existing manifests are backed up by the explicit migration step.
         # Lifecycle checkpoints must not overwrite that original backup.
         self.manifest_writer.write(target, manifest, backup_existing=False)
         self._record_in_index(project_path, metadata, preset_id=manifest.preset_id, display_name=manifest.author_preset)
+
+    @staticmethod
+    def _manifest_files_from_record(files: Dict[str, Any], stages: Dict[str, Any]) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        role_map = {
+            "maximum": "MAX_VIDEO",
+            "proxy": "REAPER_PROXY",
+            "audio": "ORIGINAL_AUDIO",
+            "instrumental": "INSTRUMENTAL",
+            "reaper": "REAPER_PROJECT",
+            "thumbnail": "THUMBNAIL",
+        }
+        for key, value in files.items():
+            path = str(value)
+            details = stages.get(key, {}) if isinstance(stages, dict) else {}
+            entry = {
+                "path": path,
+                "role": role_map.get(key, key.upper()),
+                "source": "job_record",
+            }
+            if isinstance(details, dict):
+                for field in ("size", "confidence", "source", "validated_at", "probe"):
+                    if details.get(field) is not None:
+                        entry[field] = details[field]
+            result[key] = entry
+        return result
 
     def _preset_identity(self, root_path: Path) -> tuple[str, str]:
         key = str(root_path).casefold()
@@ -442,6 +481,9 @@ class ProjectService:
             paths.materials / (Path(instrumental_name).stem + ".%(ext)s"),
             lambda path: self.validator.validate_expected_audio(path, cancellation, duration=metadata.duration, require_flac=True),
         )
+        for key, details in self._legacy_media_states(metadata, plan, paths.root, options, cancellation).items():
+            if states.get(key, {}).get("status") != "VALID":
+                states[key] = details
         preview_candidates = [path for path in paths.root.glob(self.naming.preview + ".*") if path.is_file() and path.stat().st_size > 0]
         states["thumbnail"] = ({"status": "VALID", "path": str(preview_candidates[0]), "size": preview_candidates[0].stat().st_size} if preview_candidates else {"status": "MISSING"})
         rpp = paths.root / safe_file_name(paths.base_name, "{title}", "rpp")
@@ -464,6 +506,30 @@ class ProjectService:
             if not is_enabled:
                 states[key] = {"status": "DISABLED"}
         return states
+
+    def _legacy_media_states(
+        self,
+        metadata: VideoMetadata,
+        plan: FormatPlan,
+        project_path: Path,
+        options: ProjectOptions,
+        cancellation: Optional[CancellationToken],
+    ) -> Dict[str, Dict[str, Any]]:
+        if not getattr(self.validator, "probe", None):
+            return {}
+
+        def probe(path: Path, token: Optional[CancellationToken]) -> Dict[str, Any]:
+            return self.validator.probe(path, token)
+
+        inspector = LegacyProjectMediaInspector(probe)
+        matches = inspector.inspect(
+            project_path,
+            metadata,
+            plan,
+            proxy_height=options.reaper_proxy_height,
+            cancellation=cancellation,
+        )
+        return {key: match.to_state() for key, match in matches.items() if match.status != "NOT_MATCHED"}
 
     def reconcile_existing(
         self,
@@ -500,7 +566,14 @@ class ProjectService:
         if record.get("status") not in {"completed", "cancelled"}:
             record["status"] = "failed"
         self.job_store.save(metadata.video_id, record)
-        self._write_manifest(project_path, metadata, str(record.get("status", "failed")))
+        self._write_manifest(
+            project_path,
+            metadata,
+            str(record.get("status", "failed")),
+            options.reaper_proxy_height,
+            record.get("files", {}),
+            record.get("stages", {}),
+        )
         return states
 
     @staticmethod
@@ -510,6 +583,18 @@ class ProjectService:
             return [path for path in template.parent.iterdir() if path.is_file() and path.name.casefold().startswith(base) and path.name.casefold().endswith((".part", ".ytdl"))]
         except OSError:
             return []
+
+    @staticmethod
+    def _blocked_existing_stage(record: Dict[str, Any], key: str) -> Optional[str]:
+        details = record.get("stages", {}).get(key, {}) if isinstance(record.get("stages"), dict) else {}
+        if not isinstance(details, dict):
+            return None
+        status = str(details.get("status") or "")
+        if status == "AMBIGUOUS":
+            return "Found multiple content-compatible legacy files for " + key + "; choose the correct file manually before continuing."
+        if status == "INVALID":
+            return "Existing file for " + key + " did not pass validation and will not be overwritten: " + str(details.get("reason", "unknown reason"))
+        return None
 
     def dry_run(self, destination: Path, metadata: VideoMetadata, options: ProjectOptions) -> ProjectResult:
         plan = build_format_plan(metadata.formats, options.reaper_proxy_height)
@@ -541,8 +626,13 @@ class ProjectService:
             if not paths.materials.is_dir():
                 manifest_path = paths.root / self.MANIFEST_NAME
                 loaded_manifest = self.manifest_loader.load(manifest_path)
-                if loaded_manifest.status == ManifestStatus.VALID:
-                    paths.materials.mkdir(exist_ok=False)
+                legacy_files = []
+                try:
+                    legacy_files = [item for item in paths.root.iterdir() if item.is_file() or item.is_dir()]
+                except OSError:
+                    legacy_files = []
+                if loaded_manifest.status == ManifestStatus.VALID or legacy_files:
+                    paths.materials.mkdir(exist_ok=True)
                 else:
                     raise ValidationError("Папка возобновляемого проекта повреждена.")
         else:
@@ -738,6 +828,9 @@ class ProjectService:
                     invalid = record.get("stages", {}).get("maximum", {})
                     if invalid.get("status") == "INVALID":
                         raise ValidationError("Существующее максимальное видео не прошло проверку и не будет перезаписано: " + str(invalid.get("reason", "неизвестная причина")))
+                    blocked = self._blocked_existing_stage(record, "maximum")
+                    if blocked:
+                        raise ValidationError(blocked)
                     max_stem = safe_file_name(
                         paths.base_name,
                         self.naming.maximum,
@@ -796,6 +889,9 @@ class ProjectService:
                     files["proxy"] = existing
                     on_progress(ProgressInfo(JobStage.CREATE_PROXY.value, f"Готовое видео {options.reaper_proxy_height}p найдено — пропущено", 100.0))
                 else:
+                    blocked = self._blocked_existing_stage(record, "proxy")
+                    if blocked:
+                        raise ValidationError(blocked)
                     proxy_estimate = self.storage.estimate_download(plan.proxy_video.size, plan.proxy_audio.size)
                     require_space(f"Создание видео {options.reaper_proxy_height}p для REAPER", paths.materials, proxy_estimate)
                     require_space(f"Временные файлы видео {options.reaper_proxy_height}p", job_temp_path, proxy_estimate)
@@ -867,6 +963,9 @@ class ProjectService:
                     files["audio"] = existing
                     on_progress(ProgressInfo(JobStage.DOWNLOAD_AUDIO.value, "Готовое аудио найдено — пропущено", 100.0))
                 else:
+                    blocked = self._blocked_existing_stage(record, "audio")
+                    if blocked:
+                        raise ValidationError(blocked)
                     require_space(
                         "Скачивание оригинального аудио", paths.materials,
                         self.storage.estimate_download(plan.best_audio.size),
@@ -896,6 +995,9 @@ class ProjectService:
                     files["instrumental"] = existing
                     on_progress(ProgressInfo(JobStage.SEPARATE_STEMS.value, "Готовый Instrumental FLAC найден — пропущено", 100.0))
                 else:
+                    blocked = self._blocked_existing_stage(record, "instrumental")
+                    if blocked:
+                        raise ValidationError(blocked)
                     inst_name = safe_file_name(paths.base_name, self.naming.instrumental, "flac")
                     source_probe = self.validator.validate_audio(files["audio"], cancellation)
                     source_duration = self.validator.duration(source_probe) or metadata.duration or 0
@@ -979,7 +1081,14 @@ class ProjectService:
             record["status"] = "completed"
             record["stage"] = JobStage.DONE.name
             self.job_store.save(metadata.video_id, record)
-            self._write_manifest(paths.root, metadata, "completed", options.reaper_proxy_height)
+            self._write_manifest(
+                paths.root,
+                metadata,
+                "completed",
+                options.reaper_proxy_height,
+                record.get("files", {}),
+                record.get("stages", {}),
+            )
             on_progress(ProgressInfo(JobStage.DONE.value, "Проект готов", 100.0))
             try:
                 job_temp.mark_completed()
@@ -1005,7 +1114,7 @@ class ProjectService:
             record["files"] = {key: str(value) for key, value in files.items()}
             record["updated_at"] = dt.datetime.now().isoformat(timespec="seconds")
             self.job_store.save(metadata.video_id, record)
-            self._write_manifest(paths.root, metadata, "runtime_install_required", options.reaper_proxy_height)
+            self._write_manifest(paths.root, metadata, "runtime_install_required", options.reaper_proxy_height, record.get("files", {}), record.get("stages", {}))
             raise
         except ManualActionRequiredError:
             record["status"] = "manual_action_required"
@@ -1014,7 +1123,7 @@ class ProjectService:
             record["files"] = {key: str(value) for key, value in files.items()}
             record["updated_at"] = dt.datetime.now().isoformat(timespec="seconds")
             self.job_store.save(metadata.video_id, record)
-            self._write_manifest(paths.root, metadata, "manual_action_required", options.reaper_proxy_height)
+            self._write_manifest(paths.root, metadata, "manual_action_required", options.reaper_proxy_height, record.get("files", {}), record.get("stages", {}))
             raise
         except YouTubeMediaForbiddenError as exc:
             record["status"] = "media_forbidden"
@@ -1031,7 +1140,7 @@ class ProjectService:
             record["files"] = {key: str(value) for key, value in files.items()}
             record["updated_at"] = dt.datetime.now().isoformat(timespec="seconds")
             self.job_store.save(metadata.video_id, record)
-            self._write_manifest(paths.root, metadata, "media_forbidden", options.reaper_proxy_height)
+            self._write_manifest(paths.root, metadata, "media_forbidden", options.reaper_proxy_height, record.get("files", {}), record.get("stages", {}))
             raise
         except JobCancelledError:
             record["status"] = "cancelled"
@@ -1039,13 +1148,13 @@ class ProjectService:
             record["files"] = {key: str(value) for key, value in files.items()}
             record["updated_at"] = dt.datetime.now().isoformat(timespec="seconds")
             self.job_store.save(metadata.video_id, record)
-            self._write_manifest(paths.root, metadata, "cancelled", options.reaper_proxy_height)
+            self._write_manifest(paths.root, metadata, "cancelled", options.reaper_proxy_height, record.get("files", {}), record.get("stages", {}))
             raise
         except Exception:
             record["status"] = "failed"
             record["files"] = {key: str(value) for key, value in files.items()}
             self.job_store.save(metadata.video_id, record)
-            self._write_manifest(paths.root, metadata, "failed", options.reaper_proxy_height)
+            self._write_manifest(paths.root, metadata, "failed", options.reaper_proxy_height, record.get("files", {}), record.get("stages", {}))
             raise
 
     def _check_dependencies(self, options: ProjectOptions) -> None:

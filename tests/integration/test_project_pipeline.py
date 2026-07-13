@@ -63,6 +63,30 @@ class FakeValidator:
         return float(data["format"]["duration"])
 
 
+class LegacyContentValidator(FakeValidator):
+    def probe(self, path, cancellation=None):
+        name = Path(path).name.casefold()
+        if "inst" in name:
+            return {"streams": [{"codec_type": "audio", "codec_name": "flac", "sample_rate": "48000", "channels": 2}], "format": {"duration": "12", "bit_rate": "320000"}}
+        if "voice" in name or Path(path).suffix.casefold() in {".m4a", ".mp3", ".wav", ".opus"}:
+            return {"streams": [{"codec_type": "audio", "codec_name": "aac", "sample_rate": "48000", "channels": 2}], "format": {"duration": "12", "bit_rate": "192000"}}
+        if "proxy" in name:
+            return {
+                "streams": [
+                    {"codec_type": "video", "codec_name": "h264", "width": 1280, "height": 720, "avg_frame_rate": "60/1", "color_transfer": "bt709"},
+                    {"codec_type": "audio", "codec_name": "aac", "sample_rate": "48000", "channels": 2},
+                ],
+                "format": {"duration": "12", "bit_rate": "2500000"},
+            }
+        return {
+            "streams": [
+                {"codec_type": "video", "codec_name": "vp9", "width": 2560, "height": 1440, "avg_frame_rate": "60/1", "color_transfer": "bt709"},
+                {"codec_type": "audio", "codec_name": "opus", "sample_rate": "48000", "channels": 2},
+            ],
+            "format": {"duration": "12", "bit_rate": "8000000"},
+        }
+
+
 class FakeThumbnail:
     pass
 
@@ -198,6 +222,60 @@ def test_resume_finds_valid_existing_maximum_and_does_not_download_again(tmp_pat
     assert result.files["maximum"] == maximum
     assert maximum.stat().st_mtime_ns == original_stat.st_mtime_ns
     assert any("готовое максимальное" in event.message.casefold() for event in events)
+
+
+def test_resume_detects_legacy_media_by_content_and_skips_downloads(tmp_path: Path):
+    yt_exe = tmp_path / "yt-dlp.exe"
+    ffmpeg = tmp_path / "ffmpeg.exe"
+    ffprobe = tmp_path / "ffprobe.exe"
+    for executable in (yt_exe, ffmpeg, ffprobe):
+        executable.write_bytes(b"exe")
+    project = tmp_path / "Beppo" / "Doing" / "Legacy Human Names"
+    media = project / "Media"
+    media.mkdir(parents=True)
+    ready = {
+        "maximum": media / "raw capture source.mp4",
+        "proxy": media / "edit proxy.mp4",
+        "audio": media / "voice track.m4a",
+        "instrumental": media / "music inst.flac",
+    }
+    for path in ready.values():
+        path.write_bytes(b"ready")
+    jobs = JobStore(tmp_path / "jobs")
+    jobs.save("legacy-id", {"created_by": "CreatorAssistant", "status": "failed", "project_path": str(project), "files": {}})
+    yt = FakeYtDlp(yt_exe)
+    separator = FakeSeparator()
+    service = ProjectService(
+        yt,
+        FakeFfmpeg(ffmpeg),
+        LegacyContentValidator(ffprobe),
+        FakeThumbnail(),
+        ReaperService(),
+        separator,
+        separator,
+        jobs,
+        NamingTemplates(),
+    )
+    metadata = VideoMetadata(
+        "legacy-id", "Legacy Human Names", 12, "https://youtu.be/legacy-id",
+        formats=[
+            VideoFormat("maximum", "webm", height=1440, fps=60, vcodec="vp9"),
+            VideoFormat("proxy", "mp4", height=720, fps=60, vcodec="avc1"),
+            VideoFormat("audio", "webm", acodec="opus"),
+            VideoFormat("aac", "m4a", acodec="mp4a.40.2"),
+        ],
+    )
+    options = ProjectOptions(download_maximum=True, create_proxy=True, download_audio=True, create_instrumental=True, create_reaper_project=False)
+
+    result = service.execute(tmp_path, metadata, options, CancellationToken(), lambda _event: None, project)
+
+    assert yt.download_count == 0
+    assert result.files == ready
+    record = jobs.load("legacy-id")
+    assert record["files"] == {key: str(value) for key, value in ready.items()}
+    assert record["stages"]["maximum"]["source"] == "legacy_content_scan"
+    manifest = ManifestLoader().load(project / MANIFEST_NAME).manifest
+    assert manifest.files["maximum"]["path"] == str(ready["maximum"])
 
 
 def test_resume_preserves_last_compatible_alternative_format_id(tmp_path: Path):
