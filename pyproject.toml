@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "creator-assistant"
+version = "0.1.0"
+description = "Windows-приложение для подготовки YouTube-проектов к озвучке"
+readme = "README_RU.md"
+requires-python = ">=3.9"
+dependencies = [
+    "PySide6>=6.7,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pyinstaller>=6.10,<7",
+]
+
+[project.scripts]
+creator-assistant = "creator_assistant.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"

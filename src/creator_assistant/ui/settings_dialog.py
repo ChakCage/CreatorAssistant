@@ -1,0 +1,410 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from pathlib import Path
+import time
+from typing import Any, Dict
+
+from PySide6.QtCore import QThread
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+    QMessageBox,
+)
+
+from creator_assistant.ui.workers import FunctionWorker, UiWorkerBridge
+from creator_assistant.domain.youtube_auth import BROWSERS
+from creator_assistant.services.storage_service import default_temp_root
+
+
+class SettingsDialog(QDialog):
+    def __init__(self, settings_or_container, parent=None) -> None:
+        super().__init__(parent)
+        self.container = settings_or_container if hasattr(settings_or_container, "settings") else None
+        settings: Dict[str, Any] = self.container.settings if self.container else settings_or_container
+        self.result_settings = deepcopy(settings)
+        self.path_edits: Dict[str, QLineEdit] = {}
+        self.naming_edits: Dict[str, QLineEdit] = {}
+        self._threads: list[QThread] = []
+        self._notify_auto_search = False
+        self.setWindowTitle("Настройки Creator Assistant")
+        self.setMinimumSize(620, 480)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(14, 14, 14, 14)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("settingsScrollArea")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QScrollArea.NoFrame)
+        content = QWidget()
+        content.setObjectName("settingsContent")
+        content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(4, 4, 12, 20)
+        content_layout.setSpacing(12)
+
+        paths_group = QGroupBox("Пути")
+        paths_form = QFormLayout(paths_group)
+        path_fields = (
+            ("youtube_root", "Корневая папка YouTube", True),
+            ("temp_root", "Временные файлы заданий", True),
+            ("yt_dlp_path", "yt-dlp.exe", False),
+            ("ffmpeg_path", "ffmpeg.exe", False),
+            ("ffprobe_path", "ffprobe.exe", False),
+            ("uvr_path", "UVR_Launcher.exe", False),
+            ("reaper_path", "reaper.exe", False),
+        )
+        for key, label, directory in path_fields:
+            edit = QLineEdit(str(settings.get(key, "")))
+            self._show_full_path(edit, edit.text())
+            button = QPushButton("Обзор…")
+            button.clicked.connect(lambda checked=False, e=edit, d=directory: self._browse(e, d))
+            row = QHBoxLayout()
+            row.addWidget(edit, 1)
+            row.addWidget(button)
+            paths_form.addRow(label, row)
+            self.path_edits[key] = edit
+        self.auto_find_button = QPushButton("Найти программы автоматически")
+        self.auto_find_button.setToolTip("Проверить сохранённые пути и найти отсутствующие программы в фоне")
+        self.auto_find_button.clicked.connect(lambda: self._start_auto_search(True))
+        paths_form.addRow("", self.auto_find_button)
+        content_layout.addWidget(paths_group)
+
+        access_group = QGroupBox("Доступ к YouTube")
+        access_form = QFormLayout(access_group)
+        access = settings.get("youtube_access", {})
+        self.youtube_auth_mode = QComboBox()
+        self.youtube_auth_mode.addItem("Автоматический", "automatic")
+        self.youtube_auth_mode.addItem("Без авторизации", "none")
+        self.youtube_auth_mode.addItem("Cookies Firefox", "firefox")
+        self.youtube_auth_mode.addItem("Cookies Chrome", "chrome")
+        self.youtube_auth_mode.addItem("Файл cookies.txt", "cookies_file")
+        configured_mode = str(access.get("mode", "automatic"))
+        if configured_mode == "browser":
+            configured_mode = str(access.get("browser", "firefox"))
+        self.youtube_auth_mode.setCurrentIndex(max(0, self.youtube_auth_mode.findData(configured_mode)))
+        self.youtube_browser = QComboBox()
+        for value, label in BROWSERS.items():
+            self.youtube_browser.addItem(label, value)
+        self.youtube_browser.setCurrentIndex(max(0, self.youtube_browser.findData(access.get("browser", "chrome"))))
+        self.youtube_profile = QLineEdit(str(access.get("browser_profile", "")))
+        self.youtube_profile.setPlaceholderText("Default, Profile 1, Profile 2…")
+        self.youtube_cookies_file = QLineEdit(str(access.get("cookies_file", "")))
+        cookies_button = QPushButton("Обзор…")
+        cookies_button.clicked.connect(self._browse_cookies_file)
+        cookies_row = QHBoxLayout()
+        cookies_row.addWidget(self.youtube_cookies_file, 1)
+        cookies_row.addWidget(cookies_button)
+        self.youtube_always_use = QCheckBox("Всегда использовать выбранную авторизацию")
+        self.youtube_always_use.setChecked(bool(access.get("always_use", False)))
+        warning = QLabel("Файл cookies может предоставлять доступ к вашим аккаунтам. Не передавайте его другим людям.")
+        warning.setWordWrap(True)
+        warning.setProperty("class", "muted")
+        access_form.addRow("Режим", self.youtube_auth_mode)
+        access_form.addRow("Браузер", self.youtube_browser)
+        access_form.addRow("Профиль браузера", self.youtube_profile)
+        access_form.addRow("Файл cookies.txt", cookies_row)
+        access_form.addRow(self.youtube_always_use)
+        access_form.addRow(warning)
+        access_actions = QHBoxLayout()
+        anonymous_test = QPushButton("Проверить анонимный доступ")
+        cookies_test = QPushButton("Проверить браузерные cookies")
+        po_test = QPushButton("Проверить PO Token Provider")
+        reset_access = QPushButton("Сбросить настройки доступа")
+        anonymous_test.clicked.connect(self._open_youtube_diagnostics)
+        cookies_test.clicked.connect(self._open_youtube_diagnostics)
+        po_test.clicked.connect(self._open_youtube_diagnostics)
+        reset_access.clicked.connect(self._reset_youtube_access)
+        for button in (anonymous_test, cookies_test, po_test, reset_access):
+            access_actions.addWidget(button)
+        access_form.addRow(access_actions)
+        self.youtube_auth_mode.currentIndexChanged.connect(self._sync_youtube_access)
+        self._sync_youtube_access()
+        content_layout.addWidget(access_group)
+
+        options_group = QGroupBox("Обработка")
+        options_form = QFormLayout(options_group)
+        self.use_gpu = QCheckBox("Использовать GPU для UVR")
+        self.use_gpu.setChecked(bool(settings.get("use_gpu", True)))
+        self.proxy_height = QComboBox()
+        for height in (480, 720, 1080):
+            self.proxy_height.addItem(f"{height}p", height)
+        self.proxy_height.setCurrentIndex(max(0, self.proxy_height.findData(int(settings.get("reaper_proxy_height", 720)))))
+        self.nvenc = QCheckBox("Предпочитать NVIDIA NVENC для прокси")
+        self.nvenc.setChecked(bool(settings.get("prefer_nvenc", True)))
+        self.open_folder = QCheckBox("Открывать папку после завершения")
+        self.open_folder.setChecked(bool(settings.get("open_folder_after_completion", True)))
+        self.initial_audio = QComboBox()
+        self.initial_audio.addItem("Оригинальный звук видео", "original")
+        self.initial_audio.addItem("Инструментал", "instrumental")
+        self.initial_audio.addItem("Оба", "both")
+        index = self.initial_audio.findData(settings.get("reaper_initial_audio", "original"))
+        self.initial_audio.setCurrentIndex(max(index, 0))
+        options_form.addRow(self.use_gpu)
+        options_form.addRow("Качество прокси REAPER", self.proxy_height)
+        options_form.addRow(self.nvenc)
+        options_form.addRow(self.open_folder)
+        options_form.addRow("Звук при первом открытии RPP", self.initial_audio)
+        content_layout.addWidget(options_group)
+
+        naming_group = QGroupBox("Шаблоны имён")
+        naming_form = QFormLayout(naming_group)
+        naming = settings.get("naming", {})
+        for key, label in (
+            ("maximum", "Максимальное видео"),
+            ("proxy", "Видео-прокси"),
+            ("audio", "Оригинальное аудио"),
+            ("instrumental", "Инструментал"),
+            ("preview", "Превью"),
+        ):
+            edit = QLineEdit(str(naming.get(key, "")))
+            naming_form.addRow(label, edit)
+            self.naming_edits[key] = edit
+        hint = QLabel("Доступны {title}, {height} и {proxy_height}.")
+        hint.setProperty("class", "muted")
+        naming_form.addRow(hint)
+        content_layout.addWidget(naming_group)
+        content_layout.addStretch(1)
+        self.scroll_area.setWidget(content)
+        root_layout.addWidget(self.scroll_area, 1)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        self.buttons.setObjectName("settingsButtons")
+        self.buttons.button(QDialogButtonBox.Save).setText("Сохранить")
+        self.buttons.button(QDialogButtonBox.Cancel).setText("Отмена")
+        self.buttons.accepted.connect(self._save)
+        self.buttons.rejected.connect(self.reject)
+        root_layout.addWidget(self.buttons, 0)
+        self._fit_to_screen()
+
+    def _browse(self, edit: QLineEdit, directory: bool) -> None:
+        current = edit.text() or str(Path.home())
+        if directory:
+            selected = QFileDialog.getExistingDirectory(self, "Выберите папку", current)
+        else:
+            selected, _ = QFileDialog.getOpenFileName(self, "Выберите программу", current, "Программы (*.exe);;Все файлы (*)")
+        if selected:
+            self._show_full_path(edit, selected)
+
+    def _browse_cookies_file(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите cookies.txt",
+            self.youtube_cookies_file.text() or str(Path.home()),
+            "Cookies (*.txt);;Все файлы (*)",
+        )
+        if selected:
+            self._show_full_path(self.youtube_cookies_file, selected)
+
+    def _sync_youtube_access(self) -> None:
+        mode = self.youtube_auth_mode.currentData()
+        is_browser = mode in BROWSERS
+        if is_browser:
+            self.youtube_browser.setCurrentIndex(max(0, self.youtube_browser.findData(mode)))
+        self.youtube_browser.setEnabled(False)
+        self.youtube_profile.setEnabled(is_browser)
+        self.youtube_cookies_file.setEnabled(mode == "cookies_file")
+
+    def _open_youtube_diagnostics(self) -> None:
+        if not self.container:
+            QMessageBox.information(self, "Диагностика YouTube", "Сохраните настройки и откройте диагностику приложения.")
+            return
+        from creator_assistant.ui.diagnostics_dialog import DiagnosticsDialog
+
+        DiagnosticsDialog(self.container, self).exec()
+
+    def _reset_youtube_access(self) -> None:
+        index = self.youtube_auth_mode.findData("automatic")
+        self.youtube_auth_mode.setCurrentIndex(max(0, index))
+        self.youtube_browser.setCurrentIndex(max(0, self.youtube_browser.findData("firefox")))
+        self.youtube_profile.clear()
+        self.youtube_cookies_file.clear()
+        self.youtube_always_use.setChecked(False)
+        self.result_settings["youtube_access"] = {
+            "mode": "automatic",
+            "browser": "",
+            "browser_profile": "",
+            "cookies_file": "",
+            "always_use": False,
+            "schema_version": 2,
+        }
+        if self.container:
+            self.container.reset_youtube_access()
+        QMessageBox.information(self, "Доступ к YouTube", "Настройки доступа сброшены. Новые публичные Job начинаются анонимно.")
+
+    @staticmethod
+    def _show_full_path(edit: QLineEdit, path: str) -> None:
+        edit.setText(path)
+        edit.setToolTip(path)
+        edit.deselect()
+        edit.setCursorPosition(0)
+
+    def _fit_to_screen(self) -> None:
+        screen = self.screen() or QApplication.primaryScreen()
+        if not screen:
+            self.resize(820, 700)
+            return
+        available = screen.availableGeometry()
+        width = min(860, max(620, available.width() - 48))
+        height = min(760, max(480, available.height() - 48))
+        self.setMinimumSize(min(620, width), min(480, height))
+        self.resize(width, height)
+
+    def _has_missing_or_invalid_paths(self) -> bool:
+        for key in ("yt_dlp_path", "ffmpeg_path", "ffprobe_path", "uvr_path", "reaper_path"):
+            value = str(self.result_settings.get(key, ""))
+            if not value or not Path(value).is_file():
+                return True
+        return False
+
+    def _start_auto_search(self, notify: bool = True) -> None:
+        if not self.container or self._threads:
+            return
+        self._notify_auto_search = notify
+        self.auto_find_button.setEnabled(False)
+        self.auto_find_button.setText("Поиск программ…")
+        thread = QThread(self)
+        worker = FunctionWorker(lambda progress: self.container.auto_detect_dependencies())
+        thread.setObjectName("settings-auto-search-thread")
+        worker.setObjectName("settings-auto-search-worker")
+        terminal = {"kind": "", "args": ()}
+
+        def queue(kind, *args):
+            terminal.update(kind=kind, args=args)
+
+        def cleanup():
+            if thread in self._threads:
+                self._threads.remove(thread)
+            bridge.deleteLater()
+            kind, args = terminal["kind"], terminal["args"]
+            if kind == "finished":
+                self._auto_search_ready(*args)
+            elif kind == "failed":
+                self._auto_search_failed(*args)
+            elif kind == "cancelled":
+                self._auto_search_failed("Поиск отменён", "")
+            elif kind:
+                self._auto_search_failed(str(args[0]) if args else "Операция прервана", "")
+
+        bridge = UiWorkerBridge(
+            {
+                "finished": lambda value: queue("finished", value),
+                "failed": lambda message, details: queue("failed", message, details),
+                "cancelled": lambda: queue("cancelled"),
+                "manual_action_required": lambda value: queue("manual_action_required", value),
+                "runtime_install_required": lambda value: queue("runtime_install_required", value),
+                "authentication_required": lambda value: queue("authentication_required", value),
+                "cookies_unavailable": lambda value: queue("cookies_unavailable", value),
+                "media_forbidden": lambda value: queue("media_forbidden", value),
+                "thread_finished": cleanup,
+            },
+            parent=self,
+        )
+        thread.worker = worker
+        thread.bridge = bridge
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(bridge.finished)
+        worker.failed.connect(bridge.failed)
+        worker.cancelled.connect(bridge.cancelled)
+        worker.manual_action_required.connect(bridge.manual_action_required)
+        worker.runtime_install_required.connect(bridge.runtime_install_required)
+        worker.authentication_required.connect(bridge.authentication_required)
+        worker.cookies_unavailable.connect(bridge.cookies_unavailable)
+        worker.media_forbidden.connect(bridge.media_forbidden)
+        for signal in (
+            worker.finished, worker.failed, worker.cancelled, worker.manual_action_required,
+            worker.runtime_install_required, worker.authentication_required,
+            worker.cookies_unavailable, worker.media_forbidden,
+            worker.waiting_for_disk_space, worker.gpu_memory_required,
+            worker.system_memory_required, worker.audio_output_missing,
+        ):
+            signal.connect(worker.deleteLater)
+            signal.connect(thread.quit)
+        thread.finished.connect(bridge.thread_finished)
+        thread.finished.connect(thread.deleteLater)
+        self._threads.append(thread)
+        thread.start()
+
+    def done(self, result: int) -> None:
+        if self._threads:
+            try:
+                self.container.runner.cancel_active()
+            except Exception:
+                pass
+            for thread in list(self._threads):
+                thread.requestInterruption()
+                thread.quit()
+            if any(thread.isRunning() and not thread.wait(3000) for thread in list(self._threads)):
+                self.auto_find_button.setText("Завершаю поиск…")
+                return
+        super().done(result)
+
+    def _auto_search_ready(self, _resolutions) -> None:
+        self.auto_find_button.setEnabled(True)
+        self.auto_find_button.setText("Найти программы автоматически")
+        self.result_settings = deepcopy(self.container.settings)
+        found = []
+        labels = {
+            "yt_dlp_path": "yt-dlp",
+            "ffmpeg_path": "FFmpeg",
+            "ffprobe_path": "FFprobe",
+            "uvr_path": "UVR",
+            "reaper_path": "REAPER",
+        }
+        for key, label in labels.items():
+            value = str(self.result_settings.get(key, ""))
+            self._show_full_path(self.path_edits[key], value)
+            found.append(f"{label}: {value or 'не найден'}")
+        if self._notify_auto_search:
+            QMessageBox.information(self, "Автоматический поиск", "\n".join(found))
+
+    def _auto_search_failed(self, message: str, _details: str) -> None:
+        self.auto_find_button.setEnabled(True)
+        self.auto_find_button.setText("Найти программы автоматически")
+        QMessageBox.warning(self, "Автоматический поиск", message)
+
+    def _save(self) -> None:
+        save_clicked_at = time.monotonic()
+        for key, edit in self.path_edits.items():
+            self.result_settings[key] = edit.text().strip()
+        self.result_settings["use_gpu"] = self.use_gpu.isChecked()
+        try:
+            proxy_height = int(self.proxy_height.currentData())
+        except (TypeError, ValueError):
+            QMessageBox.warning(self, "Creator Assistant", "Качество прокси должно быть 480p, 720p или 1080p.")
+            return
+        if proxy_height not in {480, 720, 1080}:
+            QMessageBox.warning(self, "Creator Assistant", "Качество прокси должно быть 480p, 720p или 1080p.")
+            return
+        self.result_settings["reaper_proxy_height"] = proxy_height
+        self.result_settings["prefer_nvenc"] = self.nvenc.isChecked()
+        self.result_settings["open_folder_after_completion"] = self.open_folder.isChecked()
+        self.result_settings["reaper_initial_audio"] = self.initial_audio.currentData()
+        selected_access_mode = str(self.youtube_auth_mode.currentData())
+        stored_mode = "browser" if selected_access_mode in BROWSERS else selected_access_mode
+        stored_browser = selected_access_mode if selected_access_mode in BROWSERS else ""
+        self.result_settings["youtube_access"] = {
+            "mode": stored_mode,
+            "browser": stored_browser,
+            "browser_profile": self.youtube_profile.text().strip(),
+            "cookies_file": self.youtube_cookies_file.text().strip(),
+            "always_use": self.youtube_always_use.isChecked() and stored_mode in {"browser", "cookies_file"},
+            "schema_version": 2,
+        }
+        self.result_settings["naming"] = {key: edit.text().strip() for key, edit in self.naming_edits.items()}
+        if self.container:
+            self.container.save_settings(self.result_settings, started_at=save_clicked_at)
+        self.accept()
