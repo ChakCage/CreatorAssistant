@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -36,14 +37,18 @@ from PySide6.QtWidgets import (
 )
 
 from creator_assistant.app import ServiceContainer
+from creator_assistant.domain.author_presets import AuthorMatchKind, AuthorPreset, merge_presets
+from creator_assistant.domain.errors import JobCancelledError
 from creator_assistant.domain.job import CancellationToken
 from creator_assistant.domain.models import ProgressInfo, ProjectOptions, VideoMetadata
 from creator_assistant.domain.progress import WeightedProgressTracker, format_bytes, format_duration
 from creator_assistant.domain.stages import JobStage, ORDERED_STAGES, stage_display_name
 from creator_assistant.infrastructure.windows_paths import discover_author_folders
+from creator_assistant.infrastructure.project_index import ProjectRoot
 from creator_assistant.infrastructure.crash_logging import event as crash_event, safe_call, update_context
 from creator_assistant.services.format_selector import build_format_plan
 from creator_assistant.services.metadata_service import validate_youtube_url, youtube_video_id
+from creator_assistant.services.author_preset_resolver import AuthorPresetResolver
 from creator_assistant.ui.settings_dialog import SettingsDialog
 from creator_assistant.ui.youtube_auth_dialog import YouTubeAuthDialog
 from creator_assistant.ui.manual_uvr_dialog import ManualUvrDialog
@@ -96,7 +101,16 @@ class ProjectPrepTab(QWidget):
         self.current_project_path: Optional[Path] = None
         self.current_rpp_path: Optional[Path] = None
         self.project_selection = "new"
+        self._resume_states = {}
         self._active_project_url = ""
+        self.author_presets: list[AuthorPreset] = []
+        self._author_combo_programmatic = False
+        self._author_manual_override_video_id = ""
+        self._author_resolution_kind = AuthorMatchKind.NO_MATCH
+        self._discovery_thread: Optional[QThread] = None
+        self._discovery_generation = 0
+        self._discovery_video_id = ""
+        self._pending_discovery_video_id = ""
         self.network = QNetworkAccessManager(self)
         self._build_ui()
         settings_service = getattr(self.container, "settings_service", None)
@@ -147,7 +161,7 @@ class ProjectPrepTab(QWidget):
         destination_layout = QGridLayout(destination_group)
         self.author_combo = QComboBox()
         self.author_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.author_combo.currentIndexChanged.connect(self.update_project_path)
+        self.author_combo.currentIndexChanged.connect(self._author_changed)
         add_button = QPushButton("Добавить путь")
         remove_button = QPushButton("Удалить пресет")
         settings_button = QPushButton("Настройки")
@@ -155,9 +169,13 @@ class ProjectPrepTab(QWidget):
         remove_button.clicked.connect(self._safe_ui_action("remove_author_path", self.remove_custom_path))
         settings_button.clicked.connect(self._safe_ui_action("open_settings", self.open_settings))
         destination_layout.addWidget(self.author_combo, 0, 0, 1, 3)
-        destination_layout.addWidget(add_button, 1, 0)
-        destination_layout.addWidget(remove_button, 1, 1)
-        destination_layout.addWidget(settings_button, 1, 2)
+        self.author_status_label = QLabel("Автор: не определён")
+        self.author_status_label.setProperty("class", "muted")
+        self.author_status_label.setWordWrap(True)
+        destination_layout.addWidget(self.author_status_label, 1, 0, 1, 3)
+        destination_layout.addWidget(add_button, 2, 0)
+        destination_layout.addWidget(remove_button, 2, 1)
+        destination_layout.addWidget(settings_button, 2, 2)
         left_layout.addWidget(destination_group)
 
         source_group = QGroupBox("Видео YouTube")
@@ -179,6 +197,10 @@ class ProjectPrepTab(QWidget):
         self.path_edit.setReadOnly(True)
         source_layout.addRow("Название", self.title_edit)
         source_layout.addRow("Путь проекта", self.path_edit)
+        self.preflight_label = QLabel("Проверка проекта ещё не выполнялась")
+        self.preflight_label.setProperty("class", "muted")
+        self.preflight_label.setWordWrap(True)
+        source_layout.addRow("Предварительная проверка", self.preflight_label)
         left_layout.addWidget(source_group)
 
         info_group = QGroupBox("Найденная информация")
@@ -306,15 +328,44 @@ class ProjectPrepTab(QWidget):
         selected = self.container.settings.get("selected_author_path", "")
         custom = self.container.settings.get("author_paths", [])
         folders = discover_author_folders(Path(self.container.settings.get("youtube_root", r"E:\YouTube")), custom)
+        self.author_presets = merge_presets(self.container.settings.get("author_presets", []), folders)
         self.author_combo.blockSignals(True)
         self.author_combo.clear()
-        for author, path in folders:
-            custom_marker = " • пользовательский" if str(path) in custom else ""
-            self.author_combo.addItem(f"{author}{custom_marker} — {path}", str(path))
+        for preset in self.author_presets:
+            custom_marker = " • пользовательский" if preset.root_path in custom else ""
+            self.author_combo.addItem(f"{preset.display_name}{custom_marker} — {preset.root_path}", preset.root_path)
         index = self.author_combo.findData(selected)
-        self.author_combo.setCurrentIndex(index if index >= 0 else (0 if folders else -1))
+        self.author_combo.setCurrentIndex(index if index >= 0 else (0 if self.author_presets else -1))
         self.author_combo.blockSignals(False)
         self.update_project_path()
+
+    def _author_changed(self) -> None:
+        if self.metadata and not self._author_combo_programmatic:
+            self._author_manual_override_video_id = self.metadata.video_id
+            self.selected_project_path = None
+            self.project_selection = "new"
+            self.author_status_label.setText(f"Автор выбран вручную: {self._current_preset_name()}")
+            self.preflight_label.setText("Назначение изменено — выполняется повторная проверка проекта")
+            self.create_button.setEnabled(True)
+            QTimer.singleShot(
+                0,
+                self._safe_ui_action(
+                    "rediscover_after_author_override",
+                    lambda video_id=self.metadata.video_id: self._start_project_discovery(video_id),
+                ),
+            )
+        self.update_project_path()
+
+    def _current_preset(self) -> Optional[AuthorPreset]:
+        path = str(self.author_combo.currentData() or "").casefold()
+        return next((item for item in self.author_presets if item.root_path.casefold() == path), None)
+
+    def _current_preset_name(self) -> str:
+        preset = self._current_preset()
+        return preset.display_name if preset else "не выбран"
+
+    def _project_roots(self) -> list[ProjectRoot]:
+        return [ProjectRoot(Path(item.root_path), item.preset_id, item.display_name) for item in self.author_presets]
 
     def _url_changed(self, text: str) -> None:
         try:
@@ -384,6 +435,9 @@ class ProjectPrepTab(QWidget):
         paths = self.container.settings.setdefault("author_paths", [])
         if selected not in paths:
             paths.append(selected)
+        configured = self.container.settings.setdefault("author_presets", [])
+        if not any(isinstance(item, dict) and str(item.get("root_path") or "").casefold() == selected.casefold() for item in configured):
+            configured.append(AuthorPreset.from_dict({"root_path": selected}).to_dict())
         self.container.settings["selected_author_path"] = selected
         self.container.save_settings(self.container.settings)
         self.reload_authors()
@@ -395,6 +449,10 @@ class ProjectPrepTab(QWidget):
             QMessageBox.information(self, "Пресеты", "Автоматически найденные папки нельзя удалить. Можно удалить только пользовательский пресет.")
             return
         paths.remove(raw)
+        self.container.settings["author_presets"] = [
+            item for item in self.container.settings.get("author_presets", [])
+            if not isinstance(item, dict) or str(item.get("root_path") or "").casefold() != raw.casefold()
+        ]
         self.container.save_settings(self.container.settings)
         self.reload_authors()
 
@@ -725,6 +783,9 @@ class ProjectPrepTab(QWidget):
                 return
         except Exception:
             return
+        previous_video_id = self.metadata.video_id if self.metadata else ""
+        if previous_video_id != metadata.video_id:
+            self._author_manual_override_video_id = ""
         self.metadata = metadata
         update_context(video_id=metadata.video_id, last_ui_action="metadata_applied")
         self.selected_project_path = None
@@ -733,6 +794,7 @@ class ProjectPrepTab(QWidget):
         self.title_edit.setText(metadata.title)
         self.create_button.setEnabled(True)
         self.dry_run_button.setEnabled(True)
+        self._resolve_author_for_metadata(metadata)
         self.update_project_path()
         plan = build_format_plan(metadata.formats, self._proxy_height())
         self.info_labels["resolution"].setText(f"{plan.maximum_video.height or '?'}p")
@@ -750,13 +812,126 @@ class ProjectPrepTab(QWidget):
         if metadata.best_thumbnail:
             reply = self.network.get(QNetworkRequest(QUrl(metadata.best_thumbnail.url)))
             reply.finished.connect(lambda r=reply, video_id=metadata.video_id: self._thumbnail_ready(r, video_id))
+        self.preflight_label.setText("Идёт поиск проекта по всем настроенным папкам…")
         QTimer.singleShot(
             0,
             self._safe_ui_action(
                 "discover_existing_project",
-                lambda video_id=metadata.video_id: self._detect_existing_project(video_id),
+                lambda video_id=metadata.video_id: self._start_project_discovery(video_id),
             ),
         )
+
+    def _resolve_author_for_metadata(self, metadata: VideoMetadata) -> None:
+        if self._author_manual_override_video_id == metadata.video_id:
+            self.author_status_label.setText(f"Автор выбран вручную: {self._current_preset_name()}")
+            return
+        has_identity = any((metadata.channel_id, metadata.channel_handle, metadata.uploader_id, metadata.channel, metadata.uploader))
+        if not has_identity or not self.author_presets:
+            self.author_status_label.setText(f"Автор: {metadata.channel or metadata.uploader or 'не определён'}")
+            return
+        resolution = AuthorPresetResolver().resolve(metadata, self.author_presets)
+        self._author_resolution_kind = resolution.kind
+        selected = resolution.preset
+        if resolution.kind == AuthorMatchKind.MULTIPLE_MATCHES:
+            selected = self._choose_preset_dialog(
+                list(resolution.matches),
+                "Несколько пресетов подходят этому каналу. Выберите автора:",
+            )
+        elif resolution.kind == AuthorMatchKind.NO_MATCH:
+            selected = self._unknown_author_choice(metadata, resolution.suggestion)
+        if selected:
+            self._select_preset(selected)
+            mode = "точное совпадение" if resolution.kind == AuthorMatchKind.EXACT_MATCH else (
+                "совпадение по псевдониму" if resolution.kind == AuthorMatchKind.ALIAS_MATCH else "выбрано пользователем"
+            )
+            self.author_status_label.setText(f"Автор: {selected.display_name} — {mode}")
+        else:
+            if resolution.kind == AuthorMatchKind.MULTIPLE_MATCHES:
+                self.author_status_label.setText("Автор не выбран: найдено несколько точных совпадений")
+            else:
+                self.author_status_label.setText(
+                    f"Канал не привязан: {metadata.channel or metadata.uploader or metadata.channel_id}"
+                )
+            self.create_button.setEnabled(False)
+            self.dry_run_button.setEnabled(False)
+
+    def _select_preset(self, preset: AuthorPreset) -> None:
+        index = self.author_combo.findData(preset.root_path)
+        if index < 0:
+            return
+        self._author_combo_programmatic = True
+        try:
+            self.author_combo.setCurrentIndex(index)
+        finally:
+            self._author_combo_programmatic = False
+
+    def _choose_preset_dialog(self, presets: list[AuthorPreset], prompt: str) -> Optional[AuthorPreset]:
+        if not presets:
+            return None
+        labels = [f"{item.display_name} — {item.root_path}" for item in presets]
+        selected, accepted = QInputDialog.getItem(self, "Выбор автора", prompt, labels, 0, False)
+        if not accepted:
+            return None
+        try:
+            return presets[labels.index(selected)]
+        except ValueError:
+            return None
+
+    def _unknown_author_choice(self, metadata: VideoMetadata, suggestion: Optional[AuthorPreset]) -> Optional[AuthorPreset]:
+        current = self._current_preset()
+        if not current:
+            return self._choose_preset_dialog(self.author_presets, "Канал не найден в пресетах. Выберите автора:")
+        channel_name = metadata.channel or metadata.uploader or metadata.channel_id
+        box = QMessageBox(self)
+        box.setWindowTitle("Неизвестный автор YouTube")
+        hint = f"\n\nВозможная подсказка: {suggestion.display_name}" if suggestion else ""
+        box.setText(f"Канал «{channel_name}» не привязан ни к одному пресету.{hint}\n\nКак продолжить?")
+        current_button = box.addButton(f"Использовать {current.display_name} один раз", QMessageBox.AcceptRole)
+        choose_button = box.addButton("Выбрать другой пресет", QMessageBox.ActionRole)
+        bind_button = box.addButton(f"Привязать канал к {current.display_name}", QMessageBox.ActionRole)
+        box.addButton("Отмена", QMessageBox.RejectRole)
+        box.setDefaultButton(current_button)
+        box.exec()
+        if box.clickedButton() == bind_button:
+            self._bind_channel_to_preset(metadata, current)
+            return current
+        if box.clickedButton() == choose_button:
+            chosen = self._choose_preset_dialog(self.author_presets, "Выберите пресет для этого видео:")
+            if chosen and self.container.settings.get("suggest_remember_author", True):
+                remember = QMessageBox.question(
+                    self,
+                    "Запомнить автора?",
+                    f"Привязать канал «{channel_name}» к пресету {chosen.display_name}?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if remember == QMessageBox.Yes:
+                    self._bind_channel_to_preset(metadata, chosen)
+            return chosen
+        return current if box.clickedButton() == current_button else None
+
+    def _bind_channel_to_preset(self, metadata: VideoMetadata, preset: AuthorPreset) -> None:
+        presets = self.container.settings.setdefault("author_presets", [])
+        target = next((item for item in presets if isinstance(item, dict) and str(item.get("preset_id")) == preset.preset_id), None)
+        if target is None:
+            target = preset.to_dict()
+            presets.append(target)
+        if metadata.channel_id:
+            values = target.setdefault("youtube_channel_ids", [])
+            if metadata.channel_id not in values:
+                values.append(metadata.channel_id)
+        handle = metadata.channel_handle or metadata.uploader_id
+        if handle:
+            values = target.setdefault("youtube_handles", [])
+            if handle not in values:
+                values.append(handle)
+        self.container.settings_store.save(self.container.settings)
+        projects = getattr(self.container, "projects", None)
+        if projects is not None:
+            projects.project_roots = presets
+        self.reload_authors()
+        rebound = next((item for item in self.author_presets if item.preset_id == preset.preset_id), preset)
+        self._select_preset(rebound)
 
     def _thumbnail_ready(self, reply: QNetworkReply, video_id: str = "") -> None:
         data = reply.readAll()
@@ -779,18 +954,95 @@ class ProjectPrepTab(QWidget):
             else:
                 self.path_edit.setText(str(destination / "<Название видео>"))
 
-    def _detect_existing_project(self, video_id: str) -> None:
+    def _start_project_discovery(self, video_id: str) -> None:
+        if not self.metadata or self.metadata.video_id != video_id:
+            return
+        if self._discovery_thread and self._discovery_thread.isRunning():
+            if self._discovery_video_id != video_id:
+                self._pending_discovery_video_id = video_id
+            return
+        projects = getattr(self.container, "projects", None)
+        finder = getattr(projects, "find_existing_projects_across", None)
+        if not callable(finder):
+            self._detect_existing_project(video_id)
+            return
+        self._discovery_generation += 1
+        generation = self._discovery_generation
+        roots = self._project_roots()
+        metadata = self.metadata
+        self._discovery_video_id = video_id
+        thread = QThread(self)
+        worker = FunctionWorker(lambda _progress: finder(roots, metadata, refresh_index=True))
+        terminal: dict[str, object] = {}
+        thread.setObjectName(f"project-discovery-{video_id}")
+        worker.setObjectName(f"project-discovery-worker-{video_id}")
+
+        def cleanup() -> None:
+            if thread in self._threads:
+                self._threads.remove(thread)
+            if self._discovery_thread is thread:
+                self._discovery_thread = None
+                self._discovery_video_id = ""
+            bridge.deleteLater()
+            pending = self._pending_discovery_video_id
+            self._pending_discovery_video_id = ""
+            if pending and self.metadata and self.metadata.video_id == pending:
+                QTimer.singleShot(0, lambda: self._start_project_discovery(pending))
+            if generation != self._discovery_generation or not self.metadata or self.metadata.video_id != video_id:
+                return
+            if "result" in terminal:
+                self._detect_existing_project(video_id, candidates=terminal["result"])
+            elif "error" in terminal:
+                message, _details = terminal["error"]
+                self.preflight_label.setText(f"Поиск проекта не завершён: {message}")
+
+        bridge = UiWorkerBridge(
+            {
+                "finished": lambda result: terminal.update(result=result),
+                "failed": lambda message, details: terminal.update(error=(message, details)),
+                "thread_finished": cleanup,
+            },
+            predicate=lambda: generation == self._discovery_generation,
+            on_error=self._ui_action_failed,
+            parent=self,
+        )
+        thread.worker = worker
+        thread.bridge = bridge
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(bridge.finished)
+        worker.failed.connect(bridge.failed)
+        for signal in (worker.finished, worker.failed):
+            signal.connect(worker.deleteLater)
+            signal.connect(thread.quit)
+        thread.finished.connect(bridge.thread_finished)
+        thread.finished.connect(thread.deleteLater)
+        self._threads.append(thread)
+        self._discovery_thread = thread
+        thread.start()
+
+    def _detect_existing_project(self, video_id: str, candidates=None) -> None:
         if not self.metadata or self.metadata.video_id != video_id:
             return
         destination = self.current_destination()
         projects = getattr(self.container, "projects", None)
-        finder = getattr(projects, "find_existing_projects", None)
-        if not destination or not callable(finder):
+        finder = getattr(projects, "find_existing_projects_across", None)
+        fallback_finder = getattr(projects, "find_existing_projects", None)
+        if not destination:
             return
-        candidates = finder(destination, self.metadata)
+        if candidates is None:
+            if callable(finder):
+                candidates = finder(self._project_roots(), self.metadata, refresh_index=False)
+            elif callable(fallback_finder):
+                candidates = fallback_finder(destination, self.metadata)
+            else:
+                return
         if not candidates:
             self.selected_project_path = self.container.projects.planned_path(destination, self.metadata)
             self.project_selection = "new"
+            self.preflight_label.setText(
+                f"Автор: {self._current_preset_name()}\nСуществующий проект: нет\nБудет создано: {self.path_edit.text()}"
+            )
             self.update_project_path()
             return
         candidate = candidates[0]
@@ -808,7 +1060,15 @@ class ProjectPrepTab(QWidget):
         box = QMessageBox(self)
         box.setWindowTitle(title)
         box.setIcon(QMessageBox.Information)
-        box.setText(f"{title}.\n\nПуть:\n{path}\n\nФайлы не будут переименованы или удалены.")
+        found_preset = str(candidate.get("preset_name") or path.parent.parent.name)
+        selected_preset = self._current_preset_name()
+        different = found_preset.casefold() != selected_preset.casefold()
+        warning = (
+            f"\n\nПроект найден в другом пресете: {found_preset}.\n"
+            f"Сейчас выбрано назначение: {selected_preset}."
+            if different else ""
+        )
+        box.setText(f"{title}.\n\nПуть:\n{path}{warning}\n\nДо вашего выбора папки и загрузки не создаются. Файлы не будут переименованы или удалены.")
         attach_button = box.addButton(attach_text, QMessageBox.AcceptRole)
         copy_button = box.addButton("Создать новую копию", QMessageBox.ActionRole)
         open_button = box.addButton("Открыть папку", QMessageBox.ActionRole)
@@ -816,11 +1076,17 @@ class ProjectPrepTab(QWidget):
         box.setDefaultButton(attach_button)
         box.exec()
         if box.clickedButton() == attach_button:
+            self.preflight_label.setText(
+                f"Автор проекта: {found_preset}\nСуществующий проект: да\nПродолжение: будут выполнены только отсутствующие этапы"
+            )
             self._start_project_migration(path)
             return
         if box.clickedButton() == copy_button:
             self.selected_project_path = self.container.projects.copy_path(destination, self.metadata)
             self.project_selection = "copy"
+            self.preflight_label.setText(
+                f"Автор: {selected_preset}\nСуществующий проект: найден, выбрана новая копия\nБудет создано: {self.selected_project_path}"
+            )
             self.create_button.setText("Создать новую копию")
             self.create_button.setEnabled(True)
         elif box.clickedButton() == open_button:
@@ -861,10 +1127,16 @@ class ProjectPrepTab(QWidget):
         metadata = self.metadata
         token = self.token
         author_preset = path.parent.parent.name
+        matching_preset = next((item for item in self.author_presets if Path(item.root_path) == path.parent), None)
+        preset_id = matching_preset.preset_id if matching_preset else ""
+        if matching_preset:
+            author_preset = matching_preset.display_name
         migration_job_id = self.active_job_id or ""
+        migration_options = self.options()
+        migration_options.reaper_proxy_height = migration_proxy_height
 
         def work(progress):
-            return self.container.projects.migrate_existing(
+            result = self.container.projects.migrate_existing(
                 metadata,
                 path,
                 job_id=migration_job_id,
@@ -872,7 +1144,18 @@ class ProjectPrepTab(QWidget):
                 cancellation=token,
                 on_progress=progress,
                 reaper_proxy_height=migration_proxy_height,
+                preset_id=preset_id,
             )
+            try:
+                result["states"] = self.container.projects.inspect_existing(
+                    metadata, migration_options, path, token
+                )
+            except JobCancelledError:
+                raise
+            except Exception as exc:
+                result["states"] = {}
+                result["inspect_error"] = str(exc)
+            return result
 
         self._start_worker(work, self._migration_ready, self._migration_failed, self._migration_progress)
 
@@ -893,6 +1176,7 @@ class ProjectPrepTab(QWidget):
         self.current_rpp_path = rpps[0] if len(rpps) == 1 else None
         self._sync_project_actions()
         discovered = result.get("discovered_files", [])
+        self._resume_states = result.get("states", {})
         unknown = [item for item in discovered if item.classification in {"UNKNOWN", "MEDIA_UNKNOWN"}]
         self.progress_label.setText(
             f"Существующий проект подключён. Найдено файлов: {len(discovered)}; неизвестных: {len(unknown)}."
@@ -900,6 +1184,25 @@ class ProjectPrepTab(QWidget):
         self.create_button.setText("Продолжить проект")
         self.create_button.setEnabled(True)
         self.dry_run_button.setEnabled(True)
+        enabled = {
+            "maximum": self.max_check.isChecked(), "proxy": self.proxy_check.isChecked(),
+            "audio": self.audio_check.isChecked(), "instrumental": self.instrumental_check.isChecked(),
+            "reaper": self.reaper_check.isChecked(),
+        }
+        completed = [key for key, details in self._resume_states.items() if details.get("status") == "VALID"]
+        planned = [
+            key for key, active in enabled.items()
+            if active and self._resume_states.get(key, {}).get("status") != "VALID"
+        ]
+        project_preset = next(
+            (item.display_name for item in self.author_presets if Path(item.root_path) == self.selected_project_path.parent),
+            self.selected_project_path.parent.parent.name,
+        )
+        self.preflight_label.setText(
+            f"Автор: {project_preset}\nСуществующий проект: да\n"
+            f"Готово: {', '.join(completed) or 'нет подтверждённых этапов'}\n"
+            f"Запланировано: {', '.join(planned) or 'ничего'}"
+        )
         self.update_project_path()
 
     def _migration_failed(self, message: str, details: str) -> None:
@@ -1040,8 +1343,14 @@ class ProjectPrepTab(QWidget):
         self.current_project_path = None
         self.current_rpp_path = None
         self.project_selection = "new"
+        self._resume_states = {}
         self.progress_tracker = None
         self._active_project_url = ""
+        self._author_manual_override_video_id = ""
+        self._author_resolution_kind = AuthorMatchKind.NO_MATCH
+        self._discovery_generation += 1
+        self._discovery_video_id = ""
+        self._pending_discovery_video_id = ""
         self._reset_after_cancel = False
         self._pending_url_after_cancel = ""
         self.url_edit.blockSignals(True)
@@ -1049,6 +1358,8 @@ class ProjectPrepTab(QWidget):
         self.url_edit.blockSignals(False)
         self.title_edit.clear()
         self.path_edit.clear()
+        self.author_status_label.setText("Автор: не определён")
+        self.preflight_label.setText("Проверка проекта ещё не выполнялась")
         self.thumbnail_label.clear()
         self.thumbnail_label.setText("Превью появится после проверки ссылки")
         for value in self.info_labels.values():
@@ -1126,7 +1437,7 @@ class ProjectPrepTab(QWidget):
             return
         resume = self.selected_project_path if self.project_selection == "resume" else None
         new_project_path = self.selected_project_path if self.project_selection == "copy" else None
-        resume_states = {}
+        resume_states = dict(self._resume_states) if resume else {}
         if resume:
             loaded_manifest = self.container.projects.manifest_loader.load(
                 resume / self.container.projects.MANIFEST_NAME
@@ -1542,7 +1853,7 @@ class ProjectPrepTab(QWidget):
         )
 
     def _ready_to_start(self) -> bool:
-        if self.active_thread or self.metadata_thread:
+        if self.active_thread or self.metadata_thread or (self._discovery_thread and self._discovery_thread.isRunning()):
             self.progress_label.setText("Предыдущая операция ещё завершается. Дождитесь её окончания.")
             return False
         if not self.metadata:

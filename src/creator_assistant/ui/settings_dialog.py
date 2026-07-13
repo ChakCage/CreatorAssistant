@@ -31,6 +31,9 @@ from PySide6.QtWidgets import (
 from creator_assistant.ui.workers import FunctionWorker, UiWorkerBridge
 from creator_assistant.domain.youtube_auth import BROWSERS
 from creator_assistant.services.storage_service import default_temp_root
+from creator_assistant.domain.author_presets import merge_presets
+from creator_assistant.infrastructure.project_index import ProjectRoot
+from creator_assistant.infrastructure.windows_paths import discover_author_folders
 
 
 class SettingsDialog(QDialog):
@@ -84,6 +87,21 @@ class SettingsDialog(QDialog):
         self.auto_find_button.clicked.connect(lambda: self._start_auto_search(True))
         paths_form.addRow("", self.auto_find_button)
         content_layout.addWidget(paths_group)
+
+        authors_group = QGroupBox("Авторы и проекты")
+        authors_form = QFormLayout(authors_group)
+        self.suggest_remember_author = QCheckBox("Предлагать запомнить выбор автора")
+        self.suggest_remember_author.setChecked(bool(settings.get("suggest_remember_author", True)))
+        self.project_rescan_button = QPushButton("Пересканировать проекты")
+        self.project_rescan_status = QLabel("Индекс используется только как ускоряющий кэш")
+        self.project_rescan_status.setProperty("class", "muted")
+        self.project_rescan_status.setWordWrap(True)
+        self.project_rescan_button.setEnabled(self.container is not None)
+        self.project_rescan_button.clicked.connect(self._start_project_rescan)
+        authors_form.addRow(self.suggest_remember_author)
+        authors_form.addRow(self.project_rescan_button)
+        authors_form.addRow(self.project_rescan_status)
+        content_layout.addWidget(authors_group)
 
         access_group = QGroupBox("Доступ к YouTube")
         access_form = QFormLayout(access_group)
@@ -525,6 +543,61 @@ class SettingsDialog(QDialog):
         self._threads.append(thread)
         thread.start()
 
+    def _start_project_rescan(self) -> None:
+        if not self.container or self._threads:
+            return
+        index = getattr(getattr(self.container, "projects", None), "project_index", None)
+        if index is None:
+            self.project_rescan_status.setText("Индекс проектов недоступен")
+            return
+        folders = discover_author_folders(
+            Path(self.result_settings.get("youtube_root", r"E:\YouTube")),
+            self.result_settings.get("author_paths", []),
+        )
+        presets = merge_presets(self.result_settings.get("author_presets", []), folders)
+        roots = [ProjectRoot(Path(item.root_path), item.preset_id, item.display_name) for item in presets]
+        self.project_rescan_button.setEnabled(False)
+        self.project_rescan_status.setText("Сканирование настроенных папок в фоне…")
+        thread = QThread(self)
+        worker = FunctionWorker(lambda _progress: index.rescan(roots))
+        terminal = {}
+
+        def cleanup():
+            if thread in self._threads:
+                self._threads.remove(thread)
+            bridge.deleteLater()
+            self.project_rescan_button.setEnabled(True)
+            if "result" in terminal:
+                result = terminal["result"]
+                active = sum(1 for item in result.get("projects", []) if not item.get("stale"))
+                warnings = result.get("warnings", [])
+                suffix = ("\n" + "\n".join(warnings)) if warnings else ""
+                self.project_rescan_status.setText(f"Найдено проектов: {active}{suffix}")
+            elif "error" in terminal:
+                self.project_rescan_status.setText("Ошибка пересканирования: " + str(terminal["error"][0]))
+
+        bridge = UiWorkerBridge(
+            {
+                "finished": lambda result: terminal.update(result=result),
+                "failed": lambda message, details: terminal.update(error=(message, details)),
+                "thread_finished": cleanup,
+            },
+            parent=self,
+        )
+        thread.worker = worker
+        thread.bridge = bridge
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(bridge.finished)
+        worker.failed.connect(bridge.failed)
+        for signal in (worker.finished, worker.failed):
+            signal.connect(worker.deleteLater)
+            signal.connect(thread.quit)
+        thread.finished.connect(bridge.thread_finished)
+        thread.finished.connect(thread.deleteLater)
+        self._threads.append(thread)
+        thread.start()
+
     def done(self, result: int) -> None:
         if self._threads:
             try:
@@ -579,6 +652,7 @@ class SettingsDialog(QDialog):
         self.result_settings["reaper_proxy_height"] = proxy_height
         self.result_settings["prefer_nvenc"] = self.nvenc.isChecked()
         self.result_settings["open_folder_after_completion"] = self.open_folder.isChecked()
+        self.result_settings["suggest_remember_author"] = self.suggest_remember_author.isChecked()
         self.result_settings["reaper_initial_audio"] = self.initial_audio.currentData()
         self.result_settings["whisper_backend"] = self.whisper_backend.currentData()
         self.result_settings["whisper_model"] = self.whisper_model.currentData()

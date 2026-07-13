@@ -39,6 +39,10 @@ class ProjectManifest:
     project_path: str = ""
     materials_path: str = ""
     author_preset: str = ""
+    preset_id: str = ""
+    channel_id: str = ""
+    uploader_id: str = ""
+    channel_name: str = ""
     job_id: str = ""
     state: str = "DISCOVERED"
     stages: Dict[str, Any] = field(default_factory=dict)
@@ -81,6 +85,10 @@ class ManifestValidator:
             project_path=str(data.get("project_path") or ""),
             materials_path=str(data.get("materials_path") or ""),
             author_preset=str(data.get("author_preset") or ""),
+            preset_id=str(data.get("preset_id") or ""),
+            channel_id=str(data.get("channel_id") or ""),
+            uploader_id=str(data.get("uploader_id") or ""),
+            channel_name=str(data.get("channel_name") or data.get("channel") or data.get("uploader") or ""),
             job_id=str(data.get("job_id") or ""),
             state=str(data.get("state") or data.get("status") or "DISCOVERED"),
             stages=data.get("stages") if isinstance(data.get("stages"), dict) else {},
@@ -216,6 +224,10 @@ class ManifestMigrator:
         job_id: str,
         discovered_files: List[DiscoveredFile],
         reaper_proxy_height: int = 720,
+        preset_id: str = "",
+        channel_id: str = "",
+        uploader_id: str = "",
+        channel_name: str = "",
     ) -> ProjectManifest:
         raw = existing.raw if isinstance(existing.raw, dict) else {}
         now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
@@ -237,6 +249,10 @@ class ManifestMigrator:
             project_path=str(project_path),
             materials_path=str(project_path / "Материалы"),
             author_preset=author_preset,
+            preset_id=preset_id or str(raw.get("preset_id") or ""),
+            channel_id=channel_id or str(raw.get("channel_id") or ""),
+            uploader_id=uploader_id or str(raw.get("uploader_id") or ""),
+            channel_name=channel_name or str(raw.get("channel_name") or raw.get("channel") or raw.get("uploader") or ""),
             job_id=job_id or str(raw.get("job_id") or ""),
             state="DISCOVERED",
             stages=raw.get("stages") if isinstance(raw.get("stages"), dict) else {},

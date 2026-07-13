@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from creator_assistant.domain.errors import AudioSeparatorRuntimeMissingError, DependencyMissingError, DiskSpaceError, JobCancelledError, ManualActionRequiredError, ValidationError, YouTubeMediaForbiddenError
 from creator_assistant.domain.job import CancellationToken, JobState
+from creator_assistant.domain.author_presets import AuthorPreset
 from creator_assistant.domain.models import (
     FormatPlan,
     ProgressInfo,
@@ -19,6 +20,7 @@ from creator_assistant.domain.models import (
 )
 from creator_assistant.domain.stages import JobStage
 from creator_assistant.infrastructure.job_store import JobStore
+from creator_assistant.infrastructure.project_index import ProjectIndex, ProjectRoot
 from creator_assistant.infrastructure.manifest_store import (
     MANIFEST_NAME,
     LegacyProjectScanner,
@@ -60,6 +62,8 @@ class ProjectService:
         naming: NamingTemplates,
         initial_audio: str = "original",
         storage: Optional[StorageService] = None,
+        project_index: Optional[ProjectIndex] = None,
+        project_roots: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         self.yt_dlp = yt_dlp
         self.ffmpeg = ffmpeg
@@ -72,6 +76,8 @@ class ProjectService:
         self.naming = naming
         self.initial_audio = initial_audio
         self.storage = storage or StorageService()
+        self.project_index = project_index
+        self.project_roots = project_roots or []
         self.manifest_loader = ManifestLoader()
         self.manifest_writer = ManifestWriter(self.manifest_loader)
         self.manifest_migrator = ManifestMigrator()
@@ -143,6 +149,59 @@ class ProjectService:
             add(exact, "title", False)
         return found
 
+    def find_existing_projects_across(
+        self,
+        destinations: List[ProjectRoot],
+        metadata: VideoMetadata,
+        *,
+        refresh_index: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Find a video by identity across configured roots; never scans the disk globally."""
+        found: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def configured_root(path: Path) -> Optional[ProjectRoot]:
+            parent_key = str(path.parent).casefold()
+            return next((item for item in destinations if str(item.path).casefold() == parent_key), None)
+
+        def add(path: Path, source: str, confirmed: bool, extra: Optional[Dict[str, Any]] = None) -> None:
+            key = str(path).casefold()
+            root = configured_root(path)
+            if key in seen or root is None or not path.is_dir():
+                return
+            seen.add(key)
+            found.append({
+                "path": path,
+                "source": source,
+                "confirmed": confirmed,
+                "empty": False,
+                "status": str((extra or {}).get("status", "unknown")),
+                "stage": str((extra or {}).get("stage", "")),
+                "preset_id": str((extra or {}).get("preset_id") or root.preset_id),
+                "preset_name": str((extra or {}).get("display_name") or root.display_name),
+                "root_path": str((extra or {}).get("root_path") or root.path),
+            })
+
+        record = self.job_store.load(metadata.video_id)
+        if isinstance(record, dict) and record.get("created_by") == "CreatorAssistant":
+            for value, source in [(record.get("project_path"), "job_store"), *[(item, "job_store_history") for item in record.get("project_paths", [])]]:
+                if value:
+                    add(Path(str(value)), source, True, record)
+
+        index = getattr(self, "project_index", None)
+        if index:
+            if refresh_index:
+                index.rescan(destinations)
+            for item in index.lookup(metadata.video_id):
+                if not item.get("stale"):
+                    add(Path(str(item.get("project_path") or "")), "project_index", True, item)
+
+        # A direct manifest pass makes the index a cache, never a source of truth.
+        for root in destinations:
+            for candidate in self.find_existing_projects(root.path, metadata):
+                add(Path(candidate["path"]), str(candidate.get("source") or "manifest"), bool(candidate.get("confirmed")), candidate)
+        return found
+
     def bind_existing(self, metadata: VideoMetadata, project_path: Path) -> None:
         """Compatibility wrapper; UI performs this operation in a dedicated worker."""
         self.migrate_existing(
@@ -160,6 +219,7 @@ class ProjectService:
         cancellation: CancellationToken,
         on_progress: ProgressCallback,
         reaper_proxy_height: int = 720,
+        preset_id: str = "",
     ):
         if not project_path.is_dir():
             raise ValidationError("Выбранная папка проекта не существует.")
@@ -190,6 +250,10 @@ class ProjectService:
             job_id=job_id,
             discovered_files=discovered,
             reaper_proxy_height=reaper_proxy_height,
+            preset_id=preset_id,
+            channel_id=metadata.channel_id,
+            uploader_id=metadata.uploader_id,
+            channel_name=metadata.channel or metadata.uploader,
         )
         saved = writer.write(manifest_path, manifest, backup_existing=True)
         record = self.job_store.load(metadata.video_id) or {}
@@ -212,6 +276,7 @@ class ProjectService:
             history.append(str(project_path))
         record["project_paths"] = history
         self.job_store.save(metadata.video_id, record)
+        self._record_in_index(project_path, metadata, preset_id=preset_id, display_name=author_preset)
         on_progress(ProgressInfo("migration", "Готово к продолжению", 100.0))
         return {"manifest": saved, "discovered_files": discovered, "project_path": project_path}
 
@@ -226,14 +291,25 @@ class ProjectService:
             manifest.state = status.upper()
             manifest.updated_at = now
             manifest.reaper_proxy_height = proxy_height if proxy_height in {480, 720, 1080} else 720
+            manifest.channel_id = manifest.channel_id or metadata.channel_id
+            manifest.uploader_id = manifest.uploader_id or metadata.uploader_id
+            manifest.channel_name = manifest.channel_name or metadata.channel or metadata.uploader
+            preset_id, display_name = self._preset_identity(project_path.parent)
+            manifest.preset_id = manifest.preset_id or preset_id
+            manifest.author_preset = manifest.author_preset or display_name
         else:
+            preset_id, display_name = self._preset_identity(project_path.parent)
             manifest = ProjectManifest(
                 video_id=metadata.video_id,
                 source_url=metadata.webpage_url,
                 title=metadata.title,
                 project_path=str(project_path),
                 materials_path=str(project_path / "Материалы"),
-                author_preset=project_path.parent.parent.name,
+                author_preset=display_name,
+                preset_id=preset_id,
+                channel_id=metadata.channel_id,
+                uploader_id=metadata.uploader_id,
+                channel_name=metadata.channel or metadata.uploader,
                 state=status.upper(),
                 created_at=now,
                 updated_at=now,
@@ -242,6 +318,33 @@ class ProjectService:
         # Legacy/existing manifests are backed up by the explicit migration step.
         # Lifecycle checkpoints must not overwrite that original backup.
         self.manifest_writer.write(target, manifest, backup_existing=False)
+        self._record_in_index(project_path, metadata, preset_id=manifest.preset_id, display_name=manifest.author_preset)
+
+    def _preset_identity(self, root_path: Path) -> tuple[str, str]:
+        key = str(root_path).casefold()
+        for raw in getattr(self, "project_roots", []):
+            if isinstance(raw, dict) and str(raw.get("root_path") or "").casefold() == key:
+                preset = AuthorPreset.from_dict(raw)
+                return preset.preset_id, preset.display_name
+        preset = AuthorPreset.from_dict({"root_path": str(root_path)})
+        return preset.preset_id, preset.display_name
+
+    def _record_in_index(self, project_path: Path, metadata: VideoMetadata, *, preset_id: str = "", display_name: str = "") -> None:
+        index = getattr(self, "project_index", None)
+        if not index:
+            return
+        if not preset_id or not display_name:
+            resolved_id, resolved_name = self._preset_identity(project_path.parent)
+            preset_id = preset_id or resolved_id
+            display_name = display_name or resolved_name
+        index.record(
+            video_id=metadata.video_id,
+            title=metadata.title,
+            project_path=project_path,
+            root_path=project_path.parent,
+            preset_id=preset_id,
+            display_name=display_name,
+        )
 
     def clear_job_auth(self, video_id: str) -> None:
         record = self.job_store.load(video_id)

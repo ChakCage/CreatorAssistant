@@ -10,7 +10,9 @@ from typing import Any, Dict, Optional
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "youtube_root": r"E:\YouTube",
     "author_paths": [],
+    "author_presets": [],
     "selected_author_path": "",
+    "suggest_remember_author": True,
     "yt_dlp_path": "",
     "ffmpeg_path": "",
     "ffprobe_path": "",
@@ -87,6 +89,7 @@ class SettingsStore:
             self._merge(settings, raw)
         self._migrate_youtube_access(settings)
         self._migrate_processing(settings)
+        self._migrate_author_presets(settings)
         return settings
 
     def save(self, settings: Dict[str, Any]) -> None:
@@ -136,3 +139,58 @@ class SettingsStore:
         naming = settings.setdefault("naming", {})
         if naming.get("proxy") == "{title} [720p]":
             naming["proxy"] = "{title} [{proxy_height}p]"
+
+    @staticmethod
+    def _migrate_author_presets(settings: Dict[str, Any]) -> None:
+        """Upgrade the legacy path list without losing names or paths."""
+        import hashlib
+
+        raw_presets = settings.get("author_presets")
+        presets = []
+        seen_paths = set()
+        if isinstance(raw_presets, list):
+            for raw in raw_presets:
+                if not isinstance(raw, dict):
+                    continue
+                root_path = str(raw.get("root_path") or "").strip()
+                if not root_path:
+                    continue
+                key = root_path.casefold()
+                if key in seen_paths:
+                    continue
+                seen_paths.add(key)
+                display_name = str(raw.get("display_name") or Path(root_path).parent.name or Path(root_path).name)
+                preset_id = str(raw.get("preset_id") or "preset-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:12])
+                presets.append({
+                    "preset_id": preset_id,
+                    "display_name": display_name,
+                    "root_path": root_path,
+                    "youtube_channel_ids": SettingsStore._string_list(raw.get("youtube_channel_ids")),
+                    "youtube_handles": SettingsStore._string_list(raw.get("youtube_handles")),
+                    "aliases": SettingsStore._string_list(raw.get("aliases")),
+                })
+        paths = settings.get("author_paths")
+        if not isinstance(paths, list):
+            paths = []
+        for raw_path in paths:
+            root_path = str(raw_path or "").strip()
+            key = root_path.casefold()
+            if not root_path or key in seen_paths:
+                continue
+            seen_paths.add(key)
+            presets.append({
+                "preset_id": "preset-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:12],
+                "display_name": Path(root_path).parent.name or Path(root_path).name,
+                "root_path": root_path,
+                "youtube_channel_ids": [],
+                "youtube_handles": [],
+                "aliases": [],
+            })
+        settings["author_presets"] = presets
+        settings["suggest_remember_author"] = bool(settings.get("suggest_remember_author", True))
+
+    @staticmethod
+    def _string_list(value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))

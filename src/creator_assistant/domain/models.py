@@ -52,6 +52,13 @@ class VideoMetadata:
     webpage_url: str
     formats: List[VideoFormat] = field(default_factory=list)
     thumbnails: List[ThumbnailInfo] = field(default_factory=list)
+    channel_id: str = ""
+    channel: str = ""
+    channel_url: str = ""
+    uploader_id: str = ""
+    uploader: str = ""
+    uploader_url: str = ""
+    channel_handle: str = ""
 
     @property
     def best_thumbnail(self) -> Optional[ThumbnailInfo]:

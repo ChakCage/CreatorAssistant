@@ -114,4 +114,11 @@ class MetadataService:
             webpage_url=str(data.get("webpage_url") or valid_url),
             formats=formats,
             thumbnails=thumbnails,
+            channel_id=str(data.get("channel_id") or "").strip(),
+            channel=str(data.get("channel") or "").strip(),
+            channel_url=str(data.get("channel_url") or "").strip(),
+            uploader_id=str(data.get("uploader_id") or "").strip(),
+            uploader=str(data.get("uploader") or "").strip(),
+            uploader_url=str(data.get("uploader_url") or "").strip(),
+            channel_handle=str(data.get("channel_handle") or data.get("uploader_id") or "").strip(),
         )

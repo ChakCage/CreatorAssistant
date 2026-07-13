@@ -14,6 +14,7 @@ from creator_assistant.infrastructure.job_store import JobStore
 from creator_assistant.infrastructure.audio_separator_runtime import AudioSeparatorRuntimeManager
 from creator_assistant.infrastructure.logging_setup import configure_logging
 from creator_assistant.infrastructure.process_runner import ProcessRunner
+from creator_assistant.infrastructure.project_index import ProjectIndex
 from creator_assistant.infrastructure.settings_store import SettingsStore
 from creator_assistant.infrastructure.updater import YtDlpUpdater
 from creator_assistant.infrastructure.windows_paths import NamingTemplates
@@ -121,6 +122,8 @@ class ServiceContainer:
                 reserve_bytes=int(float(self.settings.get("disk_reserve_gb", 5)) * 1024**3),
                 separator_safety_factor=float(self.settings.get("separator_temp_safety_factor", 4.0)),
             )),
+            project_index=ProjectIndex(),
+            project_roots=self.settings.get("author_presets", []),
         )
         self.whisper_runtime = WhisperRuntimeManager(self.runner)
         backend_choice = str(self.settings.get("whisper_backend", "auto"))
