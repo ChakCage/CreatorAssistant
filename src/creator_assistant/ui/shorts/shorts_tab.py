@@ -33,6 +33,7 @@ from creator_assistant.ui.shorts.analysis_settings_panel import AnalysisSettings
 from creator_assistant.ui.shorts.candidate_editor import CandidateEditor
 from creator_assistant.ui.shorts.candidate_list import CandidateList
 from creator_assistant.ui.shorts.source_panel import SourcePanel
+from creator_assistant.ui.shorts.subtitle_editor import SubtitleEditor
 from creator_assistant.ui.widgets.error_dialog import ErrorDialog
 
 
@@ -161,6 +162,7 @@ class ShortsTab(QWidget):
         self.paths: Optional[ShortsProjectPaths] = None
         self.candidates = []
         self.review_service: Optional[CandidateReviewService] = None
+        self.transcript = None
         self._pending_root: Optional[Path] = None
         self._thread: Optional[QThread] = None
         self._token: Optional[CancellationToken] = None
@@ -192,9 +194,10 @@ class ShortsTab(QWidget):
         self.workspace = QTabWidget()
         self.candidate_list = CandidateList()
         self.candidate_editor = CandidateEditor()
+        self.subtitle_editor = SubtitleEditor()
         self.workspace.addTab(self.candidate_list, "Кандидаты")
         self.workspace.addTab(self.candidate_editor, "Редактор")
-        self.workspace.addTab(self._placeholder("Субтитры создаются отдельно для каждого Short."), "Субтитры")
+        self.workspace.addTab(self.subtitle_editor, "Субтитры и кадр")
         self.workspace.addTab(self._placeholder("Одобренные фрагменты попадут в последовательную очередь."), "Рендер")
         splitter.addWidget(left)
         splitter.addWidget(self.workspace)
@@ -209,6 +212,7 @@ class ShortsTab(QWidget):
         self.candidate_list.status_changed.connect(self._set_candidate_status)
         self.candidate_editor.status_changed.connect(self._set_candidate_status)
         self.candidate_editor.boundaries_saved.connect(self._save_boundaries)
+        self.subtitle_editor.saved.connect(self._subtitle_saved)
 
     @staticmethod
     def _placeholder(text: str) -> QWidget:
@@ -306,6 +310,7 @@ class ShortsTab(QWidget):
     @Slot(object)
     def _analysis_finished(self, payload) -> None:
         candidates = payload["candidates"]
+        self.transcript = payload["transcript"]
         self.candidates = candidates
         self.candidate_list.set_candidates(candidates)
         self.progress_panel.update_state("Анализ готов", f"Найдено {len(candidates)} кандидатов. Эвристическая оценка требует проверки человеком.", 90)
@@ -315,6 +320,8 @@ class ShortsTab(QWidget):
         if not self.paths:
             return
         self.candidate_editor.set_candidate(candidate, self.paths.cache / "analysis_proxy.mp4")
+        if self.transcript:
+            self.subtitle_editor.set_context(candidate, self.transcript, self.paths)
         self.workspace.setCurrentWidget(self.candidate_editor)
 
     @Slot(object, str)
@@ -327,6 +334,16 @@ class ShortsTab(QWidget):
             self.candidate_list.refresh()
             label = "одобрен" if status == "approved" else "отклонён"
             self.progress_panel.update_state("Проверка кандидатов", f"{candidate.id}: {label}. Решение сохранено.", 92)
+        except Exception as exc:
+            ErrorDialog(str(exc), repr(exc), self).exec()
+
+    @Slot(object)
+    def _subtitle_saved(self, candidate) -> None:
+        if not self.review_service:
+            return
+        try:
+            self.review_service.save(self.candidates)
+            self.progress_panel.update_state("Субтитры сохранены", f"Созданы UTF-8 SRT/ASS и настройки вертикального кадра для {candidate.id}.", 94)
         except Exception as exc:
             ErrorDialog(str(exc), repr(exc), self).exec()
 
@@ -367,6 +384,12 @@ class ShortsTab(QWidget):
         self.source_panel.show_source(source, self.paths.root)
         self.progress_panel.update_state("Источник готов", "Manifest и структура проекта сохранены атомарно.", 8)
         self.start_button.setEnabled(True)
+        transcript_path = self.paths.analysis / "transcript.json"
+        if transcript_path.is_file():
+            try:
+                self.transcript = self.container.shorts_transcription.load(transcript_path)
+            except (OSError, ValueError, TypeError):
+                self.transcript = None
         candidates_path = self.paths.analysis / "candidates.json"
         if candidates_path.is_file():
             from creator_assistant.domain.shorts.models import Candidate

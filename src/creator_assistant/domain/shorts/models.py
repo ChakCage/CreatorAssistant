@@ -84,6 +84,8 @@ class Candidate:
     alternatives: List[List[float]] = field(default_factory=list)
     thumbnail: str = ""
     title: str = ""
+    layout_settings: Dict[str, Any] = field(default_factory=dict)
+    subtitle_settings: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def duration(self) -> float:
