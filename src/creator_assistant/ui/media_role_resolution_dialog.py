@@ -9,6 +9,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -25,6 +26,11 @@ from creator_assistant.domain.progress import format_bytes, format_duration
 class MediaRoleResolutionDialog(QDialog):
     """Normal preflight choice for ambiguous legacy audio; never mutates media files."""
 
+    USE_EXISTING_FILE = "USE_EXISTING_FILE"
+    DOWNLOAD_NEW = "DOWNLOAD_NEW"
+    SKIP = "SKIP"
+    CANCEL = "CANCEL"
+
     def __init__(
         self,
         *,
@@ -37,21 +43,32 @@ class MediaRoleResolutionDialog(QDialog):
         super().__init__(parent)
         self.candidates = list(candidates)
         self.project_path = project_path
-        self.resolution_action = "cancel"
+        self.resolution_action = self.CANCEL
         self.selected_path: Optional[Path] = None
         self.setWindowTitle("Выберите оригинальную аудиодорожку")
         self.resize(1080, 560)
 
         layout = QVBoxLayout(self)
-        intro = QLabel(
+        if len(self.candidates) == 1:
+            choice_text = (
+                "Найден один возможный файл оригинальной аудиодорожки. "
+                "Подтвердите его или выберите другое действие."
+            )
+        elif len(self.candidates) > 1:
+            choice_text = (
+                "Найдено несколько возможных файлов оригинальной аудиодорожки. "
+                "Выберите нужный."
+            )
+        else:
+            choice_text = "Оригинальная аудиодорожка не найдена. Выберите файл вручную или другое действие."
+        self.intro_label = QLabel(
             f"Исходное видео: {title}\n"
             f"Длительность YouTube: {format_duration(duration or 0)}\n"
             f"Найдено кандидатов: {len(self.candidates)}\n\n"
-            "Найдено несколько файлов, которые могут быть оригинальной аудиодорожкой. "
-            "Выберите нужный файл перед продолжением."
+            + choice_text
         )
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
+        self.intro_label.setWordWrap(True)
+        layout.addWidget(self.intro_label)
 
         self.table = QTableWidget(len(self.candidates), 8)
         self.table.setHorizontalHeaderLabels(
@@ -105,17 +122,21 @@ class MediaRoleResolutionDialog(QDialog):
         layout.addLayout(preview)
 
         actions = QHBoxLayout()
-        use = QPushButton("Использовать выбранный файл")
+        self.use_button = QPushButton("Использовать выбранный файл")
+        choose = QPushButton("Выбрать другой файл")
         skip = QPushButton("Оригинальное аудио мне не нужно")
         download = QPushButton("Скачать новое оригинальное аудио")
         open_project = QPushButton("Открыть папку проекта")
         cancel = QPushButton("Отмена")
-        use.clicked.connect(self._use_selected)
-        skip.clicked.connect(lambda: self._finish("skip"))
-        download.clicked.connect(lambda: self._finish("download"))
+        self.use_button.clicked.connect(self._use_selected)
+        choose.clicked.connect(self._choose_file)
+        skip.clicked.connect(lambda: self._finish(self.SKIP))
+        download.clicked.connect(lambda: self._finish(self.DOWNLOAD_NEW))
         open_project.clicked.connect(lambda: os.startfile(str(self.project_path)))
         cancel.clicked.connect(self.reject)
-        for button in (use, skip, download, open_project, cancel):
+        self.table.itemSelectionChanged.connect(self._sync_use_button)
+        self._sync_use_button()
+        for button in (self.use_button, choose, skip, download, open_project, cancel):
             actions.addWidget(button)
         layout.addLayout(actions)
 
@@ -146,7 +167,26 @@ class MediaRoleResolutionDialog(QDialog):
             QMessageBox.warning(self, "Выбор аудио", "Выберите существующий файл.")
             return
         self.selected_path = path
-        self._finish("select")
+        self._finish(self.USE_EXISTING_FILE)
+
+    def _choose_file(self) -> None:
+        selected, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Выберите оригинальную аудиодорожку",
+            str(self.project_path / "Материалы"),
+            "Аудиофайлы (*.mp3 *.m4a *.flac *.wav *.ogg *.opus *.webm);;Все файлы (*)",
+        )
+        if not selected:
+            return
+        path = Path(selected)
+        if not path.is_file():
+            QMessageBox.warning(self, "Выбор аудио", "Выбранный файл не существует.")
+            return
+        self.selected_path = path
+        self._finish(self.USE_EXISTING_FILE)
+
+    def _sync_use_button(self) -> None:
+        self.use_button.setEnabled(self._current_path() is not None)
 
     def _finish(self, action: str) -> None:
         self.resolution_action = action
@@ -154,7 +194,7 @@ class MediaRoleResolutionDialog(QDialog):
 
     def reject(self) -> None:
         self.player.stop()
-        self.resolution_action = "cancel"
+        self.resolution_action = self.CANCEL
         super().reject()
 
     def closeEvent(self, event) -> None:

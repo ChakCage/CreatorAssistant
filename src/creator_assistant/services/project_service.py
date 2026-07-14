@@ -416,6 +416,7 @@ class ProjectService:
             if isinstance(details, dict):
                 for field in (
                     "size", "confidence", "source", "validated_at", "probe",
+                    "confirmed_by_user", "duration", "codec",
                     "video_path", "instrumental_path", "created_by_creator_assistant",
                     "created_at", "vegas_version", "video_only_from_max",
                     "video_track_count", "audio_track_count", "video_events", "audio_events",
@@ -473,7 +474,7 @@ class ProjectService:
         return self.job_store.resumable_path(metadata.video_id)
 
     @staticmethod
-    def required_roles(options: ProjectOptions) -> set[str]:
+    def selected_output_roles(options: ProjectOptions) -> set[str]:
         roles: set[str] = set()
         if options.download_maximum:
             roles.add("maximum")
@@ -482,12 +483,37 @@ class ProjectService:
         if options.download_audio:
             roles.add("audio")
         if options.create_instrumental:
-            roles.update(("audio", "instrumental"))
+            roles.add("instrumental")
         if options.create_reaper_project:
-            roles.update(("proxy", "instrumental", "reaper"))
+            roles.add("reaper")
         if options.create_vegas_project:
-            roles.update(("maximum", "instrumental", "vegas"))
+            roles.add("vegas")
         return roles
+
+    @classmethod
+    def required_roles(
+        cls,
+        options: ProjectOptions,
+        states: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> set[str]:
+        """Resolve inputs without changing the user's selected output checkboxes."""
+        roles = cls.selected_output_roles(options)
+        if options.create_reaper_project:
+            roles.update(("proxy", "instrumental"))
+        if options.create_vegas_project:
+            roles.update(("maximum", "instrumental"))
+        if "instrumental" in roles and states is not None:
+            if states.get("instrumental", {}).get("status") != "VALID":
+                roles.add("audio")
+        return roles
+
+    @classmethod
+    def plan_status(cls, options: ProjectOptions, states: Dict[str, Dict[str, Any]]) -> str:
+        selected = cls.selected_output_roles(options)
+        required = cls.required_roles(options, states)
+        if selected and all(states.get(role, {}).get("status") == "VALID" for role in required):
+            return "ALREADY_COMPLETE"
+        return "ACTION_REQUIRED"
 
     def inspect_existing(
         self,
@@ -513,8 +539,17 @@ class ProjectService:
                 if key in states and isinstance(entry, dict) and entry.get("path"):
                     assigned_paths[key] = Path(str(entry["path"]))
 
+        def valid_project_file(path: Optional[Path]) -> Optional[Path]:
+            if not path or not path.is_file() or path.stat().st_size <= 0:
+                return None
+            try:
+                path.resolve().relative_to(paths.root.resolve())
+            except (OSError, ValueError):
+                return None
+            return path
+
         def inspect_media(key: str, template: Path, validator) -> None:
-            candidate = YtDlpService.find_created_file(template)
+            candidate = valid_project_file(assigned_paths.get(key)) or YtDlpService.find_created_file(template)
             partials = self._partial_files(template)
             if not candidate:
                 states[key] = {"status": "PARTIAL" if partials else "MISSING", "partials": [str(path) for path in partials]}
@@ -585,10 +620,31 @@ class ProjectService:
         ).items():
             if states.get(key, {}).get("status") != "VALID":
                 states[key] = details
+        instrumental_status = states.get("instrumental", {}).get("status")
+        if (
+            "instrumental" in required
+            and "audio" not in required
+            and instrumental_status in {"MISSING", "INVALID", "PARTIAL", "NOT_REQUIRED"}
+        ):
+            required.add("audio")
+            inspect_media(
+                "audio",
+                paths.materials / audio_name,
+                lambda path: self.validator.validate_expected_audio(
+                    path, cancellation, duration=metadata.duration
+                ),
+            )
+            for key, details in self._legacy_media_states(
+                metadata, plan, paths.root, options, cancellation, {"audio"}, assigned_paths
+            ).items():
+                if states.get(key, {}).get("status") != "VALID":
+                    states[key] = details
         preview_candidates = [path for path in paths.root.glob(self.naming.preview + ".*") if path.is_file() and path.stat().st_size > 0]
         states["thumbnail"] = ({"status": "VALID", "path": str(preview_candidates[0]), "size": preview_candidates[0].stat().st_size} if preview_candidates else {"status": "MISSING"})
         if "reaper" in required:
-            rpp = paths.root / safe_file_name(paths.base_name, "{title}", "rpp")
+            rpp = valid_project_file(assigned_paths.get("reaper")) or (
+                paths.root / safe_file_name(paths.base_name, "{title}", "rpp")
+            )
             proxy = Path(states["proxy"]["path"]) if states["proxy"].get("status") == "VALID" else None
             instrumental = Path(states["instrumental"]["path"]) if states["instrumental"].get("status") == "VALID" else None
             if rpp.is_file() and proxy and instrumental and self.reaper.validate_project(rpp, proxy, instrumental):
@@ -598,9 +654,24 @@ class ProjectService:
             else:
                 states["reaper"] = {"status": "MISSING"}
         if "vegas" in required:
-            veg = self.vegas.project_path(paths.root, paths.base_name)
+            expected_veg = self.vegas.project_path(paths.root, paths.base_name)
+            root_vegas = [
+                item for item in paths.root.glob("*.veg")
+                if valid_project_file(item) is not None
+            ]
+            veg = (
+                valid_project_file(assigned_paths.get("vegas"))
+                or valid_project_file(expected_veg)
+                or (root_vegas[0] if len(root_vegas) == 1 else expected_veg)
+            )
             if veg.is_file() and veg.stat().st_size > 0:
-                states["vegas"] = {"status": "VALID", "path": str(veg), "size": veg.stat().st_size}
+                states["vegas"] = {
+                    "status": "VALID",
+                    "path": str(veg),
+                    "size": veg.stat().st_size,
+                    "source": "existing_legacy_project",
+                    "confirmed_by_user": True,
+                }
             elif veg.is_file():
                 states["vegas"] = {"status": "INVALID", "path": str(veg), "size": veg.stat().st_size, "reason": "VEGAS project file is empty."}
             else:
@@ -675,7 +746,10 @@ class ProjectService:
                 "updated_at": dt.datetime.now().isoformat(timespec="seconds"),
             }
         )
-        if any(details.get("status") == "AMBIGUOUS" for details in states.values()):
+        if any(
+            details.get("status") in {"AMBIGUOUS", "CONFIRMATION_REQUIRED"}
+            for details in states.values()
+        ):
             record["status"] = "waiting_for_media_selection"
         elif record.get("status") not in {"completed", "cancelled"}:
             record["status"] = "bound"
@@ -705,10 +779,11 @@ class ProjectService:
         record = self.job_store.load(metadata.video_id) or {}
         stages = dict(record.get("stages", {})) if isinstance(record.get("stages"), dict) else {}
         files = dict(record.get("files", {})) if isinstance(record.get("files"), dict) else {}
-        if action == "skip":
+        normalized_action = action.casefold()
+        if normalized_action in {"skip"}:
             state = {"status": "NOT_REQUIRED", "source": "manual_legacy_resolution", "confirmed_by_user": True}
             files.pop(role, None)
-        elif action == "download":
+        elif normalized_action in {"download", "download_new"}:
             state = {"status": "MISSING", "source": "manual_download_requested", "confirmed_by_user": True}
             files.pop(role, None)
         else:
@@ -733,6 +808,16 @@ class ProjectService:
                 "probe": probe,
                 "validated_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
             }
+            streams = probe.get("streams", []) if isinstance(probe, dict) else []
+            audio_stream = next(
+                (item for item in streams if item.get("codec_type") == "audio"), {}
+            )
+            fmt = probe.get("format", {}) if isinstance(probe, dict) else {}
+            try:
+                state["duration"] = float(fmt.get("duration") or audio_stream.get("duration") or 0)
+            except (TypeError, ValueError):
+                state["duration"] = 0.0
+            state["codec"] = str(audio_stream.get("codec_name") or "")
             files[role] = str(selected_path)
         stages[role] = state
         record.update({
@@ -765,8 +850,8 @@ class ProjectService:
         if not isinstance(details, dict):
             return None
         status = str(details.get("status") or "")
-        if status == "AMBIGUOUS":
-            return "Found multiple content-compatible legacy files for " + key + "; choose the correct file manually before continuing."
+        if status in {"AMBIGUOUS", "CONFIRMATION_REQUIRED"}:
+            return "Existing content-compatible file for " + key + " requires confirmation before continuing."
         if status == "INVALID":
             return "Existing file for " + key + " did not pass validation and will not be overwritten: " + str(details.get("reason", "unknown reason"))
         return None
@@ -916,7 +1001,8 @@ class ProjectService:
             record["files"] = {key: str(value) for key, value in files.items()}
             ambiguous = [
                 (key, details) for key, details in inspected.items()
-                if key in self.required_roles(options) and details.get("status") == "AMBIGUOUS"
+                if key in self.required_roles(options, inspected)
+                and details.get("status") in {"AMBIGUOUS", "CONFIRMATION_REQUIRED"}
             ]
             if ambiguous:
                 key, details = ambiguous[0]
@@ -975,7 +1061,7 @@ class ProjectService:
 
         try:
             stage(JobStage.CHECK_DEPENDENCIES, "Проверяю необходимые программы")
-            self._check_dependencies(options)
+            self._check_dependencies(options, files)
             stage(JobStage.CHECK_DISK_SPACE, "Оцениваю свободное место")
             self._check_disk_space(destination, plan, options)
             require_space("Временные файлы задания", job_temp_path, 256 * 1024**2)
@@ -1172,14 +1258,14 @@ class ProjectService:
                     self.validator.validate_audio(files["audio"], cancellation)
                 checkpoint()
             if options.create_instrumental:
-                if "audio" not in files:
-                    raise ValidationError("Для UVR сначала нужна оригинальная аудиодорожка.")
                 stage(JobStage.SEPARATE_STEMS, "Создаю Instrumental FLAC")
                 existing = self._recorded_valid_file(record, "instrumental", "audio", cancellation)
                 if existing:
                     files["instrumental"] = existing
                     on_progress(ProgressInfo(JobStage.SEPARATE_STEMS.value, "Готовый Instrumental FLAC найден — пропущено", 100.0))
                 else:
+                    if "audio" not in files:
+                        raise ValidationError("Для UVR сначала нужна оригинальная аудиодорожка.")
                     blocked = self._blocked_existing_stage(record, "instrumental")
                     if blocked:
                         raise ValidationError(blocked)
@@ -1302,7 +1388,7 @@ class ProjectService:
                     same_path = str(previous.get("path") or "").casefold() == str(details.get("path") or "").casefold()
                     if same_path:
                         final_stages[key] = {**previous, **details}
-            required_stages = {key: True for key in self.required_roles(options)}
+            required_stages = {key: True for key in self.required_roles(options, final_stages)}
             incomplete = [
                 key for key, enabled in required_stages.items()
                 if enabled and final_stages.get(key, {}).get("status") != "VALID"
@@ -1392,18 +1478,31 @@ class ProjectService:
             self._write_manifest(paths.root, metadata, "failed", options.reaper_proxy_height, record.get("files", {}), record.get("stages", {}))
             raise
 
-    def _check_dependencies(self, options: ProjectOptions) -> None:
+    def _check_dependencies(
+        self,
+        options: ProjectOptions,
+        existing_files: Optional[Dict[str, Path]] = None,
+    ) -> None:
+        existing = existing_files or {}
         missing = []
-        if not Path(self.yt_dlp.executable).is_file():
+        needs_youtube_media = any((
+            options.download_maximum and "maximum" not in existing,
+            options.create_proxy and "proxy" not in existing,
+            options.download_audio and "audio" not in existing,
+            options.create_instrumental
+            and "instrumental" not in existing
+            and "audio" not in existing,
+        ))
+        if needs_youtube_media and not Path(self.yt_dlp.executable).is_file():
             missing.append("yt-dlp")
-        if not Path(self.ffmpeg.ffmpeg_path).is_file():
+        if needs_youtube_media and not Path(self.ffmpeg.ffmpeg_path).is_file():
             missing.append("FFmpeg")
         if not Path(self.validator.ffprobe_path).is_file():
             missing.append("FFprobe")
-        if options.create_instrumental and not self.direct_separator.available():
+        if options.create_instrumental and "instrumental" not in existing and not self.direct_separator.available():
             runtime_path = getattr(getattr(self.direct_separator, "runtime", None), "root", "")
             raise AudioSeparatorRuntimeMissingError(runtime_path)
-        if options.create_vegas_project and not self.vegas.available:
+        if options.create_vegas_project and "vegas" not in existing and not self.vegas.available:
             missing.append("VEGAS Pro")
         if missing:
             raise DependencyMissingError("Не найдены зависимости: " + ", ".join(missing))

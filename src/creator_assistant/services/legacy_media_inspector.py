@@ -338,6 +338,22 @@ class LegacyProjectMediaInspector:
                     reason="Previously confirmed manifest path. " + reason,
                     probe=probe.to_dict(), validated_at=validated_at,
                 )
+        if role == "audio":
+            if len(scored) == 1 and scored[0][0] >= 100:
+                _rank, _weight, reason, probe = scored[0]
+                return LegacyRoleMatch(
+                    role, "VALID", str(probe.path), probe.size, "HIGH",
+                    reason=reason, probe=probe.to_dict(), validated_at=validated_at,
+                )
+            if len(scored) > 1:
+                return LegacyRoleMatch(
+                    role,
+                    "AMBIGUOUS",
+                    confidence="AMBIGUOUS",
+                    reason="Several content-compatible files require user selection.",
+                    candidates=[self._candidate_dict(item[3], item[2]) for item in scored[:8]],
+                    validated_at=validated_at,
+                )
         high = [item for item in scored if item[0] >= 100]
         if high and (len(high) == 1 or high[0][0] - high[1][0] >= 8):
             _rank, _weight, reason, probe = high[0]
@@ -361,6 +377,16 @@ class LegacyProjectMediaInspector:
                 validated_at=validated_at,
             )
         best = scored[:8]
+        if len(best) == 1:
+            _rank, _weight, reason, probe = best[0]
+            return LegacyRoleMatch(
+                role,
+                "CONFIRMATION_REQUIRED",
+                confidence="MEDIUM" if _rank >= 80 else "LOW",
+                reason="One content-compatible file needs user confirmation.",
+                candidates=[self._candidate_dict(probe, reason)],
+                validated_at=validated_at,
+            )
         return LegacyRoleMatch(
             role,
             "AMBIGUOUS",

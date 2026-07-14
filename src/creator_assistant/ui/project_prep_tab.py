@@ -5,6 +5,7 @@ import json
 import subprocess
 import re
 import time
+import traceback
 import uuid
 from enum import Enum
 from pathlib import Path
@@ -16,6 +17,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequ
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -70,6 +72,11 @@ class UiJobState(str, Enum):
     WAITING_FOR_MEDIA_SELECTION = "WAITING_FOR_MEDIA_SELECTION"
 
 
+class PlanStatus(str, Enum):
+    ACTION_REQUIRED = "ACTION_REQUIRED"
+    ALREADY_COMPLETE = "ALREADY_COMPLETE"
+
+
 class ProjectPrepTab(QWidget):
     def __init__(self, container: ServiceContainer, parent=None) -> None:
         super().__init__(parent)
@@ -106,6 +113,7 @@ class ProjectPrepTab(QWidget):
         self._auto_opened_vegas_path = ""
         self.project_selection = "new"
         self._resume_states = {}
+        self.plan_status = PlanStatus.ACTION_REQUIRED
         self._active_project_url = ""
         self.author_presets: list[AuthorPreset] = []
         self._author_combo_programmatic = False
@@ -256,6 +264,7 @@ class ProjectPrepTab(QWidget):
         self.instrumental_check.toggled.connect(self._sync_options)
         self.max_check.toggled.connect(self._sync_options)
         self.vegas_check.toggled.connect(self._sync_options)
+        self.reaper_check.toggled.connect(self._sync_options)
         options_layout.addWidget(self.max_check, 0, 0)
         options_layout.addWidget(self.proxy_check, 0, 1)
         options_layout.addWidget(self.audio_check, 1, 0)
@@ -432,18 +441,20 @@ class ProjectPrepTab(QWidget):
         self.fetch_button.setEnabled(valid and not self.metadata_request_in_progress)
 
     def _sync_options(self) -> None:
-        audio_available = self.audio_check.isChecked()
-        self.instrumental_check.setEnabled(audio_available)
-        if not audio_available:
-            self.instrumental_check.setChecked(False)
-        reaper_available = self.proxy_check.isChecked() and self.instrumental_check.isChecked()
-        self.reaper_check.setEnabled(reaper_available)
-        if not reaper_available:
-            self.reaper_check.setChecked(False)
-        vegas_available = self.max_check.isChecked() and self.instrumental_check.isChecked()
-        self.vegas_check.setEnabled(vegas_available)
-        if not vegas_available:
-            self.vegas_check.setChecked(False)
+        busy = self.job_state in {
+            UiJobState.PREPARING, UiJobState.RUNNING, UiJobState.CANCELLING
+        }
+        for checkbox in (
+            self.max_check,
+            self.proxy_check,
+            self.audio_check,
+            self.instrumental_check,
+            self.reaper_check,
+            self.vegas_check,
+        ):
+            checkbox.setEnabled(not busy)
+        if self.project_selection == "resume" and self._resume_states:
+            self._refresh_preflight_plan()
 
     def current_destination(self) -> Optional[Path]:
         raw = self.author_combo.currentData()
@@ -1068,60 +1079,16 @@ class ProjectPrepTab(QWidget):
             return
         candidate = candidates[0]
         path = Path(candidate["path"])
-        source = str(candidate.get("source", ""))
-        if source.endswith("CORRUPTED") or source.endswith("INCOMPLETE") or source.endswith("UNSUPPORTED_VERSION"):
-            title = "Данные Creator Assistant повреждены или устарели"
-            attach_text = "Восстановить по содержимому папки"
-        elif not candidate.get("confirmed"):
-            title = "Найдена существующая папка проекта без данных Creator Assistant"
-            attach_text = "Подключить и продолжить"
-        else:
-            title = "Найден существующий проект"
-            attach_text = "Проверить и продолжить"
-        box = QMessageBox(self)
-        box.setWindowTitle(title)
-        box.setIcon(QMessageBox.Information)
         found_preset = str(candidate.get("preset_name") or path.parent.parent.name)
-        selected_preset = self._current_preset_name()
-        different = found_preset.casefold() != selected_preset.casefold()
-        warning = (
-            f"\n\nПроект найден в другом пресете: {found_preset}.\n"
-            f"Сейчас выбрано назначение: {selected_preset}."
-            if different else ""
+        self.preflight_label.setText(
+            f"Автор проекта: {found_preset}\nСуществующий проект: да\n"
+            "Проверка существующего проекта…"
         )
-        box.setText(f"{title}.\n\nПуть:\n{path}{warning}\n\nДо вашего выбора папки и загрузки не создаются. Файлы не будут переименованы или удалены.")
-        attach_button = box.addButton(attach_text, QMessageBox.AcceptRole)
-        copy_button = box.addButton("Создать новую копию", QMessageBox.ActionRole)
-        open_button = box.addButton("Открыть папку", QMessageBox.ActionRole)
-        box.addButton("Отмена", QMessageBox.RejectRole)
-        box.setDefaultButton(attach_button)
-        box.exec()
-        if box.clickedButton() == attach_button:
-            self.preflight_label.setText(
-                f"Автор проекта: {found_preset}\nСуществующий проект: да\nПродолжение: будут выполнены только отсутствующие этапы"
-            )
-            self._start_project_migration(path)
-            return
-        if box.clickedButton() == copy_button:
-            self.selected_project_path = self.container.projects.copy_path(destination, self.metadata)
-            self.project_selection = "copy"
-            self.preflight_label.setText(
-                f"Автор: {selected_preset}\nСуществующий проект: найден, выбрана новая копия\nБудет создано: {self.selected_project_path}"
-            )
-            self.create_button.setText("Создать новую копию")
-            self.create_button.setEnabled(True)
-        elif box.clickedButton() == open_button:
-            try:
-                os.startfile(str(path))
-            except OSError as exc:
-                QMessageBox.warning(self, "Папка", str(exc))
-            self.project_selection = "cancel"
-            self.create_button.setEnabled(False)
-        else:
-            self.selected_project_path = None
-            self.project_selection = "cancel"
-            self.create_button.setEnabled(False)
-        self.update_project_path()
+        self.log.appendPlainText(
+            f"Найден существующий проект: {path}. Быстрый Preflight запущен автоматически."
+        )
+        self._start_project_migration(path)
+        return
 
     def _start_project_migration(self, path: Path) -> None:
         if not self.metadata or self.active_thread or self.metadata_thread:
@@ -1193,11 +1160,12 @@ class ProjectPrepTab(QWidget):
         self.project_selection = "resume"
         self.selected_project_path = Path(result["project_path"])
         self.current_project_path = self.selected_project_path
-        rpps = list(self.current_project_path.glob("*.rpp"))
-        self.current_rpp_path = rpps[0] if len(rpps) == 1 else None
         discovered = result.get("discovered_files", [])
         scan_stats = result.get("scan_stats", {})
         self._resume_states = result.get("states", {})
+        rpp_state = self._resume_states.get("reaper", {})
+        rpp_value = rpp_state.get("path") if rpp_state.get("status") == "VALID" else None
+        self.current_rpp_path = Path(rpp_value) if rpp_value else None
         vegas_state = self._resume_states.get("vegas", {})
         vegas_value = vegas_state.get("path") if vegas_state.get("status") == "VALID" else None
         self.current_veg_path = Path(vegas_value) if vegas_value else None
@@ -1208,33 +1176,121 @@ class ProjectPrepTab(QWidget):
             f"FFprobe: {scan_stats.get('ffprobe_calls', 0)}; "
             f"sidecar проигнорировано: {scan_stats.get('ignored_sidecar_files', 0)}."
         )
-        self.create_button.setText("Подтвердить план и продолжить")
-        self.create_button.setEnabled(True)
         self.dry_run_button.setEnabled(True)
-        enabled = {
-            "maximum": self.max_check.isChecked(), "proxy": self.proxy_check.isChecked(),
-            "audio": self.audio_check.isChecked(), "instrumental": self.instrumental_check.isChecked(),
-            "reaper": self.reaper_check.isChecked(), "vegas": self.vegas_check.isChecked(),
+        self._refresh_preflight_plan()
+        self.update_project_path()
+
+    def _refresh_preflight_plan(self) -> None:
+        """Recalculate the plan from cached Preflight states; never scans or starts a Job."""
+        if not self.metadata or not self.selected_project_path or not self._resume_states:
+            return
+        options = self.options()
+        projects = self.container.projects
+        selected = projects.selected_output_roles(options)
+        required = projects.required_roles(options, self._resume_states)
+        self.plan_status = PlanStatus(projects.plan_status(options, self._resume_states))
+        labels = {
+            "maximum": "MAX-видео",
+            "proxy": f"Видео {options.reaper_proxy_height}p для REAPER",
+            "audio": "Оригинальное аудио",
+            "instrumental": "Instrumental",
+            "reaper": "Проект REAPER",
+            "vegas": "Проект VEGAS",
         }
-        completed = [key for key, details in self._resume_states.items() if details.get("status") == "VALID"]
-        ambiguous = [key for key, details in self._resume_states.items() if details.get("status") == "AMBIGUOUS"]
-        not_required = [key for key, details in self._resume_states.items() if details.get("status") == "NOT_REQUIRED"]
+        ready = [labels[key] for key in required if self._resume_states.get(key, {}).get("status") == "VALID"]
+        unresolved = [
+            labels[key] for key in required
+            if self._resume_states.get(key, {}).get("status") in {"AMBIGUOUS", "CONFIRMATION_REQUIRED"}
+        ]
+        missing = [
+            labels[key] for key in required
+            if self._resume_states.get(key, {}).get("status") not in {
+                "VALID", "AMBIGUOUS", "CONFIRMATION_REQUIRED"
+            }
+        ]
+        not_required = [labels[key] for key in labels if key not in required]
         planned = [
-            key for key, active in enabled.items()
-            if active and self._resume_states.get(key, {}).get("status") != "VALID"
+            labels[key] for key in selected
+            if self._resume_states.get(key, {}).get("status") != "VALID"
         ]
         project_preset = next(
-            (item.display_name for item in self.author_presets if Path(item.root_path) == self.selected_project_path.parent),
+            (
+                item.display_name for item in self.author_presets
+                if Path(item.root_path) == self.selected_project_path.parent
+            ),
             self.selected_project_path.parent.parent.name,
         )
+        if self.plan_status == PlanStatus.ALREADY_COMPLETE:
+            status_text = "Все выбранные элементы уже готовы."
+            self.create_button.setText("Проект уже готов")
+            self.create_button.setEnabled(False)
+            self.progress_label.setText("Проект готов")
+            self.stage_progress_bar.setRange(0, 100)
+            self.stage_progress_bar.setValue(100)
+            self.stage_progress_caption.setText("Текущий этап: 100%")
+            self.overall_progress_bar.setValue(100)
+            self.overall_progress_caption.setText("Общий прогресс проекта: 100%")
+        elif not selected:
+            status_text = "Выберите хотя бы один результат."
+            self.create_button.setText("Выберите элементы")
+            self.create_button.setEnabled(False)
+            self.progress_label.setText("Ожидание выбора")
+        else:
+            status_text = "Требуется создать отсутствующие элементы."
+            self.create_button.setText("Создать недостающие элементы")
+            self.create_button.setEnabled(True)
+            self.progress_label.setText("План готов к подтверждению")
         self.preflight_label.setText(
             f"Автор: {project_preset}\nСуществующий проект: да\n"
-            f"Готово: {', '.join(completed) or 'нет подтверждённых этапов'}\n"
-            f"Требует выбора: {', '.join(ambiguous) or 'нет'}\n"
+            f"Готово: {', '.join(ready) or 'нет'}\n"
+            f"Требует выбора: {', '.join(unresolved) or 'нет'}\n"
+            f"Отсутствует: {', '.join(missing) or 'нет'}\n"
             f"Не требуется: {', '.join(not_required) or 'нет'}\n"
-            f"Запланировано: {', '.join(planned) or 'ничего'}"
+            f"Запланировано: {', '.join(planned) or 'ничего'}\n"
+            f"Статус: {status_text}"
         )
-        self.update_project_path()
+        self._render_preflight_stages(required)
+        self.new_project_button.setEnabled(True)
+        self._sync_project_actions()
+
+    def _render_preflight_stages(self, required: set[str]) -> None:
+        role_stages = {
+            "maximum": JobStage.DOWNLOAD_MAXIMUM,
+            "proxy": JobStage.CREATE_PROXY,
+            "audio": JobStage.DOWNLOAD_AUDIO,
+            "instrumental": JobStage.SEPARATE_STEMS,
+            "reaper": JobStage.CREATE_REAPER,
+            "vegas": JobStage.CREATE_VEGAS,
+        }
+        stage_roles = {stage: role for role, stage in role_stages.items()}
+        complete = self.plan_status == PlanStatus.ALREADY_COMPLETE
+        common_complete = {
+            JobStage.VALIDATE_URL,
+            JobStage.FETCH_METADATA,
+            JobStage.CHECK_DEPENDENCIES,
+            JobStage.CHECK_DISK_SPACE,
+            JobStage.FINAL_VALIDATION,
+            JobStage.DONE,
+        }
+        for index, stage in enumerate(ORDERED_STAGES):
+            role = stage_roles.get(stage)
+            if role and role in required:
+                status = self._resume_states.get(role, {}).get("status")
+                if status == "VALID":
+                    text = "✓  " + self._stage_name(stage) + " — готово ранее"
+                elif status in {"AMBIGUOUS", "CONFIRMATION_REQUIRED"}:
+                    text = "?  " + self._stage_name(stage) + " — требуется выбор"
+                else:
+                    text = "○  " + self._stage_name(stage) + " — будет создано"
+            elif stage in {JobStage.VALIDATE_URL, JobStage.FETCH_METADATA} or (complete and stage in common_complete):
+                text = "✓  " + self._stage_name(stage)
+            elif role:
+                text = "—  " + self._stage_name(stage) + " — не требуется"
+            elif complete:
+                text = "—  " + self._stage_name(stage) + " — не требуется"
+            else:
+                text = "○  " + self._stage_name(stage)
+            self.stage_list.item(index).setText(text)
 
     def _migration_failed(self, message: str, details: str) -> None:
         self.token = None
@@ -1435,6 +1491,7 @@ class ProjectPrepTab(QWidget):
         self._auto_opened_vegas_path = ""
         self.project_selection = "new"
         self._resume_states = {}
+        self.plan_status = PlanStatus.ACTION_REQUIRED
         self.progress_tracker = None
         self._active_project_url = ""
         self._author_manual_override_video_id = ""
@@ -1520,6 +1577,9 @@ class ProjectPrepTab(QWidget):
     def create_project(self) -> None:
         if not self._ready_to_start():
             return
+        if self.project_selection == "resume" and self.plan_status == PlanStatus.ALREADY_COMPLETE:
+            self.progress_label.setText("Проект готов — повторный workflow не запускался.")
+            return
         assert self.metadata is not None
         destination = self.current_destination()
         assert destination is not None
@@ -1579,12 +1639,13 @@ class ProjectPrepTab(QWidget):
     def _resolve_preflight_ambiguities(self, options: ProjectOptions) -> bool:
         if not self.metadata or not self.selected_project_path:
             return True
-        required = self.container.projects.required_roles(options)
+        required = self.container.projects.required_roles(options, self._resume_states)
         while True:
             ambiguous = next(
                 (
                     (key, details) for key, details in self._resume_states.items()
-                    if key in required and details.get("status") == "AMBIGUOUS"
+                    if key in required
+                    and details.get("status") in {"AMBIGUOUS", "CONFIRMATION_REQUIRED"}
                 ),
                 None,
             )
@@ -1600,14 +1661,26 @@ class ProjectPrepTab(QWidget):
                 )
                 self._set_job_state(UiJobState.WAITING_FOR_MEDIA_SELECTION)
                 return False
-            dialog = MediaRoleResolutionDialog(
-                title=self.metadata.title,
-                duration=self.metadata.duration,
-                candidates=list(details.get("candidates", [])),
-                project_path=self.selected_project_path,
-                parent=self,
-            )
-            if dialog.exec() != dialog.Accepted or dialog.resolution_action == "cancel":
+            try:
+                dialog = MediaRoleResolutionDialog(
+                    title=self.metadata.title,
+                    duration=self.metadata.duration,
+                    candidates=list(details.get("candidates", [])),
+                    project_path=self.selected_project_path,
+                    parent=self,
+                )
+                result = dialog.exec()
+            except Exception as exc:
+                technical = traceback.format_exc()
+                self.log.appendPlainText("Ошибка диалога выбора материала: " + str(exc))
+                self._set_job_state(UiJobState.WAITING_FOR_MEDIA_SELECTION)
+                self.progress_label.setText("Не удалось открыть выбор аудио. Preflight сохранён; workflow не запускался.")
+                ErrorDialog("Не удалось открыть выбор аудио.", technical, self, folder=self.selected_project_path).exec()
+                return False
+            if (
+                result != QDialog.DialogCode.Accepted
+                or dialog.resolution_action == MediaRoleResolutionDialog.CANCEL
+            ):
                 self._set_job_state(UiJobState.WAITING_FOR_MEDIA_SELECTION)
                 self.progress_label.setText("Ожидание выбора оригинальной аудиодорожки. Новые файлы не создавались.")
                 self.create_button.setText("Продолжить")
@@ -1627,16 +1700,16 @@ class ProjectPrepTab(QWidget):
                 self._set_job_state(UiJobState.WAITING_FOR_MEDIA_SELECTION)
                 return False
             self._resume_states[role] = state
-            if dialog.resolution_action == "skip":
+            if dialog.resolution_action == MediaRoleResolutionDialog.SKIP:
                 self.audio_check.setChecked(False)
-                if self._resume_states.get("instrumental", {}).get("status") == "VALID":
-                    self.instrumental_check.setChecked(False)
                 options.download_audio = False
                 options.create_instrumental = self.instrumental_check.isChecked()
-                required = self.container.projects.required_roles(options)
-            elif dialog.resolution_action == "download":
+                required = self.container.projects.required_roles(options, self._resume_states)
+            elif dialog.resolution_action == MediaRoleResolutionDialog.DOWNLOAD_NEW:
                 self.audio_check.setChecked(True)
                 options.download_audio = True
+            required = self.container.projects.required_roles(options, self._resume_states)
+            self._refresh_preflight_plan()
         producers = {
             "maximum": options.download_maximum,
             "proxy": options.create_proxy,
@@ -1675,7 +1748,7 @@ class ProjectPrepTab(QWidget):
             "reaper": "Проект REAPER",
             "vegas": "Проект VEGAS",
         }
-        symbols = {"VALID": "✓", "PARTIAL": "◐", "INVALID": "✕", "DISABLED": "—", "NOT_REQUIRED": "—", "AMBIGUOUS": "?", "MISSING": "○"}
+        symbols = {"VALID": "✓", "PARTIAL": "◐", "INVALID": "✕", "DISABLED": "—", "NOT_REQUIRED": "—", "AMBIGUOUS": "?", "CONFIRMATION_REQUIRED": "?", "MISSING": "○"}
         lines = []
         for key, label in labels.items():
             details = states.get(key, {"status": "MISSING"})
@@ -1692,7 +1765,7 @@ class ProjectPrepTab(QWidget):
                 suffix = " — отключено"
             elif status == "NOT_REQUIRED":
                 suffix = " — не требуется выбранным планом"
-            elif status == "AMBIGUOUS":
+            elif status in {"AMBIGUOUS", "CONFIRMATION_REQUIRED"}:
                 suffix = " — требуется выбор файла"
             else:
                 suffix = " — отсутствует"
@@ -2114,6 +2187,15 @@ class ProjectPrepTab(QWidget):
             valid_url = False
         self.fetch_button.setEnabled(not busy and not self.metadata_request_in_progress and valid_url)
         self.cancel_button.setEnabled(busy)
+        for checkbox in (
+            self.max_check,
+            self.proxy_check,
+            self.audio_check,
+            self.instrumental_check,
+            self.reaper_check,
+            self.vegas_check,
+        ):
+            checkbox.setEnabled(not busy)
 
     def _start_worker(self, function, finished, failed, progress=None) -> None:
         thread = QThread(self)
