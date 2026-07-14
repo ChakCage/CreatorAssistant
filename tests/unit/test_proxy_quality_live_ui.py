@@ -15,9 +15,10 @@ from creator_assistant.domain.stages import JobStage, ORDERED_STAGES
 from creator_assistant.domain.youtube_auth import YtDlpAuthContext
 from creator_assistant.infrastructure.manifest_store import ManifestStatus, ManifestValidator
 from creator_assistant.infrastructure.settings_store import DEFAULT_SETTINGS
-from creator_assistant.ui.project_prep_tab import ProjectPrepTab, UiJobState
+from creator_assistant.ui.project_prep_tab import PlanStatus, ProjectPrepTab, UiJobState
 from creator_assistant.ui.settings_dialog import SettingsDialog
 from creator_assistant.services.settings_service import SettingsService
+from creator_assistant.services.project_service import ProjectService
 
 
 class RuntimeStub:
@@ -214,3 +215,53 @@ def test_schema_v2_manifest_without_proxy_height_defaults_to_720(tmp_path: Path)
     )
     assert result.status == ManifestStatus.VALID
     assert result.manifest.reaper_proxy_height == 720
+
+
+def test_live_quality_change_recalculates_cached_profile_and_clears_complete(tmp_path: Path):
+    application = app()
+    container = ContainerStub(tmp_path)
+    container.projects = ProjectService.__new__(ProjectService)
+    project = tmp_path / "Project"
+    project.mkdir()
+    proxy720 = project / "Project [720p].mp4"
+    proxy720.write_bytes(b"720")
+    tab = ProjectPrepTab(container)
+    tab.metadata = metadata()
+    tab.selected_project_path = project
+    tab.current_project_path = project
+    tab.project_selection = "resume"
+    tab._resume_states = {
+        "maximum": {"status": "VALID", "path": str(project / "max.mp4")},
+        "proxy": {"status": "VALID", "path": str(proxy720), "effective_height": 720},
+        "proxy_variants": {
+            "status": "INFO", "requested_height": 720, "effective_height": 720,
+            "variants": {"720": {"status": "VALID", "path": str(proxy720), "height": 720}},
+        },
+        "audio": {"status": "NOT_REQUIRED"},
+        "instrumental": {"status": "NOT_REQUIRED"},
+        "reaper": {"status": "NOT_REQUIRED"},
+        "vegas": {"status": "NOT_REQUIRED"},
+    }
+    for checkbox in (tab.max_check, tab.audio_check, tab.instrumental_check, tab.reaper_check, tab.vegas_check):
+        checkbox.setChecked(False)
+    tab.proxy_check.setChecked(True)
+    tab._refresh_preflight_plan()
+    assert tab.plan_status == PlanStatus.ALREADY_COMPLETE
+    thread_count = len(tab._threads)
+
+    updated = deepcopy(container.settings)
+    updated["reaper_proxy_height"] = 480
+    container.save_settings(updated, started_at=time.monotonic())
+
+    assert tab.plan_status == PlanStatus.ACTION_REQUIRED
+    assert tab._resume_states["proxy"]["status"] == "MISSING"
+    assert tab._resume_states["proxy"]["effective_height"] == 480
+    assert tab._resume_states["proxy_variants"]["variants"]["720"]["path"] == str(proxy720)
+    assert tab.create_button.isEnabled()
+    assert "Видео 480p" in tab.preflight_label.text()
+    assert "720p" in tab.preflight_label.text()
+    assert tab.overall_progress_bar.value() < 100
+    assert len(tab._threads) == thread_count == 0
+    assert proxy720.read_bytes() == b"720"
+    tab.close()
+    application.processEvents()

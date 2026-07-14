@@ -142,6 +142,7 @@ class LegacyProjectMediaInspector:
             "cache_hits": 0, "ignored_sidecar_files": 0, "excluded_directories": 0,
         }
         self._persistent_cache = self._load_cache()
+        self.proxy_variants: Dict[str, Dict[str, Any]] = {}
 
     def inspect(
         self,
@@ -157,6 +158,8 @@ class LegacyProjectMediaInspector:
         required = set(required_roles or {"maximum", "proxy", "audio", "instrumental"})
         assigned = {key: Path(value) for key, value in (assigned_paths or {}).items() if value}
         probes = [probe for probe in self._scan(project_path, cancellation, required, assigned) if not probe.error]
+        if "proxy" in required:
+            self.proxy_variants = self._collect_proxy_variants(probes, metadata, plan)
         now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
         result: Dict[str, LegacyRoleMatch] = {
             key: LegacyRoleMatch(role, "NOT_REQUIRED", confidence="NOT_REQUIRED", reason="Role is not required by the selected plan.")
@@ -226,7 +229,7 @@ class LegacyProjectMediaInspector:
                 reverse=True,
             )
             positive = [item for item in scored_paths if item[0] > 0]
-            if len(positive) > 1 and positive[0][0] >= 45 and positive[0][0] - positive[1][0] >= 10:
+            if role != "proxy" and len(positive) > 1 and positive[0][0] >= 45 and positive[0][0] - positive[1][0] >= 10:
                 positive = [item for item in positive if item[0] >= positive[0][0] - 4]
             for score, path in positive[: self.ROLE_LIMITS.get(role, 10)]:
                 if score > 0:
@@ -256,6 +259,50 @@ class LegacyProjectMediaInspector:
                 self._persistent_cache[cache_key] = probe.to_dict()
             probes.append(probe)
         return probes
+
+    def _collect_proxy_variants(
+        self,
+        probes: List[LegacyMediaProbe],
+        metadata: VideoMetadata,
+        plan: FormatPlan,
+    ) -> Dict[str, Dict[str, Any]]:
+        variants: Dict[str, Dict[str, Any]] = {}
+        for item in probes:
+            if not item.has_video or not item.has_audio or not item.is_sdr:
+                continue
+            if not item.width or not item.height or item.height > item.width:
+                continue
+            if not self._duration_matches(item.duration, metadata.duration):
+                continue
+            if not self._fps_matches(item.fps, plan.proxy_video.fps or plan.maximum_video.fps):
+                continue
+            if (
+                item.height == plan.maximum_video.height
+                and not self._name_has_markers(item.path, self.WEAK_PROXY_MARKERS)
+            ):
+                continue
+            key = str(item.height)
+            value = {
+                "status": "VALID",
+                "path": str(item.path),
+                "requested_height": item.height,
+                "effective_height": item.height,
+                "width": item.width,
+                "height": item.height,
+                "fps": item.fps,
+                "video_codec": item.video_codec,
+                "audio_codec": item.audio_codec,
+                "container": item.container,
+                "source": "legacy_content_scan",
+                "size": item.size,
+                "validated_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            }
+            previous = variants.get(key)
+            named = self._name_has_markers(item.path, self.WEAK_PROXY_MARKERS)
+            previous_named = bool(previous and self._name_has_markers(Path(str(previous["path"])), self.WEAK_PROXY_MARKERS))
+            if previous is None or (named and not previous_named):
+                variants[key] = value
+        return variants
 
     def _candidate_files(self, project_path: Path) -> List[Path]:
         paths, excluded, sidecars = LegacyProjectScanner._allowed_files(project_path)

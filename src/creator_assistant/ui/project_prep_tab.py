@@ -1095,14 +1095,7 @@ class ProjectPrepTab(QWidget):
             return
         self._job_generation += 1
         self.active_job_id = "migration-" + uuid.uuid4().hex
-        loaded = self.container.projects.manifest_loader.load(
-            path / self.container.projects.MANIFEST_NAME
-        )
-        migration_proxy_height = (
-            loaded.manifest.reaper_proxy_height
-            if loaded.manifest and loaded.status.value == "VALID"
-            else 720
-        )
+        migration_proxy_height = self._proxy_height()
         self.active_job_proxy_height = migration_proxy_height
         self.token = CancellationToken()
         self.selected_project_path = path
@@ -1135,7 +1128,7 @@ class ProjectPrepTab(QWidget):
                 preset_id=preset_id,
             )
             try:
-                result["states"] = self.container.projects.inspect_existing(
+                result["states"] = self.container.projects.reconcile_existing(
                     metadata, migration_options, path, token
                 )
             except JobCancelledError:
@@ -1164,7 +1157,7 @@ class ProjectPrepTab(QWidget):
         scan_stats = result.get("scan_stats", {})
         self._resume_states = result.get("states", {})
         rpp_state = self._resume_states.get("reaper", {})
-        rpp_value = rpp_state.get("path") if rpp_state.get("status") == "VALID" else None
+        rpp_value = rpp_state.get("path") if rpp_state.get("status") in {"VALID", "INVALID"} else None
         self.current_rpp_path = Path(rpp_value) if rpp_value else None
         vegas_state = self._resume_states.get("vegas", {})
         vegas_value = vegas_state.get("path") if vegas_state.get("status") == "VALID" else None
@@ -1213,6 +1206,15 @@ class ProjectPrepTab(QWidget):
             labels[key] for key in selected
             if self._resume_states.get(key, {}).get("status") != "VALID"
         ]
+        proxy_info = self._resume_states.get("proxy_variants", {})
+        variants = proxy_info.get("variants", {}) if isinstance(proxy_info, dict) else {}
+        found_proxy_heights = sorted(int(key) for key in variants if str(key).isdigit())
+        effective_height = int(proxy_info.get("effective_height") or options.reaper_proxy_height) if isinstance(proxy_info, dict) else options.reaper_proxy_height
+        proxy_summary = (
+            f"\nВыбранный proxy: {options.reaper_proxy_height}p"
+            + (f" → {effective_height}p без увеличения" if effective_height != options.reaper_proxy_height else "")
+            + f"\nНайденные варианты proxy: {', '.join(f'{height}p' for height in found_proxy_heights) or 'нет'}"
+        )
         project_preset = next(
             (
                 item.display_name for item in self.author_presets
@@ -1240,6 +1242,11 @@ class ProjectPrepTab(QWidget):
             self.create_button.setText("Создать недостающие элементы")
             self.create_button.setEnabled(True)
             self.progress_label.setText("План готов к подтверждению")
+            self.stage_progress_bar.setRange(0, 100)
+            self.stage_progress_bar.setValue(0)
+            self.stage_progress_caption.setText("Текущий этап: 0%")
+            self.overall_progress_bar.setValue(20)
+            self.overall_progress_caption.setText("Общий прогресс проекта: 20%")
         self.preflight_label.setText(
             f"Автор: {project_preset}\nСуществующий проект: да\n"
             f"Готово: {', '.join(ready) or 'нет'}\n"
@@ -1247,7 +1254,7 @@ class ProjectPrepTab(QWidget):
             f"Отсутствует: {', '.join(missing) or 'нет'}\n"
             f"Не требуется: {', '.join(not_required) or 'нет'}\n"
             f"Запланировано: {', '.join(planned) or 'ничего'}\n"
-            f"Статус: {status_text}"
+            f"Статус: {status_text}{proxy_summary}"
         )
         self._render_preflight_stages(required)
         self.new_project_button.setEnabled(True)
@@ -1343,6 +1350,8 @@ class ProjectPrepTab(QWidget):
             )
         else:
             self.refresh_proxy_quality_ui(height)
+            if self.project_selection == "resume" and self._resume_states:
+                self._apply_cached_proxy_profile(height)
         settings_service = getattr(self.container, "settings_service", None)
         if settings_service is not None:
             settings_service.mark_ui_refreshed()
@@ -1379,6 +1388,53 @@ class ProjectPrepTab(QWidget):
         self.update()
         if hasattr(self, "stage_list"):
             self.stage_list.update()
+
+    def _apply_cached_proxy_profile(self, requested_height: int) -> None:
+        """Switch the selected proxy profile using cached Preflight data only."""
+        if not self.metadata:
+            return
+        plan = build_format_plan(self.metadata.formats, requested_height)
+        source_height = int(plan.maximum_video.height or requested_height)
+        effective_height = min(requested_height, source_height)
+        variants_state = self._resume_states.get("proxy_variants", {})
+        variants = variants_state.get("variants", {}) if isinstance(variants_state, dict) else {}
+        selected = variants.get(str(effective_height), {}) if isinstance(variants, dict) else {}
+        if isinstance(selected, dict) and selected.get("status") == "VALID" and Path(str(selected.get("path"))).is_file():
+            self._resume_states["proxy"] = {
+                **selected,
+                "status": "VALID",
+                "requested_height": requested_height,
+                "effective_height": effective_height,
+            }
+        else:
+            self._resume_states["proxy"] = {
+                "status": "MISSING",
+                "requested_height": requested_height,
+                "effective_height": effective_height,
+                "other_variants": sorted(int(key) for key in variants if str(key).isdigit()),
+            }
+        variants_state.update({
+            "requested_height": requested_height,
+            "effective_height": effective_height,
+        })
+        self._resume_states["proxy_variants"] = variants_state
+        if "reaper" in self.container.projects.required_roles(self.options(), self._resume_states):
+            rpp = self.current_rpp_path
+            proxy_path = self._resume_states["proxy"].get("path")
+            instrumental_path = self._resume_states.get("instrumental", {}).get("path")
+            if rpp and proxy_path and instrumental_path and self.container.projects.reaper.validate_project(
+                rpp, Path(str(proxy_path)), Path(str(instrumental_path))
+            ):
+                self._resume_states["reaper"] = {
+                    "status": "VALID", "path": str(rpp), "size": rpp.stat().st_size,
+                    "proxy_path": str(proxy_path), "proxy_height": effective_height,
+                }
+            elif rpp and rpp.is_file():
+                self._resume_states["reaper"] = {
+                    "status": "INVALID", "path": str(rpp), "size": rpp.stat().st_size,
+                    "reason": f"Проект REAPER существует, но не использует proxy {effective_height}p.",
+                }
+        self._refresh_preflight_plan()
 
     # Compatibility alias for older callers/tests.
     def _refresh_proxy_labels(self) -> None:
@@ -1598,8 +1654,6 @@ class ProjectPrepTab(QWidget):
                 self.progress_label.setText("Manifest требует проверки или восстановления перед продолжением.")
                 self._start_project_migration(resume)
                 return
-            if loaded_manifest.manifest:
-                options.reaper_proxy_height = loaded_manifest.manifest.reaper_proxy_height
             if not self._resolve_preflight_ambiguities(options):
                 return
             resume_states = dict(self._resume_states)

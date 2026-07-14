@@ -99,6 +99,7 @@ class ProjectManifest:
     state: str = "DISCOVERED"
     stages: Dict[str, Any] = field(default_factory=dict)
     files: Dict[str, Any] = field(default_factory=dict)
+    reaper_proxies: Dict[str, Any] = field(default_factory=dict)
     discovered_files: List[Dict[str, Any]] = field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
@@ -145,6 +146,11 @@ class ManifestValidator:
             state=str(data.get("state") or data.get("status") or "DISCOVERED"),
             stages=data.get("stages") if isinstance(data.get("stages"), dict) else {},
             files=data.get("files") if isinstance(data.get("files"), dict) else {},
+            reaper_proxies=(
+                data.get("reaper_proxies")
+                if isinstance(data.get("reaper_proxies"), dict)
+                else {}
+            ),
             discovered_files=data.get("discovered_files") if isinstance(data.get("discovered_files"), list) else [],
             created_at=str(data.get("created_at") or ""),
             updated_at=str(data.get("updated_at") or ""),
@@ -421,6 +427,20 @@ class ManifestMigrator:
         raw = existing.raw if isinstance(existing.raw, dict) else {}
         now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
         files: Dict[str, Any] = raw.get("files") if isinstance(raw.get("files"), dict) else {}
+        reaper_proxies: Dict[str, Any] = (
+            dict(raw.get("reaper_proxies"))
+            if isinstance(raw.get("reaper_proxies"), dict)
+            else {}
+        )
+        legacy_proxy = files.get("proxy") or files.get("reaper_proxy")
+        if not reaper_proxies and isinstance(legacy_proxy, dict) and legacy_proxy.get("path"):
+            actual_height = legacy_proxy.get("effective_height") or legacy_proxy.get("height")
+            profile_key = str(actual_height) if str(actual_height) in {"480", "720", "1080"} else "legacy"
+            reaper_proxies[profile_key] = {
+                **legacy_proxy,
+                "status": "VALID" if profile_key != "legacy" else "NEEDS_VALIDATION",
+                "source": legacy_proxy.get("source") or "legacy_manifest",
+            }
         if not files:
             files = {
                 f"discovered_{index:03d}": {
@@ -446,6 +466,7 @@ class ManifestMigrator:
             state="DISCOVERED",
             stages=raw.get("stages") if isinstance(raw.get("stages"), dict) else {},
             files=files,
+            reaper_proxies=reaper_proxies,
             discovered_files=[asdict(item) for item in discovered_files],
             created_at=str(raw.get("created_at") or now),
             updated_at=now,

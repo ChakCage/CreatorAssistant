@@ -8,7 +8,7 @@ from creator_assistant.domain.errors import JobCancelledError
 from creator_assistant.domain.errors import DiskSpaceError
 from creator_assistant.domain.models import ProjectOptions, VideoFormat, VideoMetadata
 from creator_assistant.infrastructure.job_store import JobStore
-from creator_assistant.infrastructure.windows_paths import NamingTemplates
+from creator_assistant.infrastructure.windows_paths import NamingTemplates, safe_file_name
 from creator_assistant.services.project_service import ProjectService
 from creator_assistant.services.reaper_service import ReaperService
 from creator_assistant.services.storage_service import GIB, StoragePolicy, StorageService
@@ -88,8 +88,43 @@ class LegacyContentValidator(FakeValidator):
         }
 
 
+class ProxyProfileValidator(FakeValidator):
+    def probe(self, path, cancellation=None):
+        name = Path(path).name.casefold()
+        height = 480 if "480p" in name else (720 if "720p" in name else 1080)
+        width = {480: 854, 720: 1280, 1080: 1920}[height]
+        return {
+            "streams": [
+                {"codec_type": "video", "codec_name": "h264", "width": width, "height": height, "avg_frame_rate": "60/1", "color_transfer": "bt709"},
+                {"codec_type": "audio", "codec_name": "aac", "sample_rate": "48000", "channels": 2},
+            ],
+            "format": {"duration": "12", "bit_rate": "2500000"},
+        }
+
+    def validate_video(self, path, cancellation):
+        return self.probe(path, cancellation)
+
+    def validate_expected_video(self, path, cancellation, **kwargs):
+        data = self.probe(path, cancellation)
+        video = next(item for item in data["streams"] if item["codec_type"] == "video")
+        if kwargs.get("height") is not None:
+            assert video["height"] == kwargs["height"]
+        return data
+
+
 class FakeThumbnail:
     pass
+
+
+class RecordingFfmpeg(FakeFfmpeg):
+    def __init__(self, executable: Path):
+        super().__init__(executable)
+        self.calls = []
+
+    def create_proxy(self, source, target, cancellation, transcode_video=True, **kwargs):
+        self.calls.append({"source": Path(source), "target": Path(target), **kwargs})
+        target.write_bytes(b"proxy-480")
+        return target
 
 
 class FakeSeparator:
@@ -536,3 +571,62 @@ def test_legacy_manifest_migrate_and_resume_five_times_without_download_or_data_
     assert yt.download_count == 0
     assert (manifest_path.parent / "backups" / LEGACY_MANIFEST_NAME).read_bytes() == legacy_bytes
     assert not legacy_manifest_path.exists()
+
+
+def test_proxy_profile_change_creates_480_from_existing_max_and_preserves_720(tmp_path: Path):
+    yt = tmp_path / "yt-dlp.exe"
+    ffmpeg_exe = tmp_path / "ffmpeg.exe"
+    ffprobe = tmp_path / "ffprobe.exe"
+    for executable in (yt, ffmpeg_exe, ffprobe):
+        executable.write_bytes(b"exe")
+    downloader = FakeYtDlp(yt)
+    ffmpeg = RecordingFfmpeg(ffmpeg_exe)
+    service = ProjectService(
+        downloader, ffmpeg, ProxyProfileValidator(ffprobe), FakeThumbnail(),
+        ReaperService(), FakeSeparator(), FakeSeparator(), JobStore(tmp_path / "jobs"),
+        NamingTemplates(), vegas=FakeVegas(),
+    )
+    project = tmp_path / "Profile Project"
+    materials = project / "Материалы"
+    materials.mkdir(parents=True)
+    metadata = VideoMetadata(
+        "profile-change", project.name, 12, "https://youtu.be/profile",
+        formats=[
+            VideoFormat("max", "mp4", width=1920, height=1080, fps=60, vcodec="h264", acodec="aac"),
+            VideoFormat("720", "mp4", width=1280, height=720, fps=60, vcodec="h264", acodec="aac"),
+            VideoFormat("480", "mp4", width=854, height=480, fps=60, vcodec="h264", acodec="aac"),
+            VideoFormat("audio", "m4a", acodec="aac"),
+        ],
+    )
+    maximum = materials / safe_file_name(project.name, service.naming.maximum, "mp4", height=1080)
+    proxy720 = materials / safe_file_name(project.name, service.naming.proxy, "mp4", proxy_height=720)
+    maximum.write_bytes(b"maximum-1080")
+    proxy720.write_bytes(b"preserve-720")
+    options = ProjectOptions(
+        download_maximum=False, create_proxy=True, download_audio=False,
+        create_instrumental=False, create_reaper_project=False,
+        create_vegas_project=False, reaper_proxy_height=480, job_id="profile-480",
+    )
+
+    before = service.inspect_existing(metadata, options, project, CancellationToken())
+    assert before["proxy"]["status"] == "MISSING"
+    assert "720" in before["proxy_variants"]["variants"]
+    result = service.execute(
+        project.parent, metadata, options, CancellationToken(), lambda _event: None, project
+    )
+
+    proxy480 = result.files["proxy"]
+    assert "480p" in proxy480.name
+    assert proxy480.read_bytes() == b"proxy-480"
+    assert proxy720.read_bytes() == b"preserve-720"
+    assert downloader.download_count == 0
+    assert len(ffmpeg.calls) == 1
+    assert ffmpeg.calls[0]["source"] == maximum
+    assert ffmpeg.calls[0]["target"] == proxy480
+    assert ffmpeg.calls[0]["maximum_height"] == 480
+    manifest = ManifestLoader().load(project / MANIFEST_NAME).manifest
+    assert set(manifest.reaper_proxies) >= {"480", "720"}
+    assert manifest.reaper_proxies["480"]["path"] == str(proxy480)
+    assert manifest.reaper_proxies["720"]["path"] == str(proxy720)
+    repeated = service.inspect_existing(metadata, options, project, CancellationToken())
+    assert repeated["proxy"]["status"] == "VALID"
