@@ -43,6 +43,7 @@ temp/
 tmp/
 _test_output/
 .test-output/
+.benchmark/
 *.part
 *.ytdl
 *.tmp

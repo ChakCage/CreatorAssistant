@@ -122,3 +122,21 @@ def test_disabled_ai_preserves_heuristic_order(tmp_path):
     assert not result.used_ai
     assert [item.heuristic_score for item in result.candidates] == [90, 80]
 
+
+def test_five_overlapping_windows_cannot_fill_hybrid_top_five(tmp_path):
+    candidates = [
+        Candidate(f"raw_{index}", index, 45 + index, 90 - index, f"один и тот же сюжет вариант {index}")
+        for index in range(5)
+    ]
+    candidates.extend([
+        Candidate("other_1", 80, 125, 70, "внезапно нашли алмазы глубоко под лавой"),
+        Candidate("other_2", 150, 195, 65, "финальная битва с драконом закончилась победой"),
+    ])
+    transcript = Transcript("ru", 200, "", [TranscriptSegment(1, 0, 195, "текст")])
+    backend = FakeBackend()
+    result = HybridCandidateAnalyzer(DuplicateFilter()).analyse(
+        candidates, transcript, [], AudioFeatures(), backend, settings(),
+        SemanticCache(tmp_path / "ai.json"), CancellationToken(), content_type="gaming", requested_count=5,
+    )
+    assert len(result.candidates) == 3
+    assert len(result.candidates[0].alternatives) == 4
