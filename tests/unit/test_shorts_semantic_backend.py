@@ -5,9 +5,11 @@ import pytest
 from creator_assistant.domain.errors import JobCancelledError
 from creator_assistant.domain.job import CancellationToken
 from creator_assistant.services.shorts.semantic_backend import (
+    OllamaModelInfo,
     OllamaSemanticScorer,
     SemanticBackendError,
     SemanticResponseError,
+    choose_installed_model,
 )
 from creator_assistant.services.shorts.semantic_cache import SemanticCache, semantic_cache_payload
 from creator_assistant.services.shorts.semantic_models import SemanticCandidateInput
@@ -56,6 +58,33 @@ def test_lists_local_model_and_rejects_remote_endpoint():
         OllamaSemanticScorer(endpoint="https://example.com", opener=lambda *_a, **_k: None).list_models()
 
 
+def test_installed_model_metadata_and_recommendation():
+    raw = {
+        "name": "qwen3.6:35b-a3b",
+        "size": 24_000_000_000,
+        "digest": "abc123",
+        "modified_at": "2026-07-15T10:00:00Z",
+        "details": {"parameter_size": "35B", "quantization_level": "Q4_K_M"},
+        "capabilities": ["completion", "thinking"],
+    }
+    info = OllamaModelInfo.from_api(raw)
+    assert info.name == "qwen3.6:35b-a3b"
+    assert info.parameter_size == "35B"
+    assert info.quantization == "Q4_K_M"
+    assert info.digest == "abc123"
+    assert info.recommendation == "Глубокий анализ"
+    assert "35B" in info.display
+
+
+def test_choose_installed_model_prefers_saved_then_deep_then_fast():
+    fast = OllamaModelInfo("qwen3:14b")
+    deep = OllamaModelInfo("qwen3.6:35b-a3b")
+    other = OllamaModelInfo("llama3.1:8b")
+    assert choose_installed_model([fast, deep], "qwen3:14b") == fast
+    assert choose_installed_model([fast, deep], "missing") == deep
+    assert choose_installed_model([other], "missing") == other
+
+
 def test_structured_score_uses_schema_and_records_metrics():
     requests = []
 
@@ -69,7 +98,21 @@ def test_structured_score_uses_schema_and_records_metrics():
     assert result[0].semantic_score == 84
     assert requests[0]["format"]["type"] == "object"
     assert requests[0]["options"]["temperature"] == 0
+    assert requests[0]["options"]["num_ctx"] == 16384
     assert backend.last_metrics.eval_count == 12
+
+
+def test_structured_score_honors_context_and_thinking_flag():
+    requests = []
+
+    def opener(request, **_kwargs):
+        requests.append(json.loads(request.data))
+        return Response({"message": {"content": json.dumps({"results": [score()]})}})
+
+    backend = OllamaSemanticScorer(opener=opener, context_length=32768)
+    backend.evaluate([candidate()], CancellationToken(), think=True)
+    assert requests[0]["think"] is True
+    assert requests[0]["options"]["num_ctx"] == 32768
 
 
 def test_invalid_structured_response_retries_once():
@@ -121,3 +164,17 @@ def test_semantic_cache_is_atomic_and_ignores_render_settings(tmp_path):
     assert SemanticCache.key(payload) != SemanticCache.key(same)
     assert SemanticCache.key(payload) != SemanticCache.key(dict(payload, model="other"))
 
+
+def test_semantic_cache_key_includes_model_identity_and_mode():
+    payload = semantic_cache_payload(
+        [candidate()],
+        model="qwen3:14b",
+        digest="digest-a",
+        quantization="Q4_K_M",
+        analysis_mode="balanced",
+        transcript_hash="transcript-a",
+        content_type="gaming",
+    )
+    assert SemanticCache.key(payload) != SemanticCache.key(dict(payload, digest="digest-b"))
+    assert SemanticCache.key(payload) != SemanticCache.key(dict(payload, analysis_mode="deep"))
+    assert SemanticCache.key(payload) != SemanticCache.key(dict(payload, transcript_hash="transcript-b"))

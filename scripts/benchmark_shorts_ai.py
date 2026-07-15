@@ -18,7 +18,7 @@ from creator_assistant.services.shorts.candidate_generator import CandidateGener
 from creator_assistant.services.shorts.candidate_scorer import HeuristicCandidateScorer
 from creator_assistant.services.shorts.duplicate_filter import DuplicateFilter, overlap_ratio
 from creator_assistant.services.shorts.hybrid_analyzer import HybridCandidateAnalyzer
-from creator_assistant.services.shorts.semantic_backend import OllamaSemanticScorer
+from creator_assistant.services.shorts.semantic_backend import MODE_PROFILES, OllamaSemanticScorer
 from creator_assistant.services.shorts.semantic_cache import SemanticCache
 
 
@@ -38,8 +38,9 @@ def load_inputs(folder: Path):
     return transcript, scenes, audio
 
 
-def run(folder: Path, cache_path: Path, endpoint: str, model: str, final_count: int):
+def run(folder: Path, cache_path: Path, endpoint: str, model: str, final_count: int, mode: str):
     transcript, scenes, audio = load_inputs(folder)
+    profile = MODE_PROFILES.get(mode, MODE_PROFILES["balanced"])
     candidate_settings = CandidateSettings(count=15, content_type="gaming")
     raw = CandidateGenerator().generate(transcript, scenes, audio, candidate_settings)
     scored = [HeuristicCandidateScorer().score(item, scenes, audio) for item in raw]
@@ -48,10 +49,16 @@ def run(folder: Path, cache_path: Path, endpoint: str, model: str, final_count: 
     # Regenerate objects because filtering mutates IDs and alternatives.
     raw = CandidateGenerator().generate(transcript, scenes, audio, candidate_settings)
     scored = [HeuristicCandidateScorer().score(item, scenes, audio) for item in raw]
-    backend = OllamaSemanticScorer(endpoint=endpoint, model=model, timeout=300)
+    backend = OllamaSemanticScorer(
+        endpoint=endpoint,
+        model=model,
+        timeout=600,
+        context_length=int(profile["context_length"]),
+    )
     settings = {
-        "enabled": True, "model": model, "mode": "balanced", "preliminary_count": 40,
-        "batch_size": 8, "cache": True, "fallback": False, "global_comparison": True,
+        "enabled": True, "model": model, "mode": mode,
+        "preliminary_count": int(profile["preliminary_count"]),
+        "batch_size": int(profile["batch_size"]), "cache": True, "fallback": False, "global_comparison": True,
         "weights": {"semantic": .55, "heuristic": .25, "activity": .15, "uniqueness": .05},
     }
     started = time.perf_counter()
@@ -68,6 +75,9 @@ def run(folder: Path, cache_path: Path, endpoint: str, model: str, final_count: 
     return {
         "elapsed_seconds": round(elapsed, 3), "cache_hit": result.cache_hit,
         "used_ai": result.used_ai, "fallback_reason": result.fallback_reason,
+        "model": result.model, "model_digest": result.model_digest,
+        "quantization": result.quantization, "mode": result.analysis_mode,
+        "cache_key": result.cache_key,
         "duplicate_pairs": duplicate_pairs,
         "heuristic": [{"id": item.id, "start": item.start, "end": item.end, "score": item.score, "text": item.text[:160]} for item in heuristic],
         "hybrid": [{
@@ -81,15 +91,30 @@ def run(folder: Path, cache_path: Path, endpoint: str, model: str, final_count: 
 
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser()
     parser.add_argument("analysis", type=Path)
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--endpoint", default="http://127.0.0.1:11434")
     parser.add_argument("--model", default="qwen3:14b")
+    parser.add_argument("--models", nargs="+", help="Run the same benchmark for several installed Ollama model tags.")
+    parser.add_argument("--mode", default="balanced", choices=("fast", "balanced", "deep"))
     parser.add_argument("--count", type=int, default=5)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    value = run(args.analysis, args.cache, args.endpoint, args.model, args.count)
+    models = args.models or [args.model]
+    if len(models) == 1:
+        value = run(args.analysis, args.cache, args.endpoint, models[0], args.count, args.mode)
+    else:
+        value = {
+            "analysis": str(args.analysis),
+            "mode": args.mode,
+            "models": [
+                run(args.analysis, args.cache.with_name(f"{args.cache.stem}-{model.replace(':', '_')}{args.cache.suffix}"), args.endpoint, model, args.count, args.mode)
+                for model in models
+            ],
+        }
     rendered = json.dumps(value, ensure_ascii=False, indent=2)
     if args.output:
         args.output.write_text(rendered, encoding="utf-8")

@@ -25,7 +25,7 @@ from creator_assistant.domain.shorts.models import RenderJob, SourceInfo, Subtit
 from creator_assistant.services.shorts.cache import ShortsCache
 from creator_assistant.services.shorts.candidate_generator import CandidateSettings
 from creator_assistant.services.shorts.hybrid_analyzer import HybridAnalysisResult
-from creator_assistant.services.shorts.manifest import ShortsManifestStore
+from creator_assistant.services.shorts.manifest import ShortsManifestStore, utc_now
 from creator_assistant.services.shorts.review_service import CandidateReviewService
 from creator_assistant.services.shorts.render_service import unique_output_path
 from creator_assistant.services.shorts.semantic_cache import SemanticCache
@@ -153,6 +153,10 @@ class _AnalysisWorker(QObject):
                     cache_hit=restored_ai,
                     backend=str(ai_settings.get("backend", "disabled")),
                     model=str(ai_settings.get("model", "")),
+                    model_digest=str(manifest.ai_analysis.get("model_digest", "")) if manifest else "",
+                    quantization=str(manifest.ai_analysis.get("quantization", "")) if manifest else "",
+                    analysis_mode=str(manifest.ai_analysis.get("mode", ai_settings.get("mode", "balanced"))),
+                    cache_key=str(manifest.ai_analysis.get("cache_key", "")) if manifest else "",
                 )
             else:
                 raw_candidates = self.container.shorts_candidate_generator.generate(transcript, scenes, audio_features, self.candidate_settings)
@@ -178,6 +182,20 @@ class _AnalysisWorker(QObject):
                 cache.mark_complete("candidates", candidate_config)
                 manifest.candidates = [asdict(item) for item in candidates]
                 manifest.analysis_settings = candidate_config
+                manifest.ai_analysis = {
+                    "backend": analysis_result.backend,
+                    "model": analysis_result.model,
+                    "model_digest": analysis_result.model_digest,
+                    "quantization": analysis_result.quantization,
+                    "prompt_version": "shorts-semantic-v1",
+                    "mode": analysis_result.analysis_mode,
+                    "timestamp": utc_now(),
+                    "cache_key": analysis_result.cache_key,
+                    "cache_hit": analysis_result.cache_hit,
+                    "used_ai": analysis_result.used_ai,
+                    "fallback_reason": analysis_result.fallback_reason,
+                    "metrics": analysis_result.metrics,
+                }
                 store.save(manifest)
             if analysis_result and analysis_result.fallback_reason:
                 summary = f"AI недоступен — применён эвристический fallback: {analysis_result.fallback_reason}"

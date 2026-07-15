@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import hashlib
 from typing import Any, Dict, List
 
 from creator_assistant.domain.job import CancellationToken
@@ -10,6 +11,8 @@ from creator_assistant.services.shorts.semantic_backend import (
     PROMPT_VERSION,
     SemanticBackendError,
     SemanticScorerBackend,
+    MODE_PROFILES,
+    choose_installed_model,
 )
 from creator_assistant.services.shorts.semantic_cache import SemanticCache, semantic_cache_payload
 from creator_assistant.services.shorts.semantic_models import SemanticCandidateInput, SemanticCandidateScore
@@ -23,6 +26,11 @@ class HybridAnalysisResult:
     fallback_reason: str = ""
     backend: str = "disabled"
     model: str = ""
+    model_digest: str = ""
+    quantization: str = ""
+    analysis_mode: str = "balanced"
+    cache_key: str = ""
+    metrics: Dict[str, Any] = field(default_factory=dict)
 
 
 class HybridCandidateAnalyzer:
@@ -46,7 +54,9 @@ class HybridCandidateAnalyzer:
         requested_count: int,
     ) -> HybridAnalysisResult:
         cancellation.raise_if_cancelled()
-        preliminary_count = max(requested_count, int(settings.get("preliminary_count", 40)))
+        mode = str(settings.get("mode", "balanced"))
+        profile = MODE_PROFILES.get(mode, MODE_PROFILES["balanced"])
+        preliminary_count = max(requested_count, int(settings.get("preliminary_count", profile["preliminary_count"])))
         preliminary = sorted(scored, key=lambda item: -item.score)[:preliminary_count]
         clustered = self.duplicate_filter.filter(preliminary, preliminary_count)
         for item in clustered:
@@ -55,17 +65,36 @@ class HybridCandidateAnalyzer:
         if not settings.get("enabled", False) or backend.name == "disabled":
             return HybridAnalysisResult(clustered[:requested_count], False, backend=backend.name)
 
-        inputs = [self._input(item, transcript, scenes, audio, content_type) for item in clustered]
+        context_window = {"fast": 8, "balanced": 20, "deep": 40, "quality": 40}.get(mode, 20)
+        inputs = [self._input(item, transcript, scenes, audio, content_type, context_window) for item in clustered]
         model = str(settings.get("model", getattr(backend, "model", "")))
-        payload = semantic_cache_payload(inputs, model=model, content_type=content_type)
-        cached = cache.get(payload) if settings.get("cache", True) else None
+        cached = None
         try:
+            model_info = None
+            if hasattr(backend, "installed_models"):
+                installed = backend.installed_models()
+                model_info = choose_installed_model(installed, model)
+                if model_info is None:
+                    raise SemanticBackendError("В Ollama нет установленных моделей для анализа.")
+                backend.model = model_info.name
+                model = model_info.name
+                settings["_resolved_model"] = model
+            digest = getattr(model_info, "digest", "") or str(settings.get("model_digest", ""))
+            quantization = getattr(model_info, "quantization", "") or str(settings.get("model_quantization", ""))
+            transcript_hash = hashlib.sha256(transcript.text.encode("utf-8")).hexdigest()
+            payload = semantic_cache_payload(
+                inputs, model=model, content_type=content_type, digest=digest,
+                quantization=quantization, analysis_mode=mode, transcript_hash=transcript_hash,
+            )
+            cache_key = cache.key(payload)
+            cached = cache.get(payload) if settings.get("cache", True) else None
             if cached:
                 semantic = [SemanticCandidateScore.model_validate(item) for item in cached.get("results", [])]
                 selected_ids = [str(item) for item in cached.get("selected_ids", [])]
                 cache_hit = True
             else:
-                backend.check(cancellation) if hasattr(backend, "check") else None
+                if not hasattr(backend, "installed_models") and hasattr(backend, "check"):
+                    backend.check(cancellation)
                 semantic = self._evaluate_batches(backend, inputs, cancellation, settings)
                 selected_ids = []
                 cache_hit = False
@@ -78,11 +107,18 @@ class HybridCandidateAnalyzer:
                 if settings.get("cache", True):
                     cache.put(payload, {
                         "prompt_version": PROMPT_VERSION,
+                        "model": model, "digest": digest, "quantization": quantization,
+                        "analysis_mode": mode,
                         "results": [item.model_dump(mode="json") for item in semantic],
                         "selected_ids": selected_ids,
                     })
             result = self._ordered(clustered, selected_ids, requested_count)
-            return HybridAnalysisResult(result, True, cache_hit, backend=backend.name, model=model)
+            metrics = getattr(backend, "last_metrics", None)
+            return HybridAnalysisResult(
+                result, True, cache_hit, backend=backend.name, model=model,
+                model_digest=digest, quantization=quantization, analysis_mode=mode,
+                cache_key=cache_key, metrics=(metrics.__dict__.copy() if metrics else {}),
+            )
         except Exception as exc:
             if cancellation.is_cancelled:
                 cancellation.raise_if_cancelled()
@@ -93,25 +129,29 @@ class HybridCandidateAnalyzer:
                 item.selection_source = "heuristic_fallback"
                 item.warnings.append(f"Локальная AI-оценка недоступна: {message}")
             return HybridAnalysisResult(
-                clustered[:requested_count], False, bool(cached), message, backend.name, model
+                clustered[:requested_count], False, bool(cached), message, backend.name, model,
+                analysis_mode=mode, metrics={},
             )
 
     @staticmethod
     def _evaluate_batches(backend, inputs, cancellation, settings):
-        batch_size = max(1, min(12, int(settings.get("batch_size", 8))))
+        profile = MODE_PROFILES.get(str(settings.get("mode", "balanced")), MODE_PROFILES["balanced"])
+        batch_size = max(1, min(12, int(settings.get("batch_size", profile["batch_size"]))))
         values = []
         for offset in range(0, len(inputs), batch_size):
             cancellation.raise_if_cancelled()
             values.extend(backend.evaluate(
                 inputs[offset:offset + batch_size], cancellation,
-                think=str(settings.get("mode", "balanced")) == "quality",
+                think=bool(profile["think"]),
             ))
         return values
 
     @staticmethod
     def _global_selection(backend, candidates, count, cancellation, settings):
         ranked = sorted(candidates, key=lambda item: -item.final_score)
-        if not settings.get("global_comparison", True):
+        profile = MODE_PROFILES.get(str(settings.get("mode", "balanced")), MODE_PROFILES["balanced"])
+        passes = int(profile["global_passes"]) if settings.get("global_comparison", True) else 0
+        if passes <= 0:
             return [item.id for item in ranked[:count]]
         summaries = [{
             "candidate_id": item.id, "start": item.start, "end": item.end,
@@ -119,11 +159,13 @@ class HybridCandidateAnalyzer:
             "semantic_score": item.semantic_score, "final_score": item.final_score,
             "moment_type": item.ai_moment_type, "reason": item.ai_reason,
         } for item in ranked]
-        selection = backend.global_select(
-            summaries, count, cancellation,
-            think=str(settings.get("mode", "balanced")) == "quality",
-        )
-        return selection.candidate_ids
+        selected = []
+        for _pass in range(passes):
+            selection = backend.global_select(summaries, count, cancellation, think=bool(profile["think"]))
+            selected = selection.candidate_ids
+            order = {candidate_id: index for index, candidate_id in enumerate(selected)}
+            summaries.sort(key=lambda item: order.get(item["candidate_id"], len(order)))
+        return selected
 
     @staticmethod
     def _ordered(candidates, selected_ids, count):
@@ -155,6 +197,8 @@ class HybridCandidateAnalyzer:
             item.ai_reason = value.reason
             item.ai_weaknesses = list(value.weaknesses)
             item.selection_source = "hybrid_ai"
+            item.ai_model = str(settings.get("_resolved_model", ""))
+            item.ai_mode = str(settings.get("mode", "balanced"))
             item.reasons.append(f"AI: {value.reason}")
             item.warnings.extend(value.weaknesses)
             if value.suggested_start is not None and value.suggested_end is not None:
@@ -163,9 +207,9 @@ class HybridCandidateAnalyzer:
                     item.alternatives.append(bounds)
 
     @staticmethod
-    def _input(candidate, transcript, scenes, audio, content_type):
-        before = [s.text.strip() for s in transcript.segments if candidate.start - 12 <= s.end <= candidate.start]
-        after = [s.text.strip() for s in transcript.segments if candidate.end <= s.start <= candidate.end + 12]
+    def _input(candidate, transcript, scenes, audio, content_type, context_window=20):
+        before = [s.text.strip() for s in transcript.segments if candidate.start - context_window <= s.end <= candidate.start]
+        after = [s.text.strip() for s in transcript.segments if candidate.end <= s.start <= candidate.end + context_window]
         words = candidate.text.split()
         scene_changes = sum(candidate.start < scene.start < candidate.end for scene in scenes)
         pauses = sum(candidate.start < pause[1] and candidate.end > pause[0] for pause in audio.pauses)

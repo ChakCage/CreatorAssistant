@@ -4,9 +4,9 @@ from copy import deepcopy
 import os
 from pathlib import Path
 import time
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -32,7 +32,13 @@ from PySide6.QtWidgets import (
 from creator_assistant.ui.workers import FunctionWorker, UiWorkerBridge
 from creator_assistant.domain.youtube_auth import BROWSERS
 from creator_assistant.services.storage_service import default_temp_root
-from creator_assistant.services.shorts.semantic_backend import OllamaSemanticScorer
+from creator_assistant.domain.job import CancellationToken
+from creator_assistant.services.shorts.semantic_backend import (
+    MODE_PROFILES,
+    OllamaModelInfo,
+    OllamaSemanticScorer,
+    choose_installed_model,
+)
 from creator_assistant.domain.author_presets import merge_presets
 from creator_assistant.infrastructure.project_index import ProjectRoot
 from creator_assistant.infrastructure.windows_paths import discover_author_folders
@@ -48,6 +54,7 @@ class SettingsDialog(QDialog):
         self.naming_edits: Dict[str, QLineEdit] = {}
         self._threads: list[QThread] = []
         self._notify_auto_search = False
+        self._ollama_models: list[OllamaModelInfo] = []
         self.setWindowTitle("Настройки Creator Assistant")
         self.setMinimumSize(620, 480)
         root_layout = QVBoxLayout(self)
@@ -159,11 +166,19 @@ class SettingsDialog(QDialog):
         self.shorts_ai_backend.addItem("Отключено", "disabled")
         self.shorts_ai_backend.setCurrentIndex(max(0, self.shorts_ai_backend.findData(ai.get("backend", "ollama"))))
         self.shorts_ai_endpoint = QLineEdit(str(ai.get("endpoint", "http://127.0.0.1:11434")))
-        self.shorts_ai_model = QLineEdit(str(ai.get("model", "qwen3:14b")))
+        self.shorts_ai_model = QComboBox()
+        self.shorts_ai_model.setMinimumWidth(320)
+        saved_model = str(ai.get("model", "qwen3:14b"))
+        self.shorts_ai_model.addItem(saved_model, saved_model)
         self.shorts_ai_mode = QComboBox()
-        for label, value in (("Быстро", "fast"), ("Сбалансированно", "balanced"), ("Качество", "quality")):
+        for label, value in (("Быстро", "fast"), ("Сбалансированно", "balanced"), ("Глубоко", "deep")):
             self.shorts_ai_mode.addItem(label, value)
         self.shorts_ai_mode.setCurrentIndex(max(0, self.shorts_ai_mode.findData(ai.get("mode", "balanced"))))
+        self.shorts_ai_context = QSpinBox()
+        self.shorts_ai_context.setRange(2048, 65536)
+        self.shorts_ai_context.setSingleStep(2048)
+        self.shorts_ai_context.setSuffix(" ctx")
+        self.shorts_ai_context.setValue(int(ai.get("context_length", MODE_PROFILES.get(str(ai.get("mode", "balanced")), MODE_PROFILES["balanced"])["context_length"])))
         self.shorts_ai_preliminary = QSpinBox()
         self.shorts_ai_preliminary.setRange(10, 80)
         self.shorts_ai_preliminary.setValue(int(ai.get("preliminary_count", 40)))
@@ -184,13 +199,21 @@ class SettingsDialog(QDialog):
         self.shorts_ai_show_reasons.setChecked(bool(ai.get("show_reasons", True)))
         self.shorts_ai_status = QLabel("Проверка не выполнена")
         self.shorts_ai_status.setWordWrap(True)
-        self.shorts_ai_test = QPushButton("Проверить Ollama и модель")
+        self.shorts_ai_refresh = QPushButton("Обновить модели")
+        self.shorts_ai_test = QPushButton("Проверить модель")
+        self.shorts_ai_unload = QPushButton("Выгрузить")
+        self.shorts_ai_compare = QPushButton("Сравнить")
+        self.shorts_ai_refresh.clicked.connect(self._refresh_shorts_ai_models)
         self.shorts_ai_test.clicked.connect(self._test_shorts_ai)
+        self.shorts_ai_unload.clicked.connect(self._unload_shorts_ai_model)
+        self.shorts_ai_compare.clicked.connect(self._compare_shorts_ai_models)
+        self.shorts_ai_mode.currentIndexChanged.connect(self._apply_shorts_ai_mode_profile)
         shorts_form.addRow(self.shorts_ai_enabled)
         shorts_form.addRow("Backend", self.shorts_ai_backend)
         shorts_form.addRow("API", self.shorts_ai_endpoint)
         shorts_form.addRow("Модель", self.shorts_ai_model)
         shorts_form.addRow("Режим", self.shorts_ai_mode)
+        shorts_form.addRow("Context", self.shorts_ai_context)
         shorts_form.addRow("Предварительных", self.shorts_ai_preliminary)
         shorts_form.addRow("Финальных", self.shorts_ai_final)
         shorts_form.addRow("Timeout", self.shorts_ai_timeout)
@@ -198,7 +221,11 @@ class SettingsDialog(QDialog):
         shorts_form.addRow(self.shorts_ai_cache)
         shorts_form.addRow(self.shorts_ai_global)
         shorts_form.addRow(self.shorts_ai_show_reasons)
-        shorts_form.addRow(self.shorts_ai_test, self.shorts_ai_status)
+        ai_actions = QHBoxLayout()
+        for button in (self.shorts_ai_refresh, self.shorts_ai_test, self.shorts_ai_unload, self.shorts_ai_compare):
+            ai_actions.addWidget(button)
+        shorts_form.addRow(ai_actions)
+        shorts_form.addRow("Статус", self.shorts_ai_status)
         content_layout.addWidget(shorts_group)
 
         access_group = QGroupBox("Доступ к YouTube")
@@ -373,6 +400,7 @@ class SettingsDialog(QDialog):
         self.buttons.rejected.connect(self.reject)
         root_layout.addWidget(self.buttons, 0)
         self._fit_to_screen()
+        QTimer.singleShot(0, self._refresh_shorts_ai_models)
 
     def _browse(self, edit: QLineEdit, directory: bool) -> None:
         current = edit.text() or str(Path.home())
@@ -785,25 +813,184 @@ class SettingsDialog(QDialog):
         self.auto_find_button.setText("Найти программы автоматически")
         QMessageBox.warning(self, "Автоматический поиск", message)
 
+    def _selected_shorts_ai_model(self) -> str:
+        value = self.shorts_ai_model.currentData()
+        return str(value or self.shorts_ai_model.currentText()).strip()
+
+    def _selected_shorts_ai_model_info(self) -> OllamaModelInfo | None:
+        selected = self._selected_shorts_ai_model()
+        return next((item for item in self._ollama_models if item.name == selected), None)
+
+    def _ollama_backend(self, *, timeout: int | None = None) -> OllamaSemanticScorer:
+        return OllamaSemanticScorer(
+            endpoint=self.shorts_ai_endpoint.text().strip(),
+            model=self._selected_shorts_ai_model(),
+            timeout=timeout or self.shorts_ai_timeout.value(),
+            context_length=self.shorts_ai_context.value(),
+        )
+
+    def _set_shorts_ai_buttons_enabled(self, enabled: bool) -> None:
+        for button in (self.shorts_ai_refresh, self.shorts_ai_test, self.shorts_ai_unload, self.shorts_ai_compare):
+            button.setEnabled(enabled)
+
+    def _run_shorts_ai_task(
+        self,
+        status: str,
+        work: Callable[[Callable[[str], None]], Any],
+        on_finished: Callable[[Any], None],
+    ) -> None:
+        if self._threads:
+            return
+        self._set_shorts_ai_buttons_enabled(False)
+        self.shorts_ai_status.setText(status)
+        thread = QThread(self)
+        worker = FunctionWorker(work)
+        terminal: dict[str, Any] = {}
+
+        def cleanup() -> None:
+            if thread in self._threads:
+                self._threads.remove(thread)
+            self._set_shorts_ai_buttons_enabled(True)
+            bridge.deleteLater()
+            if "result" in terminal:
+                on_finished(terminal["result"])
+            elif "error" in terminal:
+                self.shorts_ai_status.setText(f"Недоступно: {terminal['error'][0]}")
+
+        bridge = UiWorkerBridge(
+            {
+                "finished": lambda value: terminal.update(result=value),
+                "failed": lambda message, details: terminal.update(error=(message, details)),
+                "cancelled": lambda: terminal.update(error=("Операция отменена", "")),
+                "thread_finished": cleanup,
+            },
+            parent=self,
+        )
+        thread.worker = worker
+        thread.bridge = bridge
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(bridge.finished)
+        worker.failed.connect(bridge.failed)
+        worker.cancelled.connect(bridge.cancelled)
+        for signal in (worker.finished, worker.failed, worker.cancelled):
+            signal.connect(worker.deleteLater)
+            signal.connect(thread.quit)
+        thread.finished.connect(bridge.thread_finished)
+        thread.finished.connect(thread.deleteLater)
+        self._threads.append(thread)
+        thread.start()
+
+    def _refresh_shorts_ai_models(self) -> None:
+        if self.shorts_ai_backend.currentData() == "disabled":
+            return
+        saved = self._selected_shorts_ai_model()
+
+        def work(_progress):
+            backend = OllamaSemanticScorer(endpoint=self.shorts_ai_endpoint.text().strip(), timeout=min(30, self.shorts_ai_timeout.value()))
+            models = backend.installed_models()
+            loaded = backend.runtime_models()
+            return models, loaded
+
+        def ready(value) -> None:
+            models, loaded = value
+            self._ollama_models = list(models)
+            self.shorts_ai_model.clear()
+            for info in self._ollama_models:
+                self.shorts_ai_model.addItem(info.display, info.name)
+                index = self.shorts_ai_model.count() - 1
+                tooltip = (
+                    f"{info.name}\nРазмер: {info.size / 1024**3:.1f} ГиБ\n"
+                    f"Параметры: {info.parameter_size or '—'}\nКвант: {info.quantization or '—'}\n"
+                    f"Digest: {info.digest[:24] or '—'}\nCapabilities: {', '.join(info.capabilities) or '—'}"
+                )
+                self.shorts_ai_model.setItemData(index, tooltip, 3)
+            chosen = choose_installed_model(self._ollama_models, saved)
+            if chosen:
+                self.shorts_ai_model.setCurrentIndex(max(0, self.shorts_ai_model.findData(chosen.name)))
+            elif saved:
+                self.shorts_ai_model.addItem(saved, saved)
+                self.shorts_ai_model.setCurrentIndex(0)
+            loaded_names = ", ".join(str(item.get("name") or item.get("model")) for item in loaded) or "нет загруженных моделей"
+            if chosen and chosen.name != saved:
+                self.shorts_ai_status.setText(f"Сохранённая модель не найдена, выбрана {chosen.name}. Загружено: {loaded_names}.")
+            else:
+                self.shorts_ai_status.setText(f"Найдено моделей: {len(self._ollama_models)}. Загружено: {loaded_names}.")
+            self.shorts_ai_compare.setEnabled(len(self._ollama_models) >= 2)
+
+        self._run_shorts_ai_task("Читаю модели Ollama…", work, ready)
+
     def _test_shorts_ai(self) -> None:
-        self.shorts_ai_test.setEnabled(False)
-        self.shorts_ai_status.setText("Проверяю локальный API…")
-        QApplication.processEvents()
-        try:
-            backend = OllamaSemanticScorer(
-                endpoint=self.shorts_ai_endpoint.text().strip(),
-                model=self.shorts_ai_model.text().strip(),
-                timeout=min(30, self.shorts_ai_timeout.value()),
-            )
+        def work(_progress):
+            backend = self._ollama_backend(timeout=min(120, self.shorts_ai_timeout.value()))
             info = backend.model_info()
+            compatibility = backend.compatibility_test(CancellationToken())
+            runtime = backend.runtime_info() or {}
+            return info, compatibility, runtime
+
+        def ready(value) -> None:
+            info, compatibility, runtime = value
             size = float(info.get("size", 0) or 0) / 1024**3
+            gpu = compatibility.get("gpu_percent")
+            tps = compatibility.get("tokens_per_second", 0)
+            processor = runtime.get("processor", "—")
             self.shorts_ai_status.setText(
-                f"Готово: {info.get('name') or info.get('model')} · {size:.1f} ГБ · localhost"
+                f"Готово: {info.get('name') or info.get('model')} · {size:.1f} ГиБ · "
+                f"{processor} · GPU {gpu if gpu is not None else '—'}% · {tps:.1f} tok/s"
             )
-        except Exception as exc:
-            self.shorts_ai_status.setText(f"Недоступно: {exc}")
-        finally:
-            self.shorts_ai_test.setEnabled(True)
+
+        self._run_shorts_ai_task("Проверяю structured output и загрузку модели…", work, ready)
+
+    def _unload_shorts_ai_model(self) -> None:
+        model = self._selected_shorts_ai_model()
+
+        def work(_progress):
+            backend = self._ollama_backend(timeout=min(60, self.shorts_ai_timeout.value()))
+            backend.unload()
+            return backend.runtime_models()
+
+        def ready(value) -> None:
+            loaded = ", ".join(str(item.get("name") or item.get("model")) for item in value) or "нет загруженных моделей"
+            self.shorts_ai_status.setText(f"{model} выгружена. Сейчас загружено: {loaded}.")
+
+        self._run_shorts_ai_task(f"Выгружаю {model}…", work, ready)
+
+    def _compare_shorts_ai_models(self) -> None:
+        if len(self._ollama_models) < 2:
+            self.shorts_ai_status.setText("Для сравнения нужны минимум две установленные модели.")
+            return
+        selected = self._selected_shorts_ai_model()
+        names = [selected] + [item.name for item in self._ollama_models if item.name != selected]
+        names = names[:2]
+
+        def work(_progress):
+            rows = []
+            for name in names:
+                backend = OllamaSemanticScorer(
+                    endpoint=self.shorts_ai_endpoint.text().strip(),
+                    model=name,
+                    timeout=min(180, self.shorts_ai_timeout.value()),
+                    context_length=self.shorts_ai_context.value(),
+                )
+                rows.append(backend.compatibility_test(CancellationToken()))
+            return rows
+
+        def ready(rows) -> None:
+            lines = []
+            for row in rows:
+                gpu = row.get("gpu_percent")
+                lines.append(
+                    f"{row.get('model')}: {row.get('total_seconds', 0):.1f} с · "
+                    f"{row.get('tokens_per_second', 0):.1f} tok/s · GPU {gpu if gpu is not None else '—'}%"
+                )
+            self.shorts_ai_status.setText("Сравнение моделей:\n" + "\n".join(lines))
+
+        self._run_shorts_ai_task("Сравниваю две модели на одинаковом structured prompt…", work, ready)
+
+    def _apply_shorts_ai_mode_profile(self) -> None:
+        profile = MODE_PROFILES.get(str(self.shorts_ai_mode.currentData()), MODE_PROFILES["balanced"])
+        self.shorts_ai_context.setValue(int(profile["context_length"]))
+        self.shorts_ai_preliminary.setValue(int(profile["preliminary_count"]))
 
     def _save(self) -> None:
         save_clicked_at = time.monotonic()
@@ -826,12 +1013,17 @@ class SettingsDialog(QDialog):
         self.result_settings["suggest_remember_author"] = self.suggest_remember_author.isChecked()
         self.result_settings["auto_shorts_project_folder"] = self.auto_shorts_project_folder.isChecked()
         previous_ai = self.result_settings.get("shorts_ai", {})
+        selected_model = self._selected_shorts_ai_model()
+        selected_model_info = self._selected_shorts_ai_model_info()
         self.result_settings["shorts_ai"] = {
             "enabled": self.shorts_ai_enabled.isChecked() and self.shorts_ai_backend.currentData() != "disabled",
             "backend": self.shorts_ai_backend.currentData(),
             "endpoint": self.shorts_ai_endpoint.text().strip(),
-            "model": self.shorts_ai_model.text().strip(),
+            "model": selected_model,
+            "model_digest": selected_model_info.digest if selected_model_info else previous_ai.get("model_digest", ""),
+            "model_quantization": selected_model_info.quantization if selected_model_info else previous_ai.get("model_quantization", ""),
             "mode": self.shorts_ai_mode.currentData(),
+            "context_length": self.shorts_ai_context.value(),
             "preliminary_count": self.shorts_ai_preliminary.value(),
             "final_count": self.shorts_ai_final.value(),
             "timeout": self.shorts_ai_timeout.value(),

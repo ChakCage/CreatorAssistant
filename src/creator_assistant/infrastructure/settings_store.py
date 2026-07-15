@@ -52,7 +52,10 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "backend": "ollama",
         "endpoint": "http://127.0.0.1:11434",
         "model": "qwen3:14b",
+        "model_digest": "",
+        "model_quantization": "",
         "mode": "balanced",
+        "context_length": 16384,
         "preliminary_count": 40,
         "final_count": 5,
         "timeout": 180,
@@ -109,6 +112,7 @@ class SettingsStore:
             self._merge(settings, raw)
         self._migrate_youtube_access(settings)
         self._migrate_processing(settings)
+        self._migrate_shorts_ai(settings)
         self._migrate_author_presets(settings)
         return settings
 
@@ -159,6 +163,15 @@ class SettingsStore:
         naming = settings.setdefault("naming", {})
         if naming.get("proxy") == "{title} [720p]":
             naming["proxy"] = "{title} [{proxy_height}p]"
+
+    @staticmethod
+    def _migrate_shorts_ai(settings: Dict[str, Any]) -> None:
+        ai = settings.setdefault("shorts_ai", {})
+        if ai.get("mode") == "quality":
+            ai["mode"] = "deep"
+        ai.setdefault("model_digest", "")
+        ai.setdefault("model_quantization", "")
+        ai.setdefault("context_length", {"fast": 8192, "balanced": 16384, "deep": 32768}.get(ai.get("mode"), 16384))
 
     @staticmethod
     def _migrate_author_presets(settings: Dict[str, Any]) -> None:

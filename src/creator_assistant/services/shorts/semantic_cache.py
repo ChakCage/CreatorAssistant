@@ -15,12 +15,20 @@ def semantic_cache_payload(
     *,
     model: str,
     content_type: str,
+    digest: str = "",
+    quantization: str = "",
+    analysis_mode: str = "balanced",
+    transcript_hash: str = "",
     prompt_version: str = PROMPT_VERSION,
 ) -> Dict[str, Any]:
     """Return the stable semantic input identity, deliberately excluding render UI state."""
     return {
         "prompt_version": prompt_version,
         "model": model,
+        "digest": digest,
+        "quantization": quantization,
+        "analysis_mode": analysis_mode,
+        "transcript_hash": transcript_hash,
         "content_type": content_type,
         "candidates": [item.model_dump(mode="json") for item in candidates],
     }

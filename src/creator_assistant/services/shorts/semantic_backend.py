@@ -45,6 +45,64 @@ class SemanticRunMetrics:
     warnings: List[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class OllamaModelInfo:
+    name: str
+    size: int = 0
+    parameter_size: str = ""
+    quantization: str = ""
+    digest: str = ""
+    modified_at: str = ""
+    capabilities: tuple[str, ...] = ()
+
+    @classmethod
+    def from_api(cls, value: Dict[str, Any]) -> "OllamaModelInfo":
+        details = value.get("details") if isinstance(value.get("details"), dict) else {}
+        return cls(
+            name=str(value.get("name") or value.get("model") or ""),
+            size=int(value.get("size", 0) or 0),
+            parameter_size=str(details.get("parameter_size", "")),
+            quantization=str(details.get("quantization_level", "")),
+            digest=str(value.get("digest", "")),
+            modified_at=str(value.get("modified_at", "")),
+            capabilities=tuple(str(item) for item in value.get("capabilities", []) if item),
+        )
+
+    @property
+    def recommendation(self) -> str:
+        if self.name == "qwen3.6:35b-a3b":
+            return "Глубокий анализ"
+        if self.name == "qwen3:14b":
+            return "Быстрее"
+        return ""
+
+    @property
+    def display(self) -> str:
+        size = f"{self.size / 1_000_000_000:.1f} ГБ" if self.size else "размер неизвестен"
+        details = " · ".join(item for item in (size, self.parameter_size, self.quantization) if item)
+        suffix = f" — {self.recommendation}" if self.recommendation else ""
+        return f"{self.name}{suffix}\n{details}"
+
+
+def choose_installed_model(models: List[OllamaModelInfo], saved: str = "") -> Optional[OllamaModelInfo]:
+    by_name = {item.name: item for item in models if item.name}
+    if saved in by_name:
+        return by_name[saved]
+    for preferred in ("qwen3.6:35b-a3b", "qwen3:14b"):
+        if preferred in by_name:
+            return by_name[preferred]
+    return models[0] if models else None
+
+
+MODE_PROFILES = {
+    "fast": {"context_length": 8192, "preliminary_count": 24, "batch_size": 10, "global_passes": 0, "think": False},
+    "balanced": {"context_length": 16384, "preliminary_count": 40, "batch_size": 8, "global_passes": 1, "think": False},
+    "deep": {"context_length": 32768, "preliminary_count": 56, "batch_size": 6, "global_passes": 2, "think": True},
+    # Migration alias used by the first implementation.
+    "quality": {"context_length": 32768, "preliminary_count": 56, "batch_size": 6, "global_passes": 2, "think": True},
+}
+
+
 class SemanticScorerBackend(ABC):
     name = "disabled"
 
@@ -125,12 +183,14 @@ class OllamaSemanticScorer(SemanticScorerBackend):
         timeout: float = 180.0,
         opener: Optional[Callable[..., Any]] = None,
         keep_alive: str = "10m",
+        context_length: int = 16384,
     ) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.model = model
         self.timeout = max(1.0, float(timeout))
         self.opener = opener or urllib.request.urlopen
         self.keep_alive = keep_alive
+        self.context_length = max(2048, min(65536, int(context_length)))
         self.last_metrics = SemanticRunMetrics()
 
     @property
@@ -150,6 +210,9 @@ class OllamaSemanticScorer(SemanticScorerBackend):
             raise SemanticResponseError("Ollama вернула некорректный список моделей.")
         return [item for item in models if isinstance(item, dict)]
 
+    def installed_models(self) -> List[OllamaModelInfo]:
+        return [item for item in (OllamaModelInfo.from_api(value) for value in self.list_models()) if item.name]
+
     def model_info(self) -> Dict[str, Any]:
         for item in self.list_models():
             if item.get("name") == self.model or item.get("model") == self.model:
@@ -165,6 +228,43 @@ class OllamaSemanticScorer(SemanticScorerBackend):
         if cancellation:
             cancellation.raise_if_cancelled()
         return info
+
+    def runtime_models(self) -> List[Dict[str, Any]]:
+        values = self._request("GET", "/api/ps").get("models", [])
+        return [item for item in values if isinstance(item, dict)] if isinstance(values, list) else []
+
+    def runtime_info(self) -> Optional[Dict[str, Any]]:
+        return next(
+            (item for item in self.runtime_models() if item.get("name") == self.model or item.get("model") == self.model),
+            None,
+        )
+
+    def unload(self) -> None:
+        self._request("POST", "/api/generate", {"model": self.model, "keep_alive": 0})
+
+    def compatibility_test(self, cancellation: CancellationToken) -> Dict[str, Any]:
+        self.last_metrics = SemanticRunMetrics()
+        sample = SemanticCandidateInput(
+            candidate_id="compatibility_test", start=0, end=12, duration=12,
+            transcript="Я нашёл редкий предмет и успешно завершил испытание.",
+            heuristic_score=75, speech_density=1, scene_activity=.2,
+            audio_activity=.2, pause_count=0,
+        )
+        result = self.evaluate([sample], cancellation)
+        runtime = self.runtime_info() or {}
+        size, size_vram = int(runtime.get("size", 0) or 0), int(runtime.get("size_vram", 0) or 0)
+        return {
+            "compatible": bool(result), "model": self.model,
+            "load_seconds": self.last_metrics.load_duration_ns / 1e9,
+            "total_seconds": self.last_metrics.total_duration_ns / 1e9,
+            "tokens_per_second": (
+                self.last_metrics.eval_count / (self.last_metrics.eval_duration_ns / 1e9)
+                if self.last_metrics.eval_duration_ns else 0
+            ),
+            "size": size, "size_vram": size_vram,
+            "gpu_percent": round(100 * size_vram / size, 1) if size else None,
+            "context_length": int(runtime.get("context_length", 0) or 0),
+        }
 
     def evaluate(self, candidates, cancellation, *, think=False):
         cancellation.raise_if_cancelled()
@@ -212,7 +312,7 @@ class OllamaSemanticScorer(SemanticScorerBackend):
                 "format": model_class.model_json_schema(),
                 "think": bool(think),
                 "keep_alive": self.keep_alive,
-                "options": {"temperature": 0},
+                "options": {"temperature": 0, "num_ctx": self.context_length},
             }
             raw = self._request("POST", "/api/chat", payload)
             self._record_metrics(raw)
@@ -256,4 +356,3 @@ class OllamaSemanticScorer(SemanticScorerBackend):
         if value.get("error"):
             raise SemanticBackendError(str(value["error"]))
         return value
-

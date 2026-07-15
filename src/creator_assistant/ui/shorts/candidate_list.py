@@ -73,6 +73,8 @@ class CandidateList(QWidget):
                 "heuristic": "Эвристика",
             }.get(candidate.selection_source, candidate.selection_source)
             details = text + (f"\n✓ {reasons}" if reasons else "")
+            if candidate.ai_model or candidate.ai_mode:
+                details += f"\nAI модель: {candidate.ai_model or '—'} · режим {candidate.ai_mode or '—'}"
             if candidate.ai_verdict:
                 details += f"\nAI: {candidate.ai_verdict} · {candidate.ai_moment_type}"
             cells = (

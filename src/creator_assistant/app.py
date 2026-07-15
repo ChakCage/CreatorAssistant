@@ -169,6 +169,7 @@ class ServiceContainer:
                 endpoint=str(ai_settings.get("endpoint", "http://127.0.0.1:11434")),
                 model=str(ai_settings.get("model", "qwen3:14b")),
                 timeout=float(ai_settings.get("timeout", 180)),
+                context_length=int(ai_settings.get("context_length", 16384)),
             )
         else:
             self.shorts_semantic_backend = DisabledSemanticScorer()
