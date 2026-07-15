@@ -86,6 +86,14 @@ class Candidate:
     title: str = ""
     layout_settings: Dict[str, Any] = field(default_factory=dict)
     subtitle_settings: Dict[str, Any] = field(default_factory=dict)
+    heuristic_score: float = 0.0
+    semantic_score: Optional[float] = None
+    final_score: float = 0.0
+    ai_moment_type: str = ""
+    ai_verdict: str = ""
+    ai_reason: str = ""
+    ai_weaknesses: List[str] = field(default_factory=list)
+    selection_source: str = "heuristic"
 
     @property
     def duration(self) -> float:

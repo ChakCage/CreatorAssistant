@@ -34,12 +34,15 @@ class CandidateList(QWidget):
         controls.addWidget(self.sort)
         controls.addStretch(1)
         layout.addLayout(controls)
-        self.table = QTableWidget(0, 9)
-        self.table.setHorizontalHeaderLabels(("№", "Start", "End", "Длина", "Score", "Статус", "Расшифровка / причины", "Предупреждения", "Действия"))
+        self.table = QTableWidget(0, 12)
+        self.table.setHorizontalHeaderLabels((
+            "№", "Start", "End", "Длина", "Эвристика", "AI", "Итог", "Источник",
+            "Статус", "Расшифровка / причины", "Предупреждения", "Действия",
+        ))
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(9, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(11, QHeaderView.ResizeToContents)
         self.table.cellDoubleClicked.connect(lambda row, _column: self._select_row(row))
         self.filter.currentIndexChanged.connect(self.refresh)
         self.sort.currentIndexChanged.connect(self.refresh)
@@ -63,7 +66,22 @@ class CandidateList(QWidget):
             self.table.setVerticalHeaderItem(row, QTableWidgetItem(candidate.id))
             text = candidate.text[:180] + ("…" if len(candidate.text) > 180 else "")
             reasons = "; ".join(candidate.reasons)
-            cells = (candidate.id.replace("short_", ""), f"{candidate.start:.1f}", f"{candidate.end:.1f}", f"{candidate.duration:.1f} с", f"{candidate.score:.1f}", STATUS_LABELS.get(candidate.status, candidate.status), text + (f"\n✓ {reasons}" if reasons else ""), "; ".join(candidate.warnings))
+            ai_score = "—" if candidate.semantic_score is None else f"{candidate.semantic_score:.1f}"
+            source = {
+                "hybrid_ai": "Локальный AI",
+                "heuristic_fallback": "Fallback",
+                "heuristic": "Эвристика",
+            }.get(candidate.selection_source, candidate.selection_source)
+            details = text + (f"\n✓ {reasons}" if reasons else "")
+            if candidate.ai_verdict:
+                details += f"\nAI: {candidate.ai_verdict} · {candidate.ai_moment_type}"
+            cells = (
+                candidate.id.replace("short_", ""), f"{candidate.start:.1f}", f"{candidate.end:.1f}",
+                f"{candidate.duration:.1f} с", f"{candidate.heuristic_score or candidate.score:.1f}",
+                ai_score, f"{candidate.final_score or candidate.score:.1f}", source,
+                STATUS_LABELS.get(candidate.status, candidate.status), details,
+                "; ".join(candidate.warnings),
+            )
             for column, value in enumerate(cells):
                 item = QTableWidgetItem(str(value))
                 item.setData(256, candidate)
@@ -86,7 +104,7 @@ class CandidateList(QWidget):
             action_layout.addWidget(alternatives)
             action_layout.addWidget(approve)
             action_layout.addWidget(reject)
-            self.table.setCellWidget(row, 8, actions)
+            self.table.setCellWidget(row, 11, actions)
         self.table.resizeRowsToContents()
 
     def _select_row(self, row: int) -> None:

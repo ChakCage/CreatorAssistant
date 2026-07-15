@@ -37,6 +37,7 @@ from creator_assistant.services.shorts.audio_activity_service import AudioActivi
 from creator_assistant.services.shorts.candidate_generator import CandidateGenerator
 from creator_assistant.services.shorts.candidate_scorer import HeuristicCandidateScorer
 from creator_assistant.services.shorts.duplicate_filter import DuplicateFilter
+from creator_assistant.services.shorts.hybrid_analyzer import HybridCandidateAnalyzer
 from creator_assistant.services.shorts.proxy_service import AnalysisProxyService
 from creator_assistant.services.shorts.render_service import ShortsRenderService
 from creator_assistant.services.shorts.semantic_backend import DisabledSemanticScorer, OllamaSemanticScorer
@@ -167,11 +168,12 @@ class ServiceContainer:
             self.shorts_semantic_backend = OllamaSemanticScorer(
                 endpoint=str(ai_settings.get("endpoint", "http://127.0.0.1:11434")),
                 model=str(ai_settings.get("model", "qwen3:14b")),
-                timeout=float(ai_settings.get("timeout_seconds", 180)),
+                timeout=float(ai_settings.get("timeout", 180)),
             )
         else:
             self.shorts_semantic_backend = DisabledSemanticScorer()
         self.shorts_duplicate_filter = DuplicateFilter()
+        self.shorts_hybrid_analyzer = HybridCandidateAnalyzer(self.shorts_duplicate_filter)
         self.shorts_render = ShortsRenderService(
             self.runner, ffmpeg_path, ffprobe_path,
             bool(self.settings.get("prefer_nvenc", True)) and self.detector.nvenc_available(ffmpeg_path),

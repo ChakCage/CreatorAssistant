@@ -27,6 +27,7 @@ from creator_assistant.services.shorts.candidate_generator import CandidateSetti
 from creator_assistant.services.shorts.manifest import ShortsManifestStore
 from creator_assistant.services.shorts.review_service import CandidateReviewService
 from creator_assistant.services.shorts.render_service import unique_output_path
+from creator_assistant.services.shorts.semantic_cache import SemanticCache
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectPaths, ShortsProjectStore
 from creator_assistant.services.shorts.source_service import ShortsSourceService
@@ -137,22 +138,51 @@ class _AnalysisWorker(QObject):
                 audio_features = self.container.shorts_audio_activity.analyse(audio, self.source.duration, audio_features_path, self.token)
                 cache.mark_complete("audio_activity", activity_settings)
                 store.save(manifest)
-            self.progress.emit("8–10. Кандидаты", "Границы по фразам, паузам и сценам; затем эвристическая оценка и дедупликация.", 84)
+            self.progress.emit("8–10. Кандидаты", "Эвристический отбор, кластеризация дублей и локальная смысловая оценка.", 82)
             candidates_path = self.paths.analysis / "candidates.json"
-            candidate_config = asdict(self.candidate_settings)
+            ai_settings = dict(self.container.settings.get("shorts_ai", {}))
+            candidate_config = {**asdict(self.candidate_settings), "shorts_ai": ai_settings}
             if cache.stage_valid("candidates", candidates_path, candidate_config):
                 from creator_assistant.domain.shorts.models import Candidate
                 candidates = [Candidate(**item) for item in json.loads(candidates_path.read_text(encoding="utf-8"))]
+                analysis_result = None
             else:
                 raw_candidates = self.container.shorts_candidate_generator.generate(transcript, scenes, audio_features, self.candidate_settings)
                 scored = [self.container.shorts_candidate_scorer.score(item, scenes, audio_features) for item in raw_candidates]
-                candidates = self.container.shorts_duplicate_filter.filter(scored, self.candidate_settings.count)
+                if ai_settings.get("enabled", False):
+                    self.progress.emit(
+                        "10. Локальный AI-анализ",
+                        f"{ai_settings.get('model', 'qwen3:14b')} сравнивает смысловые моменты; исходник остаётся на компьютере.",
+                        88,
+                    )
+                analysis_result = self.container.shorts_hybrid_analyzer.analyse(
+                    scored, transcript, scenes, audio_features,
+                    self.container.shorts_semantic_backend, ai_settings,
+                    SemanticCache(self.paths.analysis / "semantic_cache.json"), self.token,
+                    content_type=self.candidate_settings.content_type,
+                    requested_count=(
+                        int(ai_settings.get("final_count", 5))
+                        if ai_settings.get("enabled", False) else self.candidate_settings.count
+                    ),
+                )
+                candidates = analysis_result.candidates
                 candidates_path.write_text(json.dumps([asdict(item) for item in candidates], ensure_ascii=False, indent=2), encoding="utf-8")
                 cache.mark_complete("candidates", candidate_config)
                 manifest.candidates = [asdict(item) for item in candidates]
+                manifest.analysis_settings = candidate_config
                 store.save(manifest)
-            self.progress.emit("11. Ожидание пользователя", f"Подготовлено {len(candidates)} непохожих кандидатов для ручной проверки.", 90)
-            self.finished.emit({"transcript": transcript, "candidates": candidates, "scenes": scenes, "audio_features": audio_features})
+            if analysis_result and analysis_result.fallback_reason:
+                summary = f"AI недоступен — применён эвристический fallback: {analysis_result.fallback_reason}"
+            elif analysis_result and analysis_result.used_ai:
+                source = "semantic cache" if analysis_result.cache_hit else analysis_result.model
+                summary = f"Гибридная оценка завершена: {source}."
+            else:
+                summary = "Использована эвристическая оценка."
+            self.progress.emit("11. Ожидание пользователя", f"Подготовлено {len(candidates)} непохожих кандидатов. {summary}", 92)
+            self.finished.emit({
+                "transcript": transcript, "candidates": candidates, "scenes": scenes,
+                "audio_features": audio_features, "analysis_result": analysis_result,
+            })
         except Exception as exc:
             from creator_assistant.domain.errors import JobCancelledError
             if isinstance(exc, JobCancelledError) or self.token.is_cancelled:
@@ -468,7 +498,14 @@ class ShortsTab(QWidget):
         self.candidate_list.set_candidates(candidates)
         if self.paths:
             self.render_queue.set_context(candidates, self.paths.renders)
-        self.progress_panel.update_state("Анализ готов", f"Найдено {len(candidates)} кандидатов. Эвристическая оценка требует проверки человеком.", 90)
+        result = payload.get("analysis_result")
+        if result and result.used_ai:
+            detail = f"гибридный локальный AI ({'cache' if result.cache_hit else result.model})"
+        elif result and result.fallback_reason:
+            detail = f"эвристический fallback: {result.fallback_reason}"
+        else:
+            detail = "эвристическая оценка"
+        self.progress_panel.update_state("Анализ готов", f"Найдено {len(candidates)} кандидатов · {detail}.", 92)
 
     @Slot(object)
     def _edit_candidate(self, candidate) -> None:

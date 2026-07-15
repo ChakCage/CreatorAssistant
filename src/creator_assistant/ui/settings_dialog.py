@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
     QMessageBox,
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
 from creator_assistant.ui.workers import FunctionWorker, UiWorkerBridge
 from creator_assistant.domain.youtube_auth import BROWSERS
 from creator_assistant.services.storage_service import default_temp_root
+from creator_assistant.services.shorts.semantic_backend import OllamaSemanticScorer
 from creator_assistant.domain.author_presets import merge_presets
 from creator_assistant.infrastructure.project_index import ProjectRoot
 from creator_assistant.infrastructure.windows_paths import discover_author_folders
@@ -149,6 +151,54 @@ class SettingsDialog(QDialog):
             "Для проекта Creator Assistant используется папка Shorts; для отдельного видео — <название> Shorts."
         )
         shorts_form.addRow(self.auto_shorts_project_folder)
+        ai = settings.get("shorts_ai", {})
+        self.shorts_ai_enabled = QCheckBox("Использовать локальную AI-оценку кандидатов")
+        self.shorts_ai_enabled.setChecked(bool(ai.get("enabled", True)))
+        self.shorts_ai_backend = QComboBox()
+        self.shorts_ai_backend.addItem("Ollama (локально)", "ollama")
+        self.shorts_ai_backend.addItem("Отключено", "disabled")
+        self.shorts_ai_backend.setCurrentIndex(max(0, self.shorts_ai_backend.findData(ai.get("backend", "ollama"))))
+        self.shorts_ai_endpoint = QLineEdit(str(ai.get("endpoint", "http://127.0.0.1:11434")))
+        self.shorts_ai_model = QLineEdit(str(ai.get("model", "qwen3:14b")))
+        self.shorts_ai_mode = QComboBox()
+        for label, value in (("Быстро", "fast"), ("Сбалансированно", "balanced"), ("Качество", "quality")):
+            self.shorts_ai_mode.addItem(label, value)
+        self.shorts_ai_mode.setCurrentIndex(max(0, self.shorts_ai_mode.findData(ai.get("mode", "balanced"))))
+        self.shorts_ai_preliminary = QSpinBox()
+        self.shorts_ai_preliminary.setRange(10, 80)
+        self.shorts_ai_preliminary.setValue(int(ai.get("preliminary_count", 40)))
+        self.shorts_ai_final = QSpinBox()
+        self.shorts_ai_final.setRange(1, 20)
+        self.shorts_ai_final.setValue(int(ai.get("final_count", 5)))
+        self.shorts_ai_timeout = QSpinBox()
+        self.shorts_ai_timeout.setRange(10, 900)
+        self.shorts_ai_timeout.setSuffix(" сек")
+        self.shorts_ai_timeout.setValue(int(ai.get("timeout", 180)))
+        self.shorts_ai_fallback = QCheckBox("Fallback на эвристику при ошибке")
+        self.shorts_ai_fallback.setChecked(bool(ai.get("fallback", True)))
+        self.shorts_ai_cache = QCheckBox("Кэшировать смысловую оценку")
+        self.shorts_ai_cache.setChecked(bool(ai.get("cache", True)))
+        self.shorts_ai_global = QCheckBox("Глобально сравнивать финалистов")
+        self.shorts_ai_global.setChecked(bool(ai.get("global_comparison", True)))
+        self.shorts_ai_show_reasons = QCheckBox("Показывать объяснения AI")
+        self.shorts_ai_show_reasons.setChecked(bool(ai.get("show_reasons", True)))
+        self.shorts_ai_status = QLabel("Проверка не выполнена")
+        self.shorts_ai_status.setWordWrap(True)
+        self.shorts_ai_test = QPushButton("Проверить Ollama и модель")
+        self.shorts_ai_test.clicked.connect(self._test_shorts_ai)
+        shorts_form.addRow(self.shorts_ai_enabled)
+        shorts_form.addRow("Backend", self.shorts_ai_backend)
+        shorts_form.addRow("API", self.shorts_ai_endpoint)
+        shorts_form.addRow("Модель", self.shorts_ai_model)
+        shorts_form.addRow("Режим", self.shorts_ai_mode)
+        shorts_form.addRow("Предварительных", self.shorts_ai_preliminary)
+        shorts_form.addRow("Финальных", self.shorts_ai_final)
+        shorts_form.addRow("Timeout", self.shorts_ai_timeout)
+        shorts_form.addRow(self.shorts_ai_fallback)
+        shorts_form.addRow(self.shorts_ai_cache)
+        shorts_form.addRow(self.shorts_ai_global)
+        shorts_form.addRow(self.shorts_ai_show_reasons)
+        shorts_form.addRow(self.shorts_ai_test, self.shorts_ai_status)
         content_layout.addWidget(shorts_group)
 
         access_group = QGroupBox("Доступ к YouTube")
@@ -735,6 +785,26 @@ class SettingsDialog(QDialog):
         self.auto_find_button.setText("Найти программы автоматически")
         QMessageBox.warning(self, "Автоматический поиск", message)
 
+    def _test_shorts_ai(self) -> None:
+        self.shorts_ai_test.setEnabled(False)
+        self.shorts_ai_status.setText("Проверяю локальный API…")
+        QApplication.processEvents()
+        try:
+            backend = OllamaSemanticScorer(
+                endpoint=self.shorts_ai_endpoint.text().strip(),
+                model=self.shorts_ai_model.text().strip(),
+                timeout=min(30, self.shorts_ai_timeout.value()),
+            )
+            info = backend.model_info()
+            size = float(info.get("size", 0) or 0) / 1024**3
+            self.shorts_ai_status.setText(
+                f"Готово: {info.get('name') or info.get('model')} · {size:.1f} ГБ · localhost"
+            )
+        except Exception as exc:
+            self.shorts_ai_status.setText(f"Недоступно: {exc}")
+        finally:
+            self.shorts_ai_test.setEnabled(True)
+
     def _save(self) -> None:
         save_clicked_at = time.monotonic()
         for key, edit in self.path_edits.items():
@@ -755,6 +825,22 @@ class SettingsDialog(QDialog):
         self.result_settings["auto_open_vegas_project"] = self.auto_open_vegas.isChecked()
         self.result_settings["suggest_remember_author"] = self.suggest_remember_author.isChecked()
         self.result_settings["auto_shorts_project_folder"] = self.auto_shorts_project_folder.isChecked()
+        previous_ai = self.result_settings.get("shorts_ai", {})
+        self.result_settings["shorts_ai"] = {
+            "enabled": self.shorts_ai_enabled.isChecked() and self.shorts_ai_backend.currentData() != "disabled",
+            "backend": self.shorts_ai_backend.currentData(),
+            "endpoint": self.shorts_ai_endpoint.text().strip(),
+            "model": self.shorts_ai_model.text().strip(),
+            "mode": self.shorts_ai_mode.currentData(),
+            "preliminary_count": self.shorts_ai_preliminary.value(),
+            "final_count": self.shorts_ai_final.value(),
+            "timeout": self.shorts_ai_timeout.value(),
+            "fallback": self.shorts_ai_fallback.isChecked(),
+            "cache": self.shorts_ai_cache.isChecked(),
+            "show_reasons": self.shorts_ai_show_reasons.isChecked(),
+            "global_comparison": self.shorts_ai_global.isChecked(),
+            "weights": previous_ai.get("weights", {"semantic": 0.55, "heuristic": 0.25, "activity": 0.15, "uniqueness": 0.05}),
+        }
         self.result_settings["reaper_initial_audio"] = self.initial_audio.currentData()
         self.result_settings["whisper_backend"] = self.whisper_backend.currentData()
         self.result_settings["whisper_model"] = self.whisper_model.currentData()
