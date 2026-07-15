@@ -39,6 +39,7 @@ from creator_assistant.services.shorts.candidate_scorer import HeuristicCandidat
 from creator_assistant.services.shorts.duplicate_filter import DuplicateFilter
 from creator_assistant.services.shorts.proxy_service import AnalysisProxyService
 from creator_assistant.services.shorts.render_service import ShortsRenderService
+from creator_assistant.services.shorts.semantic_backend import DisabledSemanticScorer, OllamaSemanticScorer
 from creator_assistant.services.shorts.scene_detection_service import SceneDetectionService
 from creator_assistant.services.shorts.transcription.disabled import DisabledTranscriptionBackend
 from creator_assistant.services.shorts.transcription.existing_whisper import ExistingWhisperBackend
@@ -161,6 +162,15 @@ class ServiceContainer:
         self.shorts_audio_activity = AudioActivityService(self.runner, ffmpeg_path)
         self.shorts_candidate_generator = CandidateGenerator()
         self.shorts_candidate_scorer = HeuristicCandidateScorer()
+        ai_settings = self.settings.get("shorts_ai", {})
+        if ai_settings.get("enabled", False) and ai_settings.get("backend", "ollama") == "ollama":
+            self.shorts_semantic_backend = OllamaSemanticScorer(
+                endpoint=str(ai_settings.get("endpoint", "http://127.0.0.1:11434")),
+                model=str(ai_settings.get("model", "qwen3:14b")),
+                timeout=float(ai_settings.get("timeout_seconds", 180)),
+            )
+        else:
+            self.shorts_semantic_backend = DisabledSemanticScorer()
         self.shorts_duplicate_filter = DuplicateFilter()
         self.shorts_render = ShortsRenderService(
             self.runner, ffmpeg_path, ffprobe_path,
