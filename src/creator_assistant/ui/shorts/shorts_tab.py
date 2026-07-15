@@ -24,6 +24,7 @@ from creator_assistant.domain.job import CancellationToken
 from creator_assistant.domain.shorts.models import RenderJob, SourceInfo, SubtitleCue
 from creator_assistant.services.shorts.cache import ShortsCache
 from creator_assistant.services.shorts.candidate_generator import CandidateSettings
+from creator_assistant.services.shorts.hybrid_analyzer import HybridAnalysisResult
 from creator_assistant.services.shorts.manifest import ShortsManifestStore
 from creator_assistant.services.shorts.review_service import CandidateReviewService
 from creator_assistant.services.shorts.render_service import unique_output_path
@@ -145,7 +146,14 @@ class _AnalysisWorker(QObject):
             if cache.stage_valid("candidates", candidates_path, candidate_config):
                 from creator_assistant.domain.shorts.models import Candidate
                 candidates = [Candidate(**item) for item in json.loads(candidates_path.read_text(encoding="utf-8"))]
-                analysis_result = None
+                restored_ai = any(item.selection_source == "hybrid_ai" for item in candidates)
+                analysis_result = HybridAnalysisResult(
+                    candidates=candidates,
+                    used_ai=restored_ai,
+                    cache_hit=restored_ai,
+                    backend=str(ai_settings.get("backend", "disabled")),
+                    model=str(ai_settings.get("model", "")),
+                )
             else:
                 raw_candidates = self.container.shorts_candidate_generator.generate(transcript, scenes, audio_features, self.candidate_settings)
                 scored = [self.container.shorts_candidate_scorer.score(item, scenes, audio_features) for item in raw_candidates]
