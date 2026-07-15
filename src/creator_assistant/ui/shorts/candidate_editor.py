@@ -17,7 +17,7 @@ except ImportError:
     QAudioOutput = QMediaPlayer = QVideoWidget = None
     MULTIMEDIA_AVAILABLE = False
 
-from creator_assistant.domain.shorts.models import Candidate
+from creator_assistant.domain.shorts.models import Candidate, Transcript
 
 
 def format_time(milliseconds: int) -> str:
@@ -78,11 +78,13 @@ class SeekSlider(QSlider):
 
 class CandidateEditor(QWidget):
     boundaries_saved = Signal(object, float, float)
+    active_boundary_changed = Signal(object, float, float, str)
     status_changed = Signal(object, str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.candidate: Candidate | None = None
+        self.transcript: Transcript | None = None
         self.proxy: Path | None = None
         self._updating_timeline = False
         self._resume_after_scrub = False
@@ -148,8 +150,7 @@ class CandidateEditor(QWidget):
         self.duration = QLabel("0.000 сек")
         self.alternatives = QComboBox()
         self.alternatives.setToolTip(
-            "Другие варианты начала и конца для этого же Short. "
-            "Выбор варианта заполнит поля «Начало» и «Конец»."
+            "Другие варианты начала и конца этого же сюжетного момента."
         )
         self.alternatives.currentIndexChanged.connect(self._choose_alternative)
         form.addRow("Начало", self._boundary_row(self.start))
@@ -190,18 +191,27 @@ class CandidateEditor(QWidget):
             row.addWidget(button)
         return widget
 
-    def set_candidate(self, candidate: Candidate, proxy: Path) -> None:
+    def set_candidate(self, candidate: Candidate, proxy: Path, transcript: Transcript | None = None) -> None:
         if self.player:
             self.player.pause()
-        self.candidate, self.proxy = candidate, proxy
+        self.candidate, self.proxy, self.transcript = candidate, proxy, transcript
         self.heading.setText(f"{candidate.id} · score {candidate.score:.1f}\n{candidate.text}")
         self.start.setValue(candidate.start)
         self.end.setValue(candidate.end)
         self.alternatives.blockSignals(True)
         self.alternatives.clear()
-        self.alternatives.addItem(f"Основные: {candidate.start:.3f}–{candidate.end:.3f}", [candidate.start, candidate.end])
-        for start, end in candidate.alternatives:
-            self.alternatives.addItem(f"{start:.3f}–{end:.3f}", [start, end])
+        variants = self._display_variants(candidate)
+        for variant in variants:
+            self.alternatives.addItem(variant["label"], variant)
+        current_id = candidate.selected_boundary_variant_id or "main"
+        index = 0
+        for row in range(self.alternatives.count()):
+            value = self.alternatives.itemData(row)
+            if isinstance(value, dict) and value.get("id") == current_id:
+                index = row
+                break
+        if index >= 0:
+            self.alternatives.setCurrentIndex(index)
         self.alternatives.blockSignals(False)
         self._reset_timeline()
         if self.player:
@@ -289,11 +299,77 @@ class CandidateEditor(QWidget):
 
     def _choose_alternative(self) -> None:
         value = self.alternatives.currentData()
-        if value and len(value) == 2:
-            self.start.setValue(float(value[0]))
-            self.end.setValue(float(value[1]))
+        if isinstance(value, dict):
+            start, end = float(value["start"]), float(value["end"])
+            self.start.setValue(start)
+            self.end.setValue(end)
             self._seek_relative(0)
+            if self.candidate:
+                self.active_boundary_changed.emit(self.candidate, start, end, str(value.get("id", "main")))
 
     def _save(self) -> None:
         if self.candidate:
             self.boundaries_saved.emit(self.candidate, self.start.value(), self.end.value())
+
+    def _display_variants(self, candidate: Candidate) -> list[dict]:
+        main = {
+            "id": "main",
+            "start": candidate.start,
+            "end": candidate.end,
+            "score": candidate.final_score or candidate.score,
+            "reason": "текущие рабочие границы",
+        }
+        alternatives = []
+        for index, bounds in enumerate(candidate.alternatives, 1):
+            if len(bounds) != 2:
+                continue
+            start, end = float(bounds[0]), float(bounds[1])
+            if end <= start or end - start < 10 or end - start > 60:
+                continue
+            if abs(start - candidate.start) < 0.5 and abs(end - candidate.end) < 0.5:
+                continue
+            duration_score = 100 - abs((end - start) - min(58, max(35, candidate.duration))) * 1.2
+            difference_score = min(12, abs(start - candidate.start) + abs(end - candidate.end))
+            score = round((candidate.final_score or candidate.score) * 0.8 + duration_score * 0.15 + difference_score * 0.05, 1)
+            alternatives.append({
+                "id": f"alt_{index:03d}",
+                "start": start,
+                "end": end,
+                "score": score,
+                "reason": "похожий сюжет с другой точкой входа/выхода",
+            })
+        alternatives.sort(key=lambda item: -float(item["score"]))
+        deduped = []
+        for item in alternatives:
+            if any(abs(item["start"] - old["start"]) < 1.5 and abs(item["end"] - old["end"]) < 1.5 for old in deduped):
+                continue
+            deduped.append(item)
+            if len(deduped) == 3:
+                break
+        variants = [main] + deduped
+        for index, item in enumerate(variants):
+            item["label"] = self._variant_label(item, index)
+        return variants
+
+    def _variant_label(self, variant: dict, index: int) -> str:
+        start, end = float(variant["start"]), float(variant["end"])
+        text = self._transcript_for_range(start, end)
+        words = text.split()
+        beginning = " ".join(words[:8]) or "—"
+        ending = " ".join(words[-8:]) or "—"
+        duration = end - start
+        title = "Основные границы" if index == 0 else f"Вариант {index}"
+        return (
+            f"{title} · {duration:.0f} сек · {start:.2f}–{end:.2f} · "
+            f"Начало: «{beginning}» · Финал: «{ending}» · Оценка: {variant['score']:.0f}"
+        )
+
+    def _transcript_for_range(self, start: float, end: float) -> str:
+        if not self.transcript:
+            return self.candidate.text if self.candidate else ""
+        parts = [
+            segment.text.strip()
+            for segment in self.transcript.segments
+            if segment.end > start and segment.start < end and segment.text.strip()
+        ]
+        return " ".join(parts)

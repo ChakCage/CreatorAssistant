@@ -61,7 +61,7 @@ def test_candidate_settings_are_dirty_then_kept_separately(tmp_path):
     assert "автосохранение" in editor.dirty_label.text()
     editor._apply_configuration()
     assert first.subtitle_settings["style"] == "gaming"
-    assert first.subtitle_settings["size"] == 68
+    assert first.subtitle_settings["size"] == 70
     editor.set_context(second, transcript(), paths)
     editor.position.setCurrentIndex(editor.position.findData("upper"))
     editor._apply_configuration()
@@ -123,4 +123,52 @@ def test_solid_color_preview_has_black_canvas_and_scaled_foreground(tmp_path):
     preview = editor.preview.grab().toImage()
     assert preview.pixelColor(135, 460).lightness() < 20
     assert preview.pixelColor(135, 240).red() > 180
+    assert qt_app is QApplication.instance()
+
+
+def test_candidate_editor_shows_only_three_deduplicated_alternatives(tmp_path, monkeypatch):
+    qt_app = app()
+    monkeypatch.setattr(candidate_editor_module, "MULTIMEDIA_AVAILABLE", False)
+    editor = CandidateEditor()
+    candidate = Candidate(
+        "short_001", 10, 55, 90, "основной текст",
+        alternatives=[
+            [8, 53], [8.4, 53.2], [12, 57], [20, 75], [1, 70], [30, 34], [14, 58],
+        ],
+    )
+    editor.set_candidate(candidate, tmp_path / "proxy.mp4", transcript())
+    assert editor.alternatives.count() == 4
+    assert "Основные границы" in editor.alternatives.itemText(0)
+    assert "Вариант 1" in editor.alternatives.itemText(1)
+    assert qt_app is QApplication.instance()
+
+
+def test_candidate_editor_alternative_selection_updates_active_range(tmp_path, monkeypatch):
+    qt_app = app()
+    monkeypatch.setattr(candidate_editor_module, "MULTIMEDIA_AVAILABLE", False)
+    editor = CandidateEditor()
+    candidate = Candidate("short_001", 10, 20, 90, "старый текст", alternatives=[[6, 16]])
+    changed = []
+    editor.active_boundary_changed.connect(lambda item, start, end, variant: changed.append((item.id, start, end, variant)))
+    editor.set_candidate(candidate, tmp_path / "proxy.mp4", transcript())
+    editor.alternatives.setCurrentIndex(1)
+    assert editor.start.value() == 6
+    assert editor.end.value() == 16
+    assert changed[-1] == ("short_001", 6, 16, "alt_001")
+    assert qt_app is QApplication.instance()
+
+
+def test_subtitle_offset_autosaves_and_preview_uses_scaled_geometry(tmp_path):
+    qt_app = app()
+    paths = SimpleNamespace(subtitles=tmp_path)
+    candidate = Candidate("short_001", 10, 20, 90, "one")
+    editor = SubtitleEditor()
+    editor.set_context(candidate, transcript(), paths)
+    editor.offset.setValue(100)
+    editor._apply_configuration()
+    assert candidate.subtitle_settings["vertical_offset"] == 100
+    editor.preview.resize(216, 384)
+    editor.preview.set_preview(candidate, candidate.subtitle_settings, candidate.layout_settings, "Крупный пример")
+    image = editor.preview.grab().toImage()
+    assert image.width() == 216
     assert qt_app is QApplication.instance()

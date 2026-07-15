@@ -4,30 +4,19 @@ import re
 from pathlib import Path
 from typing import Iterable
 
-from PySide6.QtGui import QFont, QFontMetricsF, QGuiApplication
-
 from creator_assistant.domain.shorts.models import Candidate, SubtitleCue, Transcript
+from creator_assistant.services.shorts.subtitle_layout import (
+    FRAME_WIDTH,
+    MAX_TEXT_WIDTH,
+    MIN_FONT_SIZE,
+    POSITION_Y,
+    STYLE_PRESETS,
+    SubtitleLayoutCalculator,
+    font_metrics,
+    pixel_pages,
+    resolved_style,
+)
 from creator_assistant.services.shorts.transcription_service import srt_timestamp
-
-
-FRAME_WIDTH = 1080
-MAX_TEXT_WIDTH = round(FRAME_WIDTH * 0.82)
-MIN_FONT_SIZE = 44
-POSITION_Y = {"upper": 420, "center": 930, "lower": 1450}
-STYLE_PRESETS = {
-    "clean": {
-        "font": "Segoe UI", "size": 58, "outline": 3, "shadow": 1,
-        "primary": "&H00FFFFFF", "secondary": "&H000000FF", "spacing": 0,
-    },
-    "large": {
-        "font": "Segoe UI", "size": 72, "outline": 5, "shadow": 2,
-        "primary": "&H00FFFFFF", "secondary": "&H000000FF", "spacing": -1,
-    },
-    "gaming": {
-        "font": "Arial Black", "size": 68, "outline": 6, "shadow": 4,
-        "primary": "&H0000D7FF", "secondary": "&H00FFFFFF", "spacing": 1,
-    },
-}
 
 
 def wrap_subtitle(text: str, maximum: int = 36, lines: int = 2) -> str:
@@ -47,90 +36,16 @@ def wrap_subtitle(text: str, maximum: int = 36, lines: int = 2) -> str:
     return "\n".join(result)
 
 
+def _metrics(font_name: str, size: int):
+    return font_metrics(font_name, size)
+
+
 def ass_timestamp(seconds: float) -> str:
     centiseconds = max(0, round(seconds * 100))
     hours, remainder = divmod(centiseconds, 360000)
     minutes, remainder = divmod(remainder, 6000)
     secs, cents = divmod(remainder, 100)
     return f"{hours}:{minutes:02d}:{secs:02d}.{cents:02d}"
-
-
-def resolved_style(settings: dict) -> dict:
-    name = str(settings.get("style", "clean"))
-    preset = dict(STYLE_PRESETS.get(name, STYLE_PRESETS["clean"]))
-    # A user may tune the active preset, but choosing a preset always establishes
-    # a genuinely distinct minimum size/outline/shadow.
-    preset["size"] = max(int(settings.get("size", preset["size"])), preset["size"])
-    preset["outline"] = max(int(settings.get("outline", preset["outline"])), preset["outline"])
-    preset["shadow"] = max(int(settings.get("shadow", preset["shadow"])), preset["shadow"])
-    preset["name"] = name
-    return preset
-
-
-class _ApproximateFontMetrics:
-    def __init__(self, size: int) -> None:
-        self.size = size
-
-    def horizontalAdvance(self, text: str) -> float:  # noqa: N802 - mirrors Qt API
-        # Used only in non-GUI workers/tests. Rendering in the application uses
-        # QFontMetricsF from the same font that libass receives.
-        return sum(self.size * (0.34 if character.isspace() else 0.62) for character in text)
-
-
-def _metrics(font_name: str, size: int):
-    if QGuiApplication.instance() is None:
-        return _ApproximateFontMetrics(size)
-    font = QFont(font_name)
-    font.setPixelSize(size)
-    font.setBold(True)
-    return QFontMetricsF(font)
-
-
-def _split_oversized_word(word: str, metrics: QFontMetricsF, width: float) -> list[str]:
-    chunks: list[str] = []
-    current = ""
-    for character in word:
-        proposed = current + character
-        if current and metrics.horizontalAdvance(proposed) > width:
-            chunks.append(current)
-            current = character
-        else:
-            current = proposed
-    if current:
-        chunks.append(current)
-    return chunks
-
-
-def pixel_pages(text: str, font_name: str, size: int, outline: int, max_lines: int = 2, max_width: int = MAX_TEXT_WIDTH) -> list[str]:
-    """Wrap text by measured pixel width and return pages of at most two lines."""
-    available = min(MAX_TEXT_WIDTH, max_width) - 2 * (outline + 4)
-    metrics = _metrics(font_name, size)
-    tokens: list[str] = []
-    for word in text.replace("\n", " ").split():
-        if metrics.horizontalAdvance(word) <= available:
-            tokens.append(word)
-        else:
-            tokens.extend(_split_oversized_word(word, metrics, available))
-    if not tokens:
-        return []
-    pages: list[str] = []
-    lines: list[str] = []
-    current = ""
-    for token in tokens:
-        proposed = f"{current} {token}".strip()
-        if not current or metrics.horizontalAdvance(proposed) <= available:
-            current = proposed
-            continue
-        lines.append(current)
-        current = token
-        if len(lines) == max(1, min(2, max_lines)):
-            pages.append("\n".join(lines))
-            lines = []
-    if current:
-        lines.append(current)
-    if lines:
-        pages.append("\n".join(lines))
-    return pages
 
 
 def fit_cues(cues: Iterable[SubtitleCue], settings: dict) -> tuple[list[SubtitleCue], dict]:
@@ -142,7 +57,7 @@ def fit_cues(cues: Iterable[SubtitleCue], settings: dict) -> tuple[list[Subtitle
     size = style["size"]
     words = [word for cue in cues for word in cue.text.replace("\n", " ").split()]
     while size > int(settings.get("minimum_size", MIN_FONT_SIZE)):
-        metrics = _metrics(style["font"], size)
+        metrics = font_metrics(style["font"], size, int(style.get("weight", 700)))
         if not words or max(metrics.horizontalAdvance(word) for word in words) <= available:
             break
         size -= 2
@@ -150,7 +65,7 @@ def fit_cues(cues: Iterable[SubtitleCue], settings: dict) -> tuple[list[Subtitle
     result: list[SubtitleCue] = []
     max_lines = min(2, int(settings.get("lines", 2)))
     for cue in cues:
-        pages = pixel_pages(cue.text, style["font"], size, style["outline"], max_lines, max_width)
+        pages = pixel_pages(cue.text, style["font"], size, style["outline"], max_lines, max_width, int(style.get("weight", 700)))
         if not pages:
             continue
         duration = max(0.01, cue.end - cue.start)
@@ -183,8 +98,8 @@ class SubtitleService:
             srt_lines.extend([str(index), f"{srt_timestamp(cue.start)} --> {srt_timestamp(cue.end)}", cue.text, ""])
         srt_path.write_text("\n".join(srt_lines), encoding="utf-8")
 
-        position = str(settings.get("position", "lower"))
-        y = POSITION_Y.get(position, POSITION_Y["lower"])
+        layout = SubtitleLayoutCalculator().calculate(cues[0].text if cues else "", {**settings, "size": style["size"]})
+        y = layout.y
         back = "&H80000000" if settings.get("background", False) else "&H00000000"
         border_style = 3 if settings.get("background", False) else 1
         side_margin = max(80, int(settings.get("safe_margin", 90)), round((FRAME_WIDTH - MAX_TEXT_WIDTH) / 2) + style["outline"])

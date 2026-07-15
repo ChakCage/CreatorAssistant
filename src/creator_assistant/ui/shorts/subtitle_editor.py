@@ -7,12 +7,13 @@ from PySide6.QtCore import QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
-    QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QPushButton, QSlider, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from creator_assistant.domain.shorts.models import SubtitleCue
+from creator_assistant.services.shorts.subtitle_layout import SubtitleLayoutCalculator
 from creator_assistant.services.shorts.subtitle_service import (
-    POSITION_Y, STYLE_PRESETS, SubtitleService, pixel_pages, resolved_style,
+    STYLE_PRESETS, SubtitleService, resolved_style,
 )
 from creator_assistant.ui.shorts.vertical_layout_panel import VerticalLayoutPanel
 
@@ -33,6 +34,7 @@ class VerticalFramePreview(QWidget):
         self.layout_settings = dict(layout_settings)
         if sample.strip():
             self.sample = sample.replace("\n", " ")
+        self._last_mode = self.layout_settings.get("mode", "center_crop")
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt API
@@ -81,30 +83,31 @@ class VerticalFramePreview(QWidget):
             painter.drawPixmap(frame, scaled, QRect(x, y, 1080, 1920))
         painter.restore()
 
-        style = resolved_style(self.settings)
-        max_width = min(886, 1080 - 2 * max(80, int(self.settings.get("safe_margin", 90))))
-        pages = pixel_pages(self.sample, style["font"], style["size"], style["outline"], 2, max_width)
-        text = pages[0] if pages else self.sample
-        font = QFont(style["font"])
-        font.setPixelSize(max(8, round(style["size"] * scale)))
-        font.setBold(True)
+        layout = SubtitleLayoutCalculator().calculate(self.sample, self.settings)
+        font = QFont(layout.font_name)
+        font.setPixelSize(max(8, round(layout.font_size * scale)))
+        font.setWeight(QFont.Weight.Bold)
         painter.setFont(font)
-        y = POSITION_Y.get(str(self.settings.get("position", "lower")), POSITION_Y["lower"])
-        box = QRectF(left + 90 * scale, top + (y - 150) * scale, 900 * scale, 300 * scale)
+        box = QRectF(
+            left + (layout.x - layout.width / 2) * scale,
+            top + (layout.y - layout.height / 2) * scale,
+            layout.width * scale,
+            layout.height * scale,
+        )
         flags = Qt.AlignCenter | Qt.TextWordWrap
-        if self.settings.get("background", False):
+        if layout.background:
             painter.fillRect(box, QColor(0, 0, 0, 130))
-        if style["shadow"]:
-            offset = max(1, round(style["shadow"] * 2 * scale))
+        if layout.shadow:
+            offset = max(1, round(layout.shadow * 2 * scale))
             painter.setPen(QColor(0, 0, 0, 170))
-            painter.drawText(box.translated(offset, offset), flags, text)
-        radius = max(1, round(style["outline"] * scale))
+            painter.drawText(box.translated(offset, offset), flags, layout.text)
+        radius = max(1, round(layout.outline * scale))
         painter.setPen(QColor("#000000"))
         for dx, dy in ((-radius, 0), (radius, 0), (0, -radius), (0, radius), (-radius, -radius), (-radius, radius), (radius, -radius), (radius, radius)):
-            painter.drawText(box.translated(dx, dy), flags, text)
-        color = QColor("#ffd700") if style["name"] == "gaming" else QColor("#ffffff")
+            painter.drawText(box.translated(dx, dy), flags, layout.text)
+        color = QColor("#ffd700") if str(self.settings.get("style", "clean")) == "gaming" else QColor("#ffffff")
         painter.setPen(color)
-        painter.drawText(box, flags, text)
+        painter.drawText(box, flags, layout.text)
         painter.setPen(QColor(255, 255, 255, 70))
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(QRectF(left + 90 * scale, top + 120 * scale, 900 * scale, 1560 * scale))
@@ -147,13 +150,27 @@ class SubtitleEditor(QWidget):
             self.position.addItem(label, value)
         self.size = QSpinBox(); self.size.setRange(44, 120); self.size.setValue(58)
         self.maximum = QSpinBox(); self.maximum.setRange(12, 80); self.maximum.setValue(36)
+        self.maximum.setToolTip("Предварительный ориентир переноса. Финальная ширина рассчитывается по фактическому размеру текста в пикселях")
         self.lines = QSpinBox(); self.lines.setRange(1, 2); self.lines.setValue(2)
         self.outline = QSpinBox(); self.outline.setRange(0, 10); self.outline.setValue(3)
         self.shadow = QSpinBox(); self.shadow.setRange(0, 10); self.shadow.setValue(1)
         self.background = QCheckBox("Полупрозрачный фон")
         self.margin = QSpinBox(); self.margin.setRange(80, 500); self.margin.setValue(120)
-        for label, control in (("Стиль", self.style), ("Положение", self.position), ("Размер", self.size), ("Черновой перенос, символов", self.maximum), ("Строк", self.lines), ("Обводка", self.outline), ("Тень", self.shadow), ("Безопасный отступ", self.margin)):
+        self.offset = QSlider(Qt.Horizontal); self.offset.setRange(-300, 300); self.offset.setSingleStep(10); self.offset.setPageStep(10); self.offset.setValue(0)
+        self.offset_value = QSpinBox(); self.offset_value.setRange(-300, 300); self.offset_value.setSingleStep(10); self.offset_value.setSuffix(" px")
+        self.offset_reset = QPushButton("Сбросить")
+        self.offset.valueChanged.connect(self.offset_value.setValue)
+        self.offset_value.valueChanged.connect(self.offset.setValue)
+        self.offset_reset.clicked.connect(lambda: self.offset.setValue(0))
+        offset_row = QWidget()
+        offset_layout = QHBoxLayout(offset_row)
+        offset_layout.setContentsMargins(0, 0, 0, 0)
+        offset_layout.addWidget(self.offset, 1)
+        offset_layout.addWidget(self.offset_value)
+        offset_layout.addWidget(self.offset_reset)
+        for label, control in (("Стиль", self.style), ("Положение", self.position), ("Размер", self.size), ("Примерная длина строки", self.maximum), ("Строк", self.lines), ("Обводка", self.outline), ("Тень", self.shadow), ("Безопасный отступ", self.margin)):
             style_form.addRow(label, control)
+        style_form.addRow("Смещение по вертикали", offset_row)
         style_form.addRow(self.background)
         self.preview = VerticalFramePreview()
         top.addWidget(self.vertical)
@@ -173,7 +190,7 @@ class SubtitleEditor(QWidget):
         layout.addLayout(actions)
 
         self.style.currentIndexChanged.connect(self._style_selected)
-        for control in (self.position, self.size, self.maximum, self.lines, self.outline, self.shadow, self.margin):
+        for control in (self.position, self.size, self.maximum, self.lines, self.outline, self.shadow, self.margin, self.offset):
             signal = control.currentIndexChanged if isinstance(control, QComboBox) else control.valueChanged
             signal.connect(self._mark_dirty)
         self.background.toggled.connect(self._mark_dirty)
@@ -204,6 +221,7 @@ class SubtitleEditor(QWidget):
         self.shadow.setValue(int(settings.get("shadow", preset["shadow"])))
         self.background.setChecked(bool(settings.get("background", False)))
         self.margin.setValue(int(settings.get("safe_margin", 120)))
+        self.offset.setValue(int(settings.get("vertical_offset", 0)))
         self.vertical.set_value(candidate.layout_settings or {})
         self._show(cues)
         self._loading = False
@@ -268,6 +286,7 @@ class SubtitleEditor(QWidget):
             "size": self.size.value(), "maximum": self.maximum.value(), "lines": self.lines.value(),
             "outline": self.outline.value(), "shadow": self.shadow.value(),
             "background": self.background.isChecked(), "safe_margin": self.margin.value(),
+            "vertical_offset": self.offset.value(),
             "minimum_size": 44,
             "cues": [{"start": cue.start, "end": cue.end, "text": cue.text} for cue in self._cues()],
         }
@@ -279,17 +298,30 @@ class SubtitleEditor(QWidget):
         self.size.setValue(preset["size"])
         self.outline.setValue(preset["outline"])
         self.shadow.setValue(preset["shadow"])
-        self.maximum.setValue({"clean": 36, "large": 27, "gaming": 30}.get(str(self.style.currentData()), 36))
+        self.maximum.setValue({"clean": 36, "large": 24, "gaming": 28}.get(str(self.style.currentData()), 36))
         self._mark_dirty()
 
     def _mark_dirty(self, *_args) -> None:
         if self._loading or not self.candidate:
             return
+        self._clamp_offset_to_safe_area()
         self._dirty = True
         self.dirty_label.setText("Изменено · автосохранение…")
         self.dirty_label.setStyleSheet("color: #e6b450;")
         self._update_preview()
         self._save_timer.start()
+
+    def _clamp_offset_to_safe_area(self) -> None:
+        sample = self._cues()[0].text if self._cues() else "Пример безопасных субтитров"
+        layout = SubtitleLayoutCalculator().calculate(sample, self.current_settings())
+        if layout.clamped_vertical_offset != self.offset.value():
+            self.offset.blockSignals(True)
+            self.offset_value.blockSignals(True)
+            self.offset.setValue(layout.clamped_vertical_offset)
+            self.offset_value.setValue(layout.clamped_vertical_offset)
+            self.offset.blockSignals(False)
+            self.offset_value.blockSignals(False)
+            self.dirty_label.setText("Достигнут безопасный предел позиции")
 
     def _apply_configuration(self) -> None:
         if not self.candidate:

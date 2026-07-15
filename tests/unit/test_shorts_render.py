@@ -10,6 +10,8 @@ from creator_assistant.domain.shorts.models import Candidate, SourceInfo
 from creator_assistant.infrastructure.process_runner import ProcessResult
 from creator_assistant.services.shorts.filter_graph_builder import ShortsFilterGraphBuilder
 from creator_assistant.services.shorts.render_service import ShortsRenderService, safe_filename, unique_output_path
+from creator_assistant.services.shorts.subtitle_service import SubtitleService
+from creator_assistant.domain.shorts.models import SubtitleCue
 
 
 def source(path: Path, hdr=False):
@@ -121,3 +123,23 @@ def test_render_rejects_invalid_bounds_before_process(tmp_path):
     service = ShortsRenderService(None, "ffmpeg", "ffprobe", False, 0)
     with pytest.raises(InvalidClipError):
         service.render(source(tmp_path / "input.mp4"), Candidate("id", 30, 20, 1, ""), tmp_path / "x.ass", tmp_path / "x.mp4", CancellationToken())
+
+
+def test_subtitle_vertical_offset_is_written_to_ass_and_clamped(tmp_path):
+    service = SubtitleService()
+    ass = tmp_path / "out.ass"
+    service.write(
+        [SubtitleCue(0, 3, "Очень длинная русская строка для проверки позиции")],
+        tmp_path / "out.srt",
+        ass,
+        {"style": "clean", "position": "lower", "vertical_offset": 100, "safe_margin": 120, "lines": 2},
+    )
+    text = ass.read_text(encoding="utf-8-sig")
+    assert r"\pos(540,1585)" in text
+    service.write(
+        [SubtitleCue(0, 3, "Очень длинная русская строка для проверки позиции")],
+        tmp_path / "clamped.srt",
+        ass,
+        {"style": "large", "position": "lower", "vertical_offset": 300, "safe_margin": 220, "lines": 2},
+    )
+    assert r"\pos(540,1785)" not in ass.read_text(encoding="utf-8-sig")

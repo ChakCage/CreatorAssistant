@@ -96,6 +96,7 @@ class Candidate:
     selection_source: str = "heuristic"
     ai_model: str = ""
     ai_mode: str = ""
+    selected_boundary_variant_id: str = "main"
 
     @property
     def duration(self) -> float:

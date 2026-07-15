@@ -392,6 +392,7 @@ class ShortsTab(QWidget):
         self.candidate_list.selected.connect(self._edit_candidate)
         self.candidate_list.status_changed.connect(self._set_candidate_status)
         self.candidate_editor.status_changed.connect(self._set_candidate_status)
+        self.candidate_editor.active_boundary_changed.connect(self._active_boundary_changed)
         self.candidate_editor.boundaries_saved.connect(self._save_boundaries)
         self.subtitle_editor.saved.connect(self._subtitle_saved)
         self.subtitle_editor.configuration_changed.connect(self._subtitle_configuration_changed)
@@ -537,7 +538,7 @@ class ShortsTab(QWidget):
     def _edit_candidate(self, candidate) -> None:
         if not self.paths:
             return
-        self.candidate_editor.set_candidate(candidate, self.paths.cache / "analysis_proxy.mp4")
+        self.candidate_editor.set_candidate(candidate, self.paths.cache / "analysis_proxy.mp4", self.transcript)
         if self.transcript:
             self.subtitle_editor.set_context(candidate, self.transcript, self.paths)
         self.workspace.setCurrentWidget(self.candidate_editor)
@@ -640,23 +641,48 @@ class ShortsTab(QWidget):
 
     @Slot(object, float, float)
     def _save_boundaries(self, candidate, start: float, end: float) -> None:
+        self._apply_candidate_boundaries(candidate, start, end, candidate.selected_boundary_variant_id or "main", "Границы сохранены")
+
+    @Slot(object, float, float, str)
+    def _active_boundary_changed(self, candidate, start: float, end: float, variant_id: str) -> None:
+        self._apply_candidate_boundaries(candidate, start, end, variant_id, "Выбран вариант границ")
+
+    def _apply_candidate_boundaries(self, candidate, start: float, end: float, variant_id: str, title: str) -> None:
         if not self.review_service:
             return
         try:
             self.review_service.update_boundaries(candidate, start, end)
+            candidate.selected_boundary_variant_id = variant_id
+            if self.transcript:
+                candidate.text = self._transcript_for_range(start, end)
             rebuilt = []
             if self.transcript:
                 rebuilt = self.subtitle_editor.rebuild_for_boundaries(candidate, self.transcript)
             self.review_service.save(self.candidates)
             self.candidate_list.refresh()
+            if self.paths:
+                self.render_queue.set_context(self.candidates, self.paths.renders)
+                self.candidate_editor.set_candidate(candidate, self.paths.cache / "analysis_proxy.mp4", self.transcript)
+            if self.transcript and self.paths:
+                self.subtitle_editor.set_context(candidate, self.transcript, self.paths)
             detail = f"; локальные субтитры пересобраны ({len(rebuilt)} строк)" if rebuilt else ""
             self.progress_panel.update_state(
-                "Границы сохранены",
+                title,
                 f"{candidate.id}: {start:.3f}–{end:.3f} сек{detail}.",
                 92,
             )
         except Exception as exc:
             ErrorDialog(str(exc), repr(exc), self).exec()
+
+    def _transcript_for_range(self, start: float, end: float) -> str:
+        if not self.transcript:
+            return ""
+        parts = [
+            segment.text.strip()
+            for segment in self.transcript.segments
+            if segment.end > start and segment.start < end and segment.text.strip()
+        ]
+        return " ".join(parts)
 
     @Slot()
     def _analysis_cancelled(self) -> None:
