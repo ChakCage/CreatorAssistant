@@ -40,6 +40,10 @@ class FakeFfmpeg:
         target.write_bytes(b"proxy")
         return target
 
+    def remux_maximum_to_mp4(self, source, target, cancellation, **kwargs):
+        target.write_bytes(b"mp4")
+        return target
+
 
 class FakeValidator:
     def __init__(self, executable: Path):
@@ -47,7 +51,13 @@ class FakeValidator:
 
     def validate_video(self, path, cancellation):
         assert Path(path).stat().st_size > 0
-        return {"streams": [{"codec_type": "video"}], "format": {"duration": "12"}}
+        return {
+            "streams": [
+                {"codec_type": "video", "codec_name": "vp9", "width": 2560, "height": 1440, "avg_frame_rate": "60/1", "color_transfer": "bt709"},
+                {"codec_type": "audio", "codec_name": "aac"},
+            ],
+            "format": {"duration": "12", "format_name": "mov,mp4,m4a,3gp,3g2,mj2"},
+        }
 
     def validate_audio(self, path, cancellation):
         assert Path(path).stat().st_size > 0
@@ -55,6 +65,11 @@ class FakeValidator:
 
     def validate_expected_video(self, path, cancellation, **kwargs):
         return self.validate_video(path, cancellation)
+
+    def validate_maximum_mp4(self, path, cancellation, **kwargs):
+        data = self.validate_video(path, cancellation)
+        assert Path(path).suffix.casefold() == ".mp4"
+        return data
 
     def validate_expected_audio(self, path, cancellation, **kwargs):
         return self.validate_audio(path, cancellation)
@@ -120,10 +135,16 @@ class RecordingFfmpeg(FakeFfmpeg):
     def __init__(self, executable: Path):
         super().__init__(executable)
         self.calls = []
+        self.remux_calls = []
 
     def create_proxy(self, source, target, cancellation, transcode_video=True, **kwargs):
         self.calls.append({"source": Path(source), "target": Path(target), **kwargs})
         target.write_bytes(b"proxy-480")
+        return target
+
+    def remux_maximum_to_mp4(self, source, target, cancellation, **kwargs):
+        self.remux_calls.append({"source": Path(source), "target": Path(target), **kwargs})
+        target.write_bytes(b"mp4")
         return target
 
 
@@ -165,6 +186,20 @@ class FakeVegas:
         )
 
 
+class FailingThenWorkingVegas(FakeVegas):
+    def create_project(self, *, output, max_video, instrumental, **kwargs):
+        self.calls.append((Path(max_video), Path(instrumental), dict(kwargs)))
+        if len(self.calls) == 1:
+            from creator_assistant.domain.errors import VegasProjectError
+            raise VegasProjectError("MAX media has no video stream.")
+        output.write_bytes(b"veg")
+        return VegasProjectResult(
+            output, 1, 1, 1, 1, 0, str(max_video), str(instrumental),
+            0, 0, 1440, 2560, 60.0,
+            {"success": True, "vegas_version": "22.0.248"},
+        )
+
+
 def test_pipeline_passes_max_and_only_instrumental_to_vegas(tmp_path: Path):
     yt = tmp_path / "yt-dlp.exe"
     ffmpeg = tmp_path / "ffmpeg.exe"
@@ -201,6 +236,67 @@ def test_pipeline_passes_max_and_only_instrumental_to_vegas(tmp_path: Path):
     assert manifest.files["vegas"]["role"] == "VEGAS_PROJECT"
     assert manifest.files["vegas"]["video_path"] == str(maximum)
     assert manifest.files["vegas"]["instrumental_path"] == str(instrumental)
+
+
+def test_vegas_media_failure_transcodes_max_video_only_as_fallback(tmp_path: Path):
+    yt = tmp_path / "yt-dlp.exe"
+    ffmpeg_exe = tmp_path / "ffmpeg.exe"
+    ffprobe = tmp_path / "ffprobe.exe"
+    for executable in (yt, ffmpeg_exe, ffprobe):
+        executable.write_bytes(b"exe")
+    project = tmp_path / "Vegas Fallback"
+    materials = project / "РњР°С‚РµСЂРёР°Р»С‹"
+    materials.mkdir(parents=True)
+    maximum = materials / "Vegas Fallback [MAX 1440p].mp4"
+    instrumental = materials / "Vegas Fallback [Instrumental].flac"
+    materials = project / "РњР°С‚РµСЂРёР°Р»С‹"
+    materials.mkdir(parents=True, exist_ok=True)
+    maximum = materials / f"{project.name} [MAX 1440p].mp4"
+    instrumental = materials / f"{project.name} [Instrumental].flac"
+    maximum.write_bytes(b"vp9 mp4")
+    instrumental.write_bytes(b"flac")
+    jobs = JobStore(tmp_path / "jobs-vegas-fallback")
+    jobs.save("vegas-fallback", {
+        "created_by": "CreatorAssistant",
+        "status": "bound",
+        "project_path": str(project),
+        "files": {"maximum": str(maximum), "instrumental": str(instrumental)},
+    })
+    ffmpeg = RecordingFfmpeg(ffmpeg_exe)
+    vegas = FailingThenWorkingVegas()
+    service = ProjectService(
+        FakeYtDlp(yt), ffmpeg, FakeValidator(ffprobe), FakeThumbnail(),
+        ReaperService(), FakeSeparator(), FakeSeparator(), jobs, NamingTemplates(), vegas=vegas,
+    )
+    metadata = VideoMetadata(
+        "vegas-fallback", "Vegas Fallback", 12, "https://youtu.be/vegas-fallback",
+        formats=[
+            VideoFormat("max", "mp4", height=1440, fps=60, vcodec="vp9", acodec="aac"),
+            VideoFormat("proxy", "mp4", height=720, fps=60, vcodec="h264", acodec="aac"),
+            VideoFormat("audio", "m4a", acodec="aac"),
+        ],
+    )
+    options = ProjectOptions(
+        download_maximum=False,
+        create_proxy=False,
+        download_audio=False,
+        create_instrumental=False,
+        create_reaper_project=False,
+        create_vegas_project=True,
+        job_id="vegas-fallback-job",
+    )
+
+    result = service.execute(tmp_path, metadata, options, CancellationToken(), lambda _event: None, project)
+
+    assert result.files["maximum"] == maximum
+    assert len(vegas.calls) == 2
+    assert vegas.calls[0][0] == maximum
+    assert vegas.calls[1][0] == maximum
+    assert ffmpeg.remux_calls[0]["source"] == maximum
+    assert ffmpeg.remux_calls[0]["target"] == maximum
+    assert ffmpeg.remux_calls[0]["transcode_video"] is True
+    assert jobs.load("vegas-fallback")["stages"]["maximum"]["source"] == "vegas_video_transcode_fallback"
+    assert jobs.load("vegas-fallback")["stages"]["vegas"]["video_path"] == str(maximum)
 
 
 def test_fake_disk_full_sets_waiting_state_and_preserves_job_temp(tmp_path: Path):
@@ -292,16 +388,20 @@ def test_resume_finds_valid_existing_maximum_and_does_not_download_again(tmp_pat
     for executable in (yt_exe, ffmpeg, ffprobe):
         executable.write_bytes(b"exe")
     project = tmp_path / "Делаю" / "Тестовый ролик"
-    materials = project / "Материалы"
+    materials = project / "РњР°С‚РµСЂРёР°Р»С‹"
     materials.mkdir(parents=True)
     maximum = materials / "Тестовый ролик [MAX 1440p].mkv"
+    materials = project / "РњР°С‚РµСЂРёР°Р»С‹"
+    materials.mkdir(parents=True, exist_ok=True)
+    maximum = materials / f"{project.name} [MAX 1440p].mkv"
     maximum.write_bytes(b"already downloaded")
     original_stat = maximum.stat()
     jobs = JobStore(tmp_path / "jobs")
-    jobs.save("video-id", {"created_by": "CreatorAssistant", "status": "failed", "project_path": str(project), "files": {}})
+    jobs.save("video-id", {"created_by": "CreatorAssistant", "status": "failed", "project_path": str(project), "files": {"maximum": str(maximum)}})
     yt = FakeYtDlp(yt_exe)
     separator = FakeSeparator()
-    service = ProjectService(yt, FakeFfmpeg(ffmpeg), FakeValidator(ffprobe), FakeThumbnail(), ReaperService(), separator, separator, jobs, NamingTemplates())
+    ffmpeg_service = RecordingFfmpeg(ffmpeg)
+    service = ProjectService(yt, ffmpeg_service, FakeValidator(ffprobe), FakeThumbnail(), ReaperService(), separator, separator, jobs, NamingTemplates())
     metadata = VideoMetadata(
         "video-id",
         "Тестовый ролик",
@@ -317,9 +417,12 @@ def test_resume_finds_valid_existing_maximum_and_does_not_download_again(tmp_pat
     options = ProjectOptions(download_maximum=True, create_proxy=False, download_audio=False, create_instrumental=False, create_reaper_project=False)
     events = []
     result = service.execute(tmp_path, metadata, options, CancellationToken(), events.append, project)
+    expected_mp4 = ffmpeg_service.remux_calls[0]["target"]
     assert yt.download_count == 0
-    assert result.files["maximum"] == maximum
+    assert result.files["maximum"] == expected_mp4
+    assert expected_mp4.is_file()
     assert maximum.stat().st_mtime_ns == original_stat.st_mtime_ns
+    assert ffmpeg_service.remux_calls[0]["source"] == maximum
     assert any("готовое максимальное" in event.message.casefold() for event in events)
 
 
@@ -372,7 +475,7 @@ def test_resume_detects_legacy_media_by_content_and_skips_downloads(tmp_path: Pa
     assert result.files == ready
     record = jobs.load("legacy-id")
     assert record["files"] == {key: str(value) for key, value in ready.items()}
-    assert record["stages"]["maximum"]["source"] == "legacy_content_scan"
+    assert record["stages"]["maximum"]["source"] == "mp4_ready"
     manifest = ManifestLoader().load(project / MANIFEST_NAME).manifest
     assert manifest.files["maximum"]["path"] == str(ready["maximum"])
 

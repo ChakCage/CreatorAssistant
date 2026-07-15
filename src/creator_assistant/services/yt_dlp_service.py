@@ -88,10 +88,7 @@ class YtDlpService:
         if self.ffmpeg_path:
             base_command.extend(["--ffmpeg-location", str(Path(self.ffmpeg_path).parent)])
         if merge_container:
-            merge_preference = merge_container
-            if alternative_selectors and "mkv" not in merge_preference.casefold().split("/"):
-                merge_preference += "/mkv"
-            base_command.extend(["--merge-output-format", merge_preference])
+            base_command.extend(["--merge-output-format", merge_container])
         base_command.extend(self.auth.arguments())
         multi_stream = "+" in selector
         last_progress: Optional[ProgressInfo] = None

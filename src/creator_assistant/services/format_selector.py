@@ -72,11 +72,7 @@ def select_proxy_video(formats: Iterable[VideoFormat], maximum_height: int = 720
 
 
 def choose_container(video: VideoFormat, audio: VideoFormat) -> str:
-    video_codec = video.vcodec.casefold()
-    audio_codec = (video.acodec if video.has_audio else audio.acodec).casefold()
-    mp4_video = video_codec.startswith(("avc1", "h264", "hev1", "hvc1", "hevc", "av01"))
-    mp4_audio = audio_codec.startswith(("mp4a", "aac"))
-    return "mp4" if mp4_video and mp4_audio else "mkv"
+    return "mp4"
 
 
 def is_reaper_compatible(video: VideoFormat, audio: VideoFormat) -> bool:

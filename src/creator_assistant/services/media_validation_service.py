@@ -81,6 +81,30 @@ class MediaValidationService:
         self._validate_duration(data, duration, path)
         return data
 
+    def validate_maximum_mp4(
+        self,
+        path: Path,
+        cancellation: Optional[CancellationToken],
+        *,
+        duration: Optional[float] = None,
+        height: Optional[int] = None,
+        fps: Optional[float] = None,
+        require_sdr: bool = True,
+    ) -> Dict[str, Any]:
+        data = self.validate_expected_video(
+            path,
+            cancellation,
+            duration=duration,
+            height=height,
+            fps=fps,
+            require_audio=True,
+            require_sdr=require_sdr,
+        )
+        format_name = str((data.get("format") or {}).get("format_name") or "").casefold()
+        if "mp4" not in format_name:
+            raise ValidationError(f"MAX РІРёРґРµРѕ РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ РЅР°СЃС‚РѕСЏС‰РёРј MP4-РєРѕРЅС‚РµР№РЅРµСЂРѕРј: {path.name}")
+        return data
+
     def validate_expected_audio(
         self,
         path: Path,

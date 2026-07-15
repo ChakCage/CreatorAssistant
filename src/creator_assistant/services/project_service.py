@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from creator_assistant.domain.errors import AudioSeparatorRuntimeMissingError, DependencyMissingError, DiskSpaceError, JobCancelledError, ManualActionRequiredError, MediaRoleResolutionRequired, ValidationError, YouTubeMediaForbiddenError
+from creator_assistant.domain.errors import AudioSeparatorRuntimeMissingError, DependencyMissingError, DiskSpaceError, JobCancelledError, ManualActionRequiredError, MediaRoleResolutionRequired, ProcessExecutionError, ValidationError, VegasProjectError, YouTubeMediaForbiddenError
 from creator_assistant.domain.job import CancellationToken, JobState
 from creator_assistant.domain.author_presets import AuthorPreset
 from creator_assistant.domain.models import (
@@ -473,6 +473,7 @@ class ProjectService:
                 for field in (
                     "size", "confidence", "source", "validated_at", "probe",
                     "confirmed_by_user", "duration", "codec",
+                    "container", "video_codec", "audio_codec", "format_id",
                     "video_path", "instrumental_path", "created_by_creator_assistant",
                     "created_at", "vegas_version", "video_only_from_max",
                     "video_track_count", "audio_track_count", "video_events", "audio_events",
@@ -607,6 +608,12 @@ class ProjectService:
             variant = loaded_manifest.manifest.reaper_proxies.get(str(effective_proxy_height), {})
             if isinstance(variant, dict) and variant.get("path"):
                 assigned_paths["proxy"] = Path(str(variant["path"]))
+        record = self.job_store.load(metadata.video_id) or {}
+        record_files = record.get("files", {}) if isinstance(record, dict) else {}
+        if isinstance(record_files, dict):
+            for key, value in record_files.items():
+                if key in states and value and key not in assigned_paths:
+                    assigned_paths[key] = Path(str(value))
 
         def valid_project_file(path: Optional[Path]) -> Optional[Path]:
             if not path or not path.is_file() or path.stat().st_size <= 0:
@@ -964,6 +971,183 @@ class ProjectService:
         except OSError:
             return []
 
+    def _ensure_maximum_mp4(
+        self,
+        source: Path,
+        paths: ProjectPaths,
+        metadata: VideoMetadata,
+        plan: FormatPlan,
+        cancellation: CancellationToken,
+        on_progress: ProgressCallback,
+        job_environment: Dict[str, str],
+        job_temp_path: Path,
+    ) -> tuple[Path, Dict[str, Any]]:
+        expected_name = safe_file_name(
+            paths.base_name,
+            self.naming.maximum,
+            "mp4",
+            height=plan.maximum_video.height or 0,
+        )
+        target = paths.materials / expected_name
+        source_probe = self.validator.validate_expected_video(
+            source,
+            cancellation,
+            duration=metadata.duration,
+            height=plan.maximum_video.height,
+            fps=plan.maximum_video.fps,
+            require_audio=True,
+            require_sdr=True,
+        )
+        source_audio = next(
+            (item for item in source_probe.get("streams", []) if item.get("codec_type") == "audio"),
+            {},
+        )
+        source_video = next(
+            (item for item in source_probe.get("streams", []) if item.get("codec_type") == "video"),
+            {},
+        )
+        source_format = str((source_probe.get("format") or {}).get("format_name") or "").casefold()
+        source_audio_codec = str(source_audio.get("codec_name") or "")
+        source_is_ready_mp4 = (
+            source.suffix.casefold() == ".mp4"
+            and "mp4" in source_format
+            and source_audio_codec.casefold().startswith(("aac", "mp4a"))
+        )
+        if source_is_ready_mp4:
+            final_probe = self.validator.validate_maximum_mp4(
+                source,
+                cancellation,
+                duration=metadata.duration,
+                height=plan.maximum_video.height,
+                fps=plan.maximum_video.fps,
+                require_sdr=True,
+            )
+            return source, self._maximum_stage_state(source, final_probe, "mp4_ready", plan)
+        if source.resolve() != target.resolve() and target.is_file() and target.stat().st_size > 0:
+            try:
+                final_probe = self.validator.validate_maximum_mp4(
+                    target,
+                    cancellation,
+                    duration=metadata.duration,
+                    height=plan.maximum_video.height,
+                    fps=plan.maximum_video.fps,
+                    require_sdr=True,
+                )
+                return target, self._maximum_stage_state(target, final_probe, "existing_mp4_companion", plan)
+            except Exception:
+                pass
+        try:
+            self.ffmpeg.remux_maximum_to_mp4(
+                source,
+                target,
+                cancellation,
+                audio_codec=source_audio_codec,
+                transcode_video=False,
+                on_progress=on_progress,
+                stage=JobStage.DOWNLOAD_MAXIMUM.value,
+                environment=job_environment,
+                cwd=job_temp_path,
+            )
+            source_label = "max_mp4_audio_remux" if source_audio_codec.casefold().startswith(("aac", "mp4a")) else "max_mp4_audio_aac"
+        except ProcessExecutionError:
+            self.ffmpeg.remux_maximum_to_mp4(
+                source,
+                target,
+                cancellation,
+                audio_codec=source_audio_codec,
+                transcode_video=True,
+                on_progress=on_progress,
+                stage=JobStage.DOWNLOAD_MAXIMUM.value,
+                environment=job_environment,
+                cwd=job_temp_path,
+            )
+            source_label = "max_mp4_video_transcode_fallback"
+        final_probe = self.validator.validate_maximum_mp4(
+            target,
+            cancellation,
+            duration=metadata.duration,
+            height=plan.maximum_video.height,
+            fps=plan.maximum_video.fps,
+            require_sdr=True,
+        )
+        final_video = next(
+            (item for item in final_probe.get("streams", []) if item.get("codec_type") == "video"),
+            {},
+        )
+        if source_label != "max_mp4_video_transcode_fallback":
+            source_codec = str(source_video.get("codec_name") or "").casefold()
+            final_codec = str(final_video.get("codec_name") or "").casefold()
+            if source_codec and final_codec and source_codec != final_codec:
+                raise ValidationError(
+                    f"MAX MP4 РЅРµ СЃРѕС…СЂР°РЅРёР» РёСЃС…РѕРґРЅС‹Р№ РІРёРґРµРѕРєРѕРґРµРє: {source_codec} -> {final_codec}"
+                )
+        return target, self._maximum_stage_state(target, final_probe, source_label, plan)
+
+    def _create_vegas_compatible_maximum(
+        self,
+        source: Path,
+        metadata: VideoMetadata,
+        plan: FormatPlan,
+        cancellation: CancellationToken,
+        on_progress: ProgressCallback,
+        job_environment: Dict[str, str],
+        job_temp_path: Path,
+    ) -> tuple[Path, Dict[str, Any]]:
+        self.ffmpeg.remux_maximum_to_mp4(
+            source,
+            source,
+            cancellation,
+            audio_codec="aac",
+            transcode_video=True,
+            on_progress=on_progress,
+            stage=JobStage.CREATE_VEGAS.value,
+            environment=job_environment,
+            cwd=job_temp_path,
+        )
+        probe = self.validator.validate_maximum_mp4(
+            source,
+            cancellation,
+            duration=metadata.duration,
+            height=plan.maximum_video.height,
+            fps=plan.maximum_video.fps,
+            require_sdr=True,
+        )
+        return source, self._maximum_stage_state(source, probe, "vegas_video_transcode_fallback", plan)
+
+    @staticmethod
+    def _is_vegas_media_open_failure(error: VegasProjectError) -> bool:
+        text = f"{error} {getattr(error, 'details', '')}".casefold()
+        markers = (
+            "max media has no video stream",
+            "has no video stream",
+            "media has no video",
+            "could not open",
+            "could not be opened",
+            "unsupported media",
+            "media.createinstance",
+        )
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _maximum_stage_state(path: Path, probe: Dict[str, Any], source: str, plan: FormatPlan) -> Dict[str, Any]:
+        video = next((item for item in probe.get("streams", []) if item.get("codec_type") == "video"), {})
+        audio = next((item for item in probe.get("streams", []) if item.get("codec_type") == "audio"), {})
+        return {
+            "status": "VALID",
+            "path": str(path),
+            "size": path.stat().st_size,
+            "role": "MAX_VIDEO",
+            "source": source,
+            "format_id": plan.maximum_selector,
+            "container": str((probe.get("format") or {}).get("format_name") or ""),
+            "video_codec": str(video.get("codec_name") or ""),
+            "audio_codec": str(audio.get("codec_name") or ""),
+            "width": int(video.get("width") or 0),
+            "height": int(video.get("height") or 0),
+            "fps": ProjectService._rate_value(video.get("avg_frame_rate") or video.get("r_frame_rate")),
+            "probe": probe,
+        }
+
     @staticmethod
     def _non_destructive_target(target: Path) -> Path:
         if not target.exists():
@@ -1297,6 +1481,30 @@ class ProjectService:
                         require_audio=True,
                         require_sdr=True,
                     )
+                files["maximum"], maximum_state = self._ensure_maximum_mp4(
+                    files["maximum"],
+                    paths,
+                    metadata,
+                    plan,
+                    cancellation,
+                    on_progress,
+                    job_environment,
+                    job_temp_path,
+                )
+                record.setdefault("stages", {})["maximum"] = maximum_state
+                self._update_scan_index_file(
+                    paths.root,
+                    files["maximum"],
+                    "MAX_VIDEO",
+                    {
+                        "container": maximum_state.get("container"),
+                        "video_codec": maximum_state.get("video_codec"),
+                        "audio_codec": maximum_state.get("audio_codec"),
+                        "width": maximum_state.get("width"),
+                        "height": maximum_state.get("height"),
+                        "fps": maximum_state.get("fps"),
+                    },
+                )
                 checkpoint()
             if options.create_proxy:
                 stage(
@@ -1553,16 +1761,44 @@ class ProjectService:
                 if existing and self.vegas.validate_project(existing):
                     on_progress(ProgressInfo(JobStage.CREATE_VEGAS.value, "Готовый проект VEGAS найден — пропущено", 100.0))
                 else:
-                    result = self.vegas.create_project(
-                        output=vegas_project,
-                        max_video=files["maximum"],
-                        instrumental=files["instrumental"],
-                        duration=metadata.duration or 0.001,
-                        temp_dir=job_temp_path / "vegas",
-                        cancellation=cancellation,
-                        auto_open=False,
-                        job_id=job_id,
-                    )
+                    try:
+                        result = self.vegas.create_project(
+                            output=vegas_project,
+                            max_video=files["maximum"],
+                            instrumental=files["instrumental"],
+                            duration=metadata.duration or 0.001,
+                            temp_dir=job_temp_path / "vegas",
+                            cancellation=cancellation,
+                            auto_open=False,
+                            job_id=job_id,
+                        )
+                    except VegasProjectError as exc:
+                        if not self._is_vegas_media_open_failure(exc):
+                            raise
+                        on_progress(ProgressInfo(JobStage.CREATE_VEGAS.value, "VEGAS could not open MAX MP4 with the original video codec. Creating H.264 fallback MP4."))
+                        files["maximum"], maximum_state = self._create_vegas_compatible_maximum(
+                            files["maximum"],
+                            metadata,
+                            plan,
+                            cancellation,
+                            on_progress,
+                            job_environment,
+                            job_temp_path,
+                        )
+                        maximum_state["vegas_fallback_reason"] = str(exc)
+                        record.setdefault("stages", {})["maximum"] = maximum_state
+                        record["files"] = {key: str(value) for key, value in files.items()}
+                        self.job_store.save(metadata.video_id, record)
+                        result = self.vegas.create_project(
+                            output=vegas_project,
+                            max_video=files["maximum"],
+                            instrumental=files["instrumental"],
+                            duration=metadata.duration or 0.001,
+                            temp_dir=job_temp_path / "vegas_retry",
+                            cancellation=cancellation,
+                            auto_open=False,
+                            job_id=job_id + "-vegas-fallback",
+                        )
                     files["vegas"] = result.path
                     record.setdefault("stages", {})["vegas"] = {
                         "status": "VALID",

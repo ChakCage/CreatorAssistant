@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from creator_assistant.domain.job import CancellationToken
 from creator_assistant.infrastructure.process_runner import ProcessRunner
 from creator_assistant.services.ffmpeg_service import FfmpegService
 from creator_assistant.services.reaper_service import ReaperService
@@ -23,6 +24,27 @@ def test_ffmpeg_proxy_caps_height_without_upscale():
     service = FfmpegService(ProcessRunner(), "ffmpeg.exe", nvenc_available=False)
     command = service.build_proxy_command(Path("in.mkv"), Path("out.mp4"), maximum_height=1080)
     assert command[command.index("-vf") + 1] == r"scale=-2:min(1080\,ih)"
+
+
+def test_ffmpeg_maximum_remux_copies_video_and_converts_only_audio(monkeypatch, tmp_path: Path):
+    captured = {}
+
+    class Runner:
+        def run(self, command, **kwargs):
+            captured["command"] = command
+            Path(command[-1]).write_bytes(b"mp4")
+            return type("Result", (), {"output": "1"})()
+
+    service = FfmpegService(Runner(), "ffmpeg.exe", nvenc_available=False)
+    source = tmp_path / "in.mkv"
+    target = tmp_path / "out.mp4"
+    source.write_bytes(b"mkv")
+    service.remux_maximum_to_mp4(source, target, CancellationToken(), audio_codec="opus")
+    command = captured["command"]
+    assert command[command.index("-c:v") + 1] == "copy"
+    assert command[command.index("-c:a") + 1] == "aac"
+    assert "-vf" not in command
+    assert target.read_bytes() == b"mp4"
 
 
 def test_reaper_project_has_exactly_two_tracks_and_unicode_paths(tmp_path: Path):

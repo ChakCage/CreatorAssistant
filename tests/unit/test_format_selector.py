@@ -56,7 +56,8 @@ def test_proxy_height_is_configurable(height, expected):
 
 def test_container_selection():
     assert choose_container(fmt("v", 1080, 30, "avc1"), fmt("a", acodec="mp4a.40.2")) == "mp4"
-    assert choose_container(fmt("v", 1080, 30, "vp9"), fmt("a", acodec="opus")) == "mkv"
+    assert choose_container(fmt("v", 1080, 30, "vp9"), fmt("a", acodec="opus")) == "mp4"
+    assert choose_container(fmt("v", 1080, 30, "av01"), fmt("a", acodec="opus")) == "mp4"
 
 
 def test_plan_keeps_original_fps_and_detects_no_transcode():
