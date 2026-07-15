@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Optional
 
@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 
 from creator_assistant.app import ServiceContainer
 from creator_assistant.domain.job import CancellationToken
-from creator_assistant.domain.shorts.models import RenderJob, SourceInfo
+from creator_assistant.domain.shorts.models import RenderJob, SourceInfo, SubtitleCue
 from creator_assistant.services.shorts.cache import ShortsCache
 from creator_assistant.services.shorts.candidate_generator import CandidateSettings
 from creator_assistant.services.shorts.manifest import ShortsManifestStore
@@ -197,19 +197,25 @@ class _RenderWorker(QObject):
                 job = RenderJob(f"render_{candidate.id}", candidate.id, str(target), "rendering", 0.0)
                 jobs.append(job)
                 self.job_updated.emit(job)
-                ass = self.paths.subtitles / f"{candidate.id}.ass"
-                if not ass.is_file():
-                    settings = candidate.subtitle_settings or {"style": "clean", "position": "lower", "size": 58}
-                    cues = subtitle_service.generate(self.transcript, candidate, int(settings.get("maximum", 36)), int(settings.get("lines", 2)))
-                    subtitle_service.write(cues, self.paths.subtitles / f"{candidate.id}.srt", ass, settings)
+                settings = candidate.subtitle_settings or {"style": "clean", "position": "lower", "size": 58}
+                stored_cues = settings.get("cues") or []
+                cues = (
+                    [SubtitleCue(float(item["start"]), float(item["end"]), str(item["text"])) for item in stored_cues]
+                    if stored_cues else
+                    subtitle_service.generate(self.transcript, candidate, int(settings.get("maximum", 36)), int(settings.get("lines", 2)))
+                )
+                ass = self.paths.cache / f"{candidate.id}.render.ass"
+                subtitle_service.write(cues, self.paths.cache / f"{candidate.id}.render.srt", ass, settings)
 
                 def update(value: float, current=job):
                     current.progress = round(value, 1)
+                    current.speed = self.container.shorts_render.current_speed
                     self.job_updated.emit(current)
 
                 try:
                     self.container.shorts_render.render(self.source, candidate, ass, target, self.token, update)
                     job.status, job.progress = "done", 100.0
+                    job.speed = self.container.shorts_render.last_speed
                 except Exception as exc:
                     if self.token.is_cancelled:
                         job.status, job.error = "cancelled", "Операция отменена пользователем."
@@ -221,6 +227,35 @@ class _RenderWorker(QObject):
                 self.job_updated.emit(job)
                 self._persist(jobs)
             self.finished.emit(jobs)
+        except Exception as exc:
+            import traceback
+            self.failed.emit(_friendly_error(exc), traceback.format_exc())
+
+
+class _PreviewRenderWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str, str)
+
+    def __init__(self, container, source, paths, transcript, candidate, token) -> None:
+        super().__init__()
+        self.container, self.source, self.paths, self.transcript = container, source, paths, transcript
+        self.candidate, self.token = candidate, token
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            settings = self.candidate.subtitle_settings or {"style": "clean", "position": "lower", "size": 58}
+            stored = settings.get("cues") or []
+            cues = (
+                [SubtitleCue(float(item["start"]), min(5.0, float(item["end"])), str(item["text"])) for item in stored if float(item["start"]) < 5.0]
+                if stored else SubtitleService().generate(self.transcript, self.candidate, int(settings.get("maximum", 36)), 2)
+            )
+            preview = replace(self.candidate, end=min(self.candidate.end, self.candidate.start + 5.0))
+            ass = self.paths.cache / f"{self.candidate.id}.preview.ass"
+            SubtitleService().write(cues, self.paths.cache / f"{self.candidate.id}.preview.srt", ass, settings)
+            target = self.paths.renders / f"{self.candidate.id} [preview 5s].mp4"
+            self.container.shorts_render.render(self.source, preview, ass, target, self.token)
+            self.finished.emit(target)
         except Exception as exc:
             import traceback
             self.failed.emit(_friendly_error(exc), traceback.format_exc())
@@ -302,6 +337,8 @@ class ShortsTab(QWidget):
         self.candidate_editor.status_changed.connect(self._set_candidate_status)
         self.candidate_editor.boundaries_saved.connect(self._save_boundaries)
         self.subtitle_editor.saved.connect(self._subtitle_saved)
+        self.subtitle_editor.configuration_changed.connect(self._subtitle_configuration_changed)
+        self.subtitle_editor.test_render_requested.connect(self._start_test_render)
         self.render_queue.render_requested.connect(self._start_render)
         self.render_queue.retry_requested.connect(self._start_render)
         self.render_queue.cancel_requested.connect(self.cancel_analysis)
@@ -481,6 +518,44 @@ class ShortsTab(QWidget):
             self.progress_panel.update_state("Субтитры сохранены", f"Созданы UTF-8 SRT/ASS и настройки вертикального кадра для {candidate.id}.", 94)
         except Exception as exc:
             ErrorDialog(str(exc), repr(exc), self).exec()
+
+    @Slot(object)
+    def _subtitle_configuration_changed(self, candidate) -> None:
+        if not self.review_service:
+            return
+        try:
+            self.review_service.save(self.candidates)
+            self.subtitle_editor.mark_saved()
+        except Exception as exc:
+            ErrorDialog(str(exc), repr(exc), self).exec()
+
+    @Slot(object)
+    def _start_test_render(self, candidate) -> None:
+        if not self.source or not self.paths or not self.transcript or (self._thread and self._thread.isRunning()):
+            return
+        self._token = CancellationToken()
+        self.start_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.progress_panel.update_state("Тестовый рендер", "Рендерятся первые 5 секунд с текущими настройками.", 95)
+        thread = QThread(self)
+        worker = _PreviewRenderWorker(self.container, self.source, self.paths, self.transcript, candidate, self._token)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._test_render_finished)
+        worker.failed.connect(self._probe_failed)
+        for signal in (worker.finished, worker.failed):
+            signal.connect(thread.quit)
+            signal.connect(worker.deleteLater)
+        thread.finished.connect(self._analysis_thread_finished)
+        self._thread = thread
+        self._thread.worker = worker
+        thread.start()
+
+    @Slot(object)
+    def _test_render_finished(self, target) -> None:
+        speed = self.container.shorts_render.last_speed or "—"
+        elapsed = self.container.shorts_render.last_elapsed
+        self.progress_panel.update_state("Тестовый рендер готов", f"{target} · {elapsed:.1f} с · скорость {speed}", 100)
 
     @Slot(object, float, float)
     def _save_boundaries(self, candidate, start: float, end: float) -> None:

@@ -1,8 +1,10 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QComboBox, QFormLayout, QGroupBox, QLabel, QSlider
 
 
 class VerticalLayoutPanel(QGroupBox):
+    changed = Signal()
+
     def __init__(self, parent=None) -> None:
         super().__init__("F. Вертикальный кадр", parent)
         form = QFormLayout(self)
@@ -25,6 +27,9 @@ class VerticalLayoutPanel(QGroupBox):
         form.addRow("Масштаб переднего слоя", self.foreground)
         form.addRow("Масштаб", self.foreground_value)
         self.mode.currentIndexChanged.connect(self._sync)
+        self.mode.currentIndexChanged.connect(self.changed)
+        self.center.valueChanged.connect(self.changed)
+        self.foreground.valueChanged.connect(self.changed)
         self._sync()
 
     def _sync(self) -> None:

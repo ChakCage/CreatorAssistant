@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
+import subprocess
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -39,14 +42,19 @@ class ShortsRenderService:
         self.prefer_nvenc, self.reserve_bytes = prefer_nvenc, reserve_bytes
         self.builder = ShortsFilterGraphBuilder()
         self.last_encoder = ""
+        self.current_speed = ""
+        self.last_speed = ""
+        self.last_elapsed = 0.0
 
     def build_command(self, source: SourceInfo, candidate: Candidate, subtitle: Path, target: Path, nvenc: bool) -> list[str]:
-        graph = self.builder.build(candidate, source, subtitle.name if subtitle.is_file() else "")
-        video = ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "20", "-b:v", "0"] if nvenc else ["-c:v", "libx264", "-preset", "medium", "-crf", "19"]
+        graph = self.builder.build(candidate, source, subtitle.name if subtitle.is_file() else "", input_clipped=True)
+        video = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20", "-b:v", "0"] if nvenc else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "19"]
         return [
-            self.ffmpeg_path, "-hide_banner", "-y", "-i", source.path, "-filter_complex", graph,
+            self.ffmpeg_path, "-hide_banner", "-y", "-ss", f"{candidate.start:.3f}", "-i", source.path,
+            "-t", f"{candidate.duration:.3f}", "-filter_complex_threads", "0", "-filter_complex", graph,
             "-map", "[v]", "-map", "[a]", *video, "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart",
+            "-fps_mode", "vfr", "-shortest",
             "-progress", "pipe:1", "-nostats", str(target),
         ]
 
@@ -60,6 +68,8 @@ class ShortsRenderService:
             raise DiskSpaceError("Рендер Short", target.parent, required, free, self.reserve_bytes)
         temporary = target.with_name(target.stem + ".rendering" + target.suffix)
         temporary.unlink(missing_ok=True)
+        started = time.monotonic()
+        self.current_speed = ""
 
         def run(nvenc: bool) -> None:
             values = {}
@@ -69,6 +79,8 @@ class ShortsRenderService:
                     return
                 key, value = line.split("=", 1)
                 values[key] = value
+                if key == "speed":
+                    self.current_speed = value.strip()
                 if not on_progress:
                     return
                 if key in {"out_time_us", "out_time_ms"}:
@@ -80,7 +92,13 @@ class ShortsRenderService:
                 elif key == "progress" and value == "end":
                     on_progress(100.0)
 
-            self.runner.run(self.build_command(source, candidate, subtitle, temporary, nvenc), cancellation=cancellation, on_line=parse, cwd=subtitle.parent)
+            command = self.build_command(source, candidate, subtitle, temporary, nvenc)
+            logging.getLogger("creator_assistant").info(
+                "Short render command=%s source_fps=%.3f duration=%.3f encoder=%s",
+                subprocess.list2cmdline(command), source.fps, candidate.duration,
+                "h264_nvenc" if nvenc else "libx264",
+            )
+            self.runner.run(command, cancellation=cancellation, on_line=parse, cwd=subtitle.parent)
 
         try:
             run(self.prefer_nvenc)
@@ -94,6 +112,12 @@ class ShortsRenderService:
             self.last_encoder = "libx264"
         self.validate(temporary, candidate.duration, cancellation)
         os.replace(str(temporary), str(target))
+        self.last_elapsed = time.monotonic() - started
+        self.last_speed = self.current_speed or (f"{candidate.duration / self.last_elapsed:.2f}x" if self.last_elapsed else "")
+        logging.getLogger("creator_assistant").info(
+            "Short render complete elapsed=%.2fs fps=%.3f speed=%s encoder=%s",
+            self.last_elapsed, source.fps, self.last_speed, self.last_encoder,
+        )
         return target
 
     def validate(self, path: Path, expected_duration: float, cancellation: CancellationToken) -> dict:

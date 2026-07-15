@@ -48,6 +48,20 @@ def test_command_is_argument_list_with_unicode_apostrophe_paths(tmp_path):
     assert command[command.index("-i") + 1] == str(video)
     assert command[-1] == str(target)
     assert "h264_nvenc" in command
+    assert command[command.index("-ss") + 1] == "1.000"
+    assert command.index("-ss") < command.index("-i")
+    assert command[command.index("-t") + 1] == "30.000"
+    assert "trim=start=" not in command[command.index("-filter_complex") + 1]
+    assert "-fps_mode" in command and "vfr" in command
+
+
+def test_blur_background_is_processed_low_resolution_before_upscale():
+    candidate = Candidate("short_001", 0, 30, 1, "", layout_settings={"mode": "blur_background"})
+    graph = ShortsFilterGraphBuilder().build(candidate, source(Path("x.mp4")), "", input_clipped=True)
+    assert "scale=270:480" in graph
+    assert "boxblur=12:6" in graph
+    assert "scale=1080:1920:flags=fast_bilinear" in graph
+    assert graph.count("split=2") == 1
 
 
 def test_nvenc_failure_falls_back_and_ffprobe_validates(tmp_path):

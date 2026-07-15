@@ -23,9 +23,9 @@ class RenderQueue(QWidget):
         self.jobs: dict[str, RenderJob] = {}
         self.renders_folder: Path | None = None
         layout = QVBoxLayout(self)
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(("Выбрать", "Кандидат", "Длина", "Статус", "Прогресс", "Файл / ошибка"))
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(("Выбрать", "Кандидат", "Длина", "Статус", "Прогресс", "Скорость", "Файл / ошибка"))
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
         layout.addWidget(self.table, 1)
         actions = QHBoxLayout()
         render = QPushButton("Отрендерить выбранные")
@@ -56,7 +56,7 @@ class RenderQueue(QWidget):
             choose.setCheckState(Qt.Checked)
             choose.setData(Qt.UserRole, candidate)
             job = self.jobs.get(candidate.id)
-            values = (candidate.id, f"{candidate.duration:.1f} с", STATUS.get(job.status, job.status) if job else "Не добавлен", f"{job.progress:.1f}%" if job and job.progress is not None else "—", (job.error or job.output_path) if job else "")
+            values = (candidate.id, f"{candidate.duration:.1f} с", STATUS.get(job.status, job.status) if job else "Не добавлен", f"{job.progress:.1f}%" if job and job.progress is not None else "—", job.speed if job else "", (job.error or job.output_path) if job else "")
             self.table.setItem(row, 0, choose)
             for column, value in enumerate(values, 1):
                 self.table.setItem(row, column, QTableWidgetItem(str(value)))

@@ -117,6 +117,7 @@ class RenderJob:
     status: str = "waiting"
     progress: Optional[float] = None
     error: str = ""
+    speed: str = ""
 
 
 @dataclass

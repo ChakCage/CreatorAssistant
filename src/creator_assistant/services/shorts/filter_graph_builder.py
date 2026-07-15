@@ -8,7 +8,7 @@ from creator_assistant.services.shorts.reframe.center_crop import CenterCropRefr
 
 
 class ShortsFilterGraphBuilder:
-    def build(self, candidate: Candidate, source: SourceInfo, subtitle_file: str = "") -> str:
+    def build(self, candidate: Candidate, source: SourceInfo, subtitle_file: str = "", input_clipped: bool = False) -> str:
         layout = candidate.layout_settings or {}
         if layout.get("mode", "center_crop") == "blur_background":
             reframe = BlurBackgroundReframe(int(layout.get("foreground_scale", 100)))
@@ -25,7 +25,10 @@ class ShortsFilterGraphBuilder:
         if subtitle_file:
             safe_name = Path(subtitle_file).name.replace("'", r"\'").replace(":", r"\:")
             subtitle = f",subtitles=filename='{safe_name}':charenc=UTF-8"
-        return (
-            f"[0:v:0]trim=start={candidate.start:.3f}:end={candidate.end:.3f},setpts=PTS-STARTPTS,{video}{tone_map}{subtitle}[v];"
-            f"[0:a:0]atrim=start={candidate.start:.3f}:end={candidate.end:.3f},asetpts=PTS-STARTPTS[a]"
-        )
+        if input_clipped:
+            video_prefix = "[0:v:0]setpts=PTS-STARTPTS,"
+            audio_chain = "[0:a:0]asetpts=PTS-STARTPTS[a]"
+        else:
+            video_prefix = f"[0:v:0]trim=start={candidate.start:.3f}:end={candidate.end:.3f},setpts=PTS-STARTPTS,"
+            audio_chain = f"[0:a:0]atrim=start={candidate.start:.3f}:end={candidate.end:.3f},asetpts=PTS-STARTPTS[a]"
+        return f"{video_prefix}{video}{tone_map}{subtitle}[v];{audio_chain}"
