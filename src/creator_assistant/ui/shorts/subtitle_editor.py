@@ -118,6 +118,7 @@ class SubtitleEditor(QWidget):
     saved = Signal(object)
     configuration_changed = Signal(object)
     test_render_requested = Signal(object)
+    defaults_requested = Signal(object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -182,7 +183,7 @@ class SubtitleEditor(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         layout.addWidget(self.table, 1)
         actions = QHBoxLayout()
-        for text, handler in (("Объединить", self._merge), ("Разделить", self._split), ("Удалить", self._delete), ("Восстановить исходный вариант", self._restore), ("Сохранить SRT и ASS", self._export), ("Рендер тестовых 5 секунд", self._test_render)):
+        for text, handler in (("Объединить", self._merge), ("Разделить", self._split), ("Удалить", self._delete), ("Восстановить исходный вариант", self._restore), ("Сохранить SRT и ASS", self._export), ("Рендер тестовых 5 секунд", self._test_render), ("Использовать эти настройки по умолчанию", self._save_defaults)):
             button = QPushButton(text)
             button.clicked.connect(handler)
             actions.addWidget(button)
@@ -386,3 +387,8 @@ class SubtitleEditor(QWidget):
         if self.candidate:
             self._apply_configuration()
             self.test_render_requested.emit(self.candidate)
+
+    def _save_defaults(self) -> None:
+        if self.candidate:
+            self._apply_configuration()
+            self.defaults_requested.emit(self.candidate)

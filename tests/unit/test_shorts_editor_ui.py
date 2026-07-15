@@ -9,6 +9,8 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from creator_assistant.domain.shorts.models import Candidate, Transcript, TranscriptSegment
+from creator_assistant.services.shorts.cache import ShortsCache
+from creator_assistant.domain.shorts.models import ShortsManifest
 from creator_assistant.ui.shorts import candidate_editor as candidate_editor_module
 from creator_assistant.ui.shorts.candidate_editor import CandidateEditor
 from creator_assistant.ui.shorts.subtitle_editor import SubtitleEditor
@@ -171,4 +173,35 @@ def test_subtitle_offset_autosaves_and_preview_uses_scaled_geometry(tmp_path):
     editor.preview.set_preview(candidate, candidate.subtitle_settings, candidate.layout_settings, "Крупный пример")
     image = editor.preview.grab().toImage()
     assert image.width() == 216
+    assert qt_app is QApplication.instance()
+
+
+def test_stage_fingerprints_survive_candidate_settings_update(tmp_path):
+    proxy = tmp_path / "analysis_proxy.mp4"
+    proxy.write_bytes(b"proxy")
+    manifest = ShortsManifest(1, "shorts", "source.mp4", "fp", 10, 1, 120)
+    cache = ShortsCache(manifest)
+    proxy_settings = {"height": 720, "codec": "h264"}
+    cache.mark_complete("proxy", proxy_settings)
+    stage_fingerprints = dict(manifest.analysis_settings.get("stage_fingerprints", {}))
+    candidate_config = {"minimum": 25, "desired": 60, "maximum": 100, "content_type": "gaming"}
+    manifest.analysis_settings = {**candidate_config, "stage_fingerprints": stage_fingerprints}
+    assert ShortsCache(manifest).stage_valid("proxy", proxy, proxy_settings)
+    assert not ShortsCache(manifest).stage_valid("candidates", tmp_path / "candidates.json", {"minimum": 25})
+
+
+def test_subtitle_defaults_and_candidate_override_are_separate(tmp_path):
+    qt_app = app()
+    paths = SimpleNamespace(subtitles=tmp_path)
+    candidate = Candidate("short_001", 10, 20, 90, "one")
+    editor = SubtitleEditor()
+    saved_defaults = []
+    editor.defaults_requested.connect(saved_defaults.append)
+    editor.set_context(candidate, transcript(), paths)
+    editor.offset.setValue(120)
+    editor._save_defaults()
+    assert saved_defaults == [candidate]
+    assert candidate.subtitle_settings["vertical_offset"] == 120
+    other = Candidate("short_002", 10, 20, 90, "two")
+    assert other.subtitle_settings == {}
     assert qt_app is QApplication.instance()
