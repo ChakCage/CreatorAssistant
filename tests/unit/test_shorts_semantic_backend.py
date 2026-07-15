@@ -115,6 +115,21 @@ def test_structured_score_honors_context_and_thinking_flag():
     assert requests[0]["options"]["num_ctx"] == 32768
 
 
+def test_content_type_guidance_is_added_to_prompt():
+    requests = []
+
+    def opener(request, **_kwargs):
+        requests.append(json.loads(request.data))
+        return Response({"message": {"content": json.dumps({"results": [score()]})}})
+
+    item = candidate()
+    item.content_type = "education"
+    OllamaSemanticScorer(opener=opener).evaluate([item], CancellationToken())
+    prompt = requests[0]["messages"][1]["content"]
+    assert "Обучающий ролик" in prompt
+    assert '"content_type":"education"' in prompt
+
+
 def test_invalid_structured_response_retries_once():
     calls = 0
 

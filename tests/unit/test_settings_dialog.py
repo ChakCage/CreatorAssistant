@@ -5,6 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from creator_assistant.infrastructure.settings_store import DEFAULT_SETTINGS
+from creator_assistant.services.shorts.semantic_backend import OllamaModelInfo
 from creator_assistant.ui.settings_dialog import SettingsDialog
 from creator_assistant.ui.diagnostics_dialog import DiagnosticsDialog
 
@@ -60,6 +61,29 @@ def test_vegas_defaults_and_auto_open_setting_are_saved():
     dialog._save()
     assert dialog.result_settings["create_vegas_project_default"] is False
     assert dialog.result_settings["auto_open_vegas_project"] is True
+    dialog.close()
+    application.processEvents()
+
+
+def test_ollama_model_combobox_is_single_line_with_tooltip():
+    application = app()
+    dialog = SettingsDialog(dict(DEFAULT_SETTINGS))
+    info = OllamaModelInfo(
+        name="qwen3.6:35b-a3b",
+        size=23_000_000_000,
+        parameter_size="35B",
+        quantization="Q4_K_M",
+        digest="abc123",
+    )
+    dialog._ollama_models = [info]
+    dialog.shorts_ai_model.clear()
+    dialog.shorts_ai_model.addItem(info.display, info.name)
+    dialog.shorts_ai_model.setItemData(0, info.tooltip, 3)
+    dialog.shorts_ai_model.setCurrentIndex(0)
+    dialog._update_shorts_ai_model_tooltip()
+    assert "\n" not in dialog.shorts_ai_model.itemText(0)
+    assert "Qwen3.6 35B-A3B" in dialog.shorts_ai_model.itemText(0)
+    assert "qwen3.6:35b-a3b" in dialog.shorts_ai_model.toolTip()
     dialog.close()
     application.processEvents()
 

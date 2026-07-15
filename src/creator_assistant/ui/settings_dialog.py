@@ -6,7 +6,7 @@ from pathlib import Path
 import time
 from typing import Any, Callable, Dict
 
-from PySide6.QtCore import QThread, QTimer
+from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -168,8 +168,13 @@ class SettingsDialog(QDialog):
         self.shorts_ai_endpoint = QLineEdit(str(ai.get("endpoint", "http://127.0.0.1:11434")))
         self.shorts_ai_model = QComboBox()
         self.shorts_ai_model.setMinimumWidth(320)
+        self.shorts_ai_model.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.shorts_ai_model.setMinimumContentsLength(28)
+        self.shorts_ai_model.setMaxVisibleItems(10)
+        self.shorts_ai_model.view().setTextElideMode(Qt.ElideRight)
         saved_model = str(ai.get("model", "qwen3:14b"))
         self.shorts_ai_model.addItem(saved_model, saved_model)
+        self.shorts_ai_model.setToolTip(saved_model)
         self.shorts_ai_mode = QComboBox()
         for label, value in (("Быстро", "fast"), ("Сбалансированно", "balanced"), ("Глубоко", "deep")):
             self.shorts_ai_mode.addItem(label, value)
@@ -208,6 +213,7 @@ class SettingsDialog(QDialog):
         self.shorts_ai_unload.clicked.connect(self._unload_shorts_ai_model)
         self.shorts_ai_compare.clicked.connect(self._compare_shorts_ai_models)
         self.shorts_ai_mode.currentIndexChanged.connect(self._apply_shorts_ai_mode_profile)
+        self.shorts_ai_model.currentIndexChanged.connect(self._update_shorts_ai_model_tooltip)
         shorts_form.addRow(self.shorts_ai_enabled)
         shorts_form.addRow("Backend", self.shorts_ai_backend)
         shorts_form.addRow("API", self.shorts_ai_endpoint)
@@ -821,6 +827,10 @@ class SettingsDialog(QDialog):
         selected = self._selected_shorts_ai_model()
         return next((item for item in self._ollama_models if item.name == selected), None)
 
+    def _update_shorts_ai_model_tooltip(self) -> None:
+        info = self._selected_shorts_ai_model_info()
+        self.shorts_ai_model.setToolTip(info.tooltip if info else self._selected_shorts_ai_model())
+
     def _ollama_backend(self, *, timeout: int | None = None) -> OllamaSemanticScorer:
         return OllamaSemanticScorer(
             endpoint=self.shorts_ai_endpoint.text().strip(),
@@ -899,18 +909,16 @@ class SettingsDialog(QDialog):
             for info in self._ollama_models:
                 self.shorts_ai_model.addItem(info.display, info.name)
                 index = self.shorts_ai_model.count() - 1
-                tooltip = (
-                    f"{info.name}\nРазмер: {info.size / 1024**3:.1f} ГиБ\n"
-                    f"Параметры: {info.parameter_size or '—'}\nКвант: {info.quantization or '—'}\n"
-                    f"Digest: {info.digest[:24] or '—'}\nCapabilities: {', '.join(info.capabilities) or '—'}"
-                )
-                self.shorts_ai_model.setItemData(index, tooltip, 3)
+                self.shorts_ai_model.setItemData(index, info.tooltip, Qt.ToolTipRole)
             chosen = choose_installed_model(self._ollama_models, saved)
             if chosen:
                 self.shorts_ai_model.setCurrentIndex(max(0, self.shorts_ai_model.findData(chosen.name)))
+                self.shorts_ai_model.setToolTip(chosen.tooltip)
             elif saved:
                 self.shorts_ai_model.addItem(saved, saved)
                 self.shorts_ai_model.setCurrentIndex(0)
+                self.shorts_ai_model.setToolTip(saved)
+            self.shorts_ai_model.view().setMinimumWidth(max(self.shorts_ai_model.width(), 520))
             loaded_names = ", ".join(str(item.get("name") or item.get("model")) for item in loaded) or "нет загруженных моделей"
             if chosen and chosen.name != saved:
                 self.shorts_ai_status.setText(f"Сохранённая модель не найдена, выбрана {chosen.name}. Загружено: {loaded_names}.")

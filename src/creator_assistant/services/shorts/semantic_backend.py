@@ -79,9 +79,26 @@ class OllamaModelInfo:
     @property
     def display(self) -> str:
         size = f"{self.size / 1_000_000_000:.1f} ГБ" if self.size else "размер неизвестен"
-        details = " · ".join(item for item in (size, self.parameter_size, self.quantization) if item)
-        suffix = f" — {self.recommendation}" if self.recommendation else ""
-        return f"{self.name}{suffix}\n{details}"
+        label = self.name
+        if self.name == "qwen3.6:35b-a3b":
+            label = "Qwen3.6 35B-A3B"
+        elif self.name == "qwen3:14b":
+            label = "Qwen3 14B"
+        suffix = f" · {self.recommendation}" if self.recommendation else f" · {size}"
+        return f"{label}{suffix}"
+
+    @property
+    def tooltip(self) -> str:
+        size = f"{self.size / 1_000_000_000:.1f} ГБ" if self.size else "размер неизвестен"
+        return (
+            f"{self.name}\n"
+            f"Размер: {size}\n"
+            f"Параметры: {self.parameter_size or '—'}\n"
+            f"Квант: {self.quantization or '—'}\n"
+            f"Digest: {self.digest or '—'}\n"
+            f"Изменена: {self.modified_at or '—'}\n"
+            f"Capabilities: {', '.join(self.capabilities) or '—'}"
+        )
 
 
 def choose_installed_model(models: List[OllamaModelInfo], saved: str = "") -> Optional[OllamaModelInfo]:
@@ -100,6 +117,12 @@ MODE_PROFILES = {
     "deep": {"context_length": 32768, "preliminary_count": 56, "batch_size": 6, "global_passes": 2, "think": True},
     # Migration alias used by the first implementation.
     "quality": {"context_length": 32768, "preliminary_count": 56, "batch_size": 6, "global_passes": 2, "think": True},
+}
+
+CONTENT_TYPE_GUIDANCE = {
+    "gaming": "Игровой ролик: реакция, конфликт, опасность, ошибка, победа/поражение, достижение, визуальное изменение, неожиданная развязка, динамика.",
+    "education": "Обучающий ролик: конкретная проблема, ясное объяснение, решение, полезный результат, самостоятельность и понятность.",
+    "talking": "Разговорный ролик: сильное мнение, история, эмоциональность, спорная мысль, шутка, неожиданный вывод, самостоятельная цитата.",
 }
 
 
@@ -268,9 +291,12 @@ class OllamaSemanticScorer(SemanticScorerBackend):
 
     def evaluate(self, candidates, cancellation, *, think=False):
         cancellation.raise_if_cancelled()
+        content_type = candidates[0].content_type if candidates else "gaming"
+        guidance = CONTENT_TYPE_GUIDANCE.get(content_type, CONTENT_TYPE_GUIDANCE["gaming"])
         prompt = (
             "Оцени кандидатов YouTube Shorts по смыслу. Не придумывай новые candidate_id. "
             "Учитывай самостоятельность, hook, конфликт, развитие, развязку, эмоцию, пользу и удержание. "
+            f"Профиль анализа: {guidance} "
             "Верни только JSON по переданной схеме. Данные:\n" +
             json.dumps([item.model_dump() for item in candidates], ensure_ascii=False, separators=(",", ":"))
         )
