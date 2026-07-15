@@ -10,6 +10,7 @@ from creator_assistant.domain.shorts.models import Candidate, SourceInfo
 from creator_assistant.infrastructure.process_runner import ProcessResult
 from creator_assistant.services.shorts.filter_graph_builder import ShortsFilterGraphBuilder
 from creator_assistant.services.shorts.render_service import ShortsRenderService, safe_filename, unique_output_path
+from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
 from creator_assistant.domain.shorts.models import SubtitleCue
 
@@ -55,6 +56,57 @@ def test_command_is_argument_list_with_unicode_apostrophe_paths(tmp_path):
     assert command[command.index("-t") + 1] == "30.000"
     assert "trim=start=" not in command[command.index("-filter_complex") + 1]
     assert "-fps_mode" in command and "vfr" in command
+
+
+def test_render_command_adds_title_and_channel_banner_overlay(tmp_path):
+    service = ShortsRenderService(None, "ffmpeg.exe", "ffprobe.exe", True, 0)
+    video = tmp_path / "input.mp4"
+    subtitle = tmp_path / "short_001.ass"; subtitle.write_text("", encoding="utf-8")
+    banner = tmp_path / "beppo_ru_subscribe.png"; banner.write_bytes(b"png")
+    target = tmp_path / "out.mp4"
+    candidate = Candidate(
+        "short_001", 0, 10, 1, "",
+        branding_settings={
+            "show_title": True,
+            "final_title_text": "Лучший момент: Beppo",
+            "title_size": 84,
+            "title_y": 160,
+            "show_channel_card": True,
+            "channel_banner_path": str(banner),
+            "banner_scale": 80,
+            "banner_x": 40,
+            "banner_y": 1540,
+            "banner_opacity": 90,
+        },
+    )
+    command = service.build_command(source(video), candidate, subtitle, target, True)
+    graph = command[command.index("-filter_complex") + 1]
+    assert str(banner) in command
+    assert graph.count("drawtext=") == 1
+    assert "overlay=x=40:y=1540" in graph
+    assert "colorchannelmixer=aa=0.900" in graph
+
+
+def test_channel_assets_resolve_exact_profile_and_never_random(tmp_path):
+    root = tmp_path / "channels"
+    banner = root / "beppo_ru" / "beppo_ru_subscribe.png"
+    banner.parent.mkdir(parents=True)
+    banner.write_bytes(b"png")
+    (banner.parent / "profile.json").write_text(
+        json.dumps({
+            "id": "beppo_ru",
+            "display_name": "Beppo На Русском",
+            "handle": "@BeppoJoeRussian",
+            "source_author": "Beppo",
+            "aliases": ["Beppo", "BeppoJoe", "Bep", "Беппо"],
+            "subscribe_banner": "beppo_ru_subscribe.png",
+            "enabled": True,
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    store = ChannelAssetStore(root)
+    assert store.resolve(source_author="BeppoJoe").id == "beppo_ru"
+    assert store.resolve(source_author="MylesMC") is None
 
 
 def test_blur_background_is_processed_low_resolution_before_upscale():

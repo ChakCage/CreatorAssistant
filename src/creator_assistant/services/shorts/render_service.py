@@ -47,16 +47,30 @@ class ShortsRenderService:
         self.last_elapsed = 0.0
 
     def build_command(self, source: SourceInfo, candidate: Candidate, subtitle: Path, target: Path, nvenc: bool) -> list[str]:
-        graph = self.builder.build(candidate, source, subtitle.name if subtitle.is_file() else "", input_clipped=True)
+        branding = candidate.branding_settings or {}
+        banner = Path(str(branding.get("channel_banner_path") or ""))
+        has_banner = bool(branding.get("show_channel_card", False)) and banner.is_file()
+        graph = self.builder.build(
+            candidate,
+            source,
+            subtitle.name if subtitle.is_file() else "",
+            input_clipped=True,
+            has_channel_banner=has_banner,
+        )
         video = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20", "-b:v", "0"] if nvenc else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "19"]
-        return [
+        command = [
             self.ffmpeg_path, "-hide_banner", "-y", "-ss", f"{candidate.start:.3f}", "-i", source.path,
+        ]
+        if has_banner:
+            command.extend(["-loop", "1", "-i", str(banner)])
+        command.extend([
             "-t", f"{candidate.duration:.3f}", "-filter_complex_threads", "0", "-filter_complex", graph,
             "-map", "[v]", "-map", "[a]", *video, "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart",
             "-fps_mode", "vfr", "-shortest",
             "-progress", "pipe:1", "-nostats", str(target),
-        ]
+        ])
+        return command
 
     def render(self, source: SourceInfo, candidate: Candidate, subtitle: Path, target: Path, cancellation: CancellationToken, on_progress: Optional[Callable[[float], None]] = None) -> Path:
         if candidate.end <= candidate.start or candidate.start < 0 or candidate.end > source.duration + 0.05:

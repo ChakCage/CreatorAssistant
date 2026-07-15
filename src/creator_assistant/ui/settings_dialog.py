@@ -42,6 +42,7 @@ from creator_assistant.services.shorts.semantic_backend import (
 from creator_assistant.domain.author_presets import merge_presets
 from creator_assistant.infrastructure.project_index import ProjectRoot
 from creator_assistant.infrastructure.windows_paths import discover_author_folders
+from creator_assistant.infrastructure.settings_store import config_root
 
 
 class SettingsDialog(QDialog):
@@ -158,6 +159,26 @@ class SettingsDialog(QDialog):
             "Для проекта Creator Assistant используется папка Shorts; для отдельного видео — <название> Shorts."
         )
         shorts_form.addRow(self.auto_shorts_project_folder)
+        self.shorts_default_video_folder = QLineEdit(str(settings.get("shorts_default_video_folder", "")))
+        self.shorts_default_video_folder.setPlaceholderText(r"E:\YouTube")
+        self._show_full_path(self.shorts_default_video_folder, self.shorts_default_video_folder.text())
+        shorts_video_row = QHBoxLayout()
+        shorts_video_row.addWidget(self.shorts_default_video_folder, 1)
+        shorts_video_browse = QPushButton("Обзор…")
+        shorts_video_reset = QPushButton("Сбросить")
+        shorts_video_browse.clicked.connect(self._browse_shorts_default_video_folder)
+        shorts_video_reset.clicked.connect(lambda: self._show_full_path(self.shorts_default_video_folder, ""))
+        shorts_video_row.addWidget(shorts_video_browse)
+        shorts_video_row.addWidget(shorts_video_reset)
+        shorts_form.addRow("Папка видео по умолчанию", shorts_video_row)
+        assets_row = QHBoxLayout()
+        self.shorts_assets_label = QLabel(str(config_root() / "user_assets" / "channels"))
+        self.shorts_assets_label.setWordWrap(True)
+        open_assets = QPushButton("Открыть папку ресурсов")
+        open_assets.clicked.connect(self._open_shorts_assets_folder)
+        assets_row.addWidget(self.shorts_assets_label, 1)
+        assets_row.addWidget(open_assets)
+        shorts_form.addRow("Библиотека баннеров", assets_row)
         ai = settings.get("shorts_ai", {})
         self.shorts_ai_enabled = QCheckBox("Использовать локальную AI-оценку кандидатов")
         self.shorts_ai_enabled.setChecked(bool(ai.get("enabled", True)))
@@ -418,6 +439,19 @@ class SettingsDialog(QDialog):
             self._show_full_path(edit, selected)
             if edit is self.vegas_edit:
                 self._update_vegas_status()
+
+    def _browse_shorts_default_video_folder(self) -> None:
+        current = self.shorts_default_video_folder.text().strip() or r"E:\YouTube"
+        if not Path(current).is_dir():
+            current = str(Path.home() / "Videos")
+        selected = QFileDialog.getExistingDirectory(self, "Выберите папку видео по умолчанию", current)
+        if selected:
+            self._show_full_path(self.shorts_default_video_folder, selected)
+
+    def _open_shorts_assets_folder(self) -> None:
+        folder = config_root() / "user_assets" / "channels"
+        folder.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(folder))
 
     def _update_vegas_status(self) -> None:
         path = Path(self.vegas_edit.text().strip())
@@ -1020,6 +1054,7 @@ class SettingsDialog(QDialog):
         self.result_settings["auto_open_vegas_project"] = self.auto_open_vegas.isChecked()
         self.result_settings["suggest_remember_author"] = self.suggest_remember_author.isChecked()
         self.result_settings["auto_shorts_project_folder"] = self.auto_shorts_project_folder.isChecked()
+        self.result_settings["shorts_default_video_folder"] = self.shorts_default_video_folder.text().strip()
         previous_ai = self.result_settings.get("shorts_ai", {})
         selected_model = self._selected_shorts_ai_model()
         selected_model_info = self._selected_shorts_ai_model_info()

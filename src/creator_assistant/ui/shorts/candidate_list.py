@@ -12,7 +12,12 @@ from PySide6.QtWidgets import (
 from creator_assistant.domain.shorts.models import Candidate
 
 
-STATUS_LABELS = {"review": "Проверить", "approved": "Одобрен", "rejected": "Отклонён"}
+STATUS_LABELS = {"review": "Нужна проверка", "approved": "Одобрен", "rejected": "Отклонён"}
+STATUS_TOOLTIPS = {
+    "review": "Кандидат создан анализатором, но ещё не подтверждён пользователем",
+    "approved": "Кандидат подтверждён пользователем и готов к рендеру",
+    "rejected": "Кандидат отклонён пользователем",
+}
 
 
 class CandidateList(QWidget):
@@ -48,7 +53,7 @@ class CandidateList(QWidget):
         self.table.setMouseTracking(True)
         self.table.setShowGrid(True)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(76)
+        self.table.verticalHeader().setDefaultSectionSize(104)
         self.table.setStyleSheet(
             "QTableWidget { gridline-color: #334052; alternate-background-color: #121820; }"
             "QTableWidget::item { border-bottom: 1px solid #2e3846; padding: 4px; }"
@@ -87,7 +92,7 @@ class CandidateList(QWidget):
         has_warnings = any(item.warnings for item in values)
         self.table.setRowCount(len(values))
         for row, candidate in enumerate(values):
-            self.table.setRowHeight(row, 76)
+            self.table.setRowHeight(row, 104)
             text = self._short_text(candidate.text, 105)
             reasons = self._short_text("; ".join(candidate.reasons[:2]), 120)
             ai_score = "—" if candidate.semantic_score is None else f"{candidate.semantic_score:.1f}"
@@ -119,25 +124,26 @@ class CandidateList(QWidget):
             actions = QWidget()
             action_layout = QGridLayout(actions)
             action_layout.setContentsMargins(0, 0, 0, 0)
-            action_layout.setSpacing(3)
+            action_layout.setSpacing(4)
             view = QPushButton("Просмотреть")
             alternatives = QPushButton("Альтернативы")
             alternatives.setEnabled(bool(candidate.alternatives))
             approve = QPushButton("✓")
             reject = QPushButton("✕")
             for button in (view, alternatives):
-                button.setMaximumHeight(26)
+                button.setMinimumWidth(116)
+                button.setMaximumHeight(28)
             for button in (approve, reject):
-                button.setMaximumWidth(38)
+                button.setMinimumWidth(54)
                 button.setMaximumHeight(24)
             view.clicked.connect(lambda _checked=False, item=candidate: self.selected.emit(item))
             alternatives.clicked.connect(lambda _checked=False, item=candidate: self.selected.emit(item))
             approve.clicked.connect(lambda _checked=False, item=candidate: self.status_changed.emit(item, "approved"))
             reject.clicked.connect(lambda _checked=False, item=candidate: self.status_changed.emit(item, "rejected"))
             action_layout.addWidget(view, 0, 0, 1, 2)
-            action_layout.addWidget(alternatives, 0, 2, 1, 2)
-            action_layout.addWidget(approve, 1, 1)
-            action_layout.addWidget(reject, 1, 2)
+            action_layout.addWidget(alternatives, 1, 0, 1, 2)
+            action_layout.addWidget(approve, 2, 0)
+            action_layout.addWidget(reject, 2, 1)
             self.table.setCellWidget(row, 11, actions)
         self.table.setColumnHidden(10, not has_warnings)
         self.table.resizeColumnsToContents()
@@ -167,6 +173,8 @@ class CandidateList(QWidget):
     def _tooltip_for(candidate: Candidate, column: int) -> str:
         if column == 0:
             return candidate.id
+        if column == 8:
+            return STATUS_TOOLTIPS.get(candidate.status, "")
         if column == 10:
             return "\n".join(candidate.warnings)
         return ""

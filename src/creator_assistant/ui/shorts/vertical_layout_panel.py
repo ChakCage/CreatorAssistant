@@ -20,7 +20,9 @@ class VerticalLayoutPanel(QGroupBox):
         self.foreground = QSlider(Qt.Horizontal)
         self.foreground.setRange(70, 150)
         self.foreground.setValue(100)
+        self.foreground.setToolTip("Масштаб переднего слоя для Blur Background и Color Background.")
         self.foreground_value = QLabel("100%")
+        self.foreground_value.setToolTip(self.foreground.toolTip())
         self.foreground.valueChanged.connect(lambda value: self.foreground_value.setText(f"{value}%"))
         form.addRow("Режим", self.mode)
         form.addRow("Горизонтальный центр", self.center)
@@ -37,6 +39,12 @@ class VerticalLayoutPanel(QGroupBox):
         crop = self.mode.currentData() == "center_crop"
         self.center.setEnabled(crop)
         self.foreground.setEnabled(not crop)
+        self.foreground_value.setEnabled(not crop)
+        self.foreground.setToolTip(
+            "В Center Crop переднего слоя нет — используйте горизонтальный центр кадра."
+            if crop else "Масштаб переднего слоя для Blur Background и Color Background."
+        )
+        self.foreground_value.setToolTip(self.foreground.toolTip())
 
     def value(self) -> dict:
         return {

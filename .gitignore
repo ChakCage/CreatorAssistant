@@ -30,6 +30,7 @@ dist/
 settings.json
 user_settings.json
 cookies.txt
+user_assets/
 
 # Logs and crash dumps
 logs/

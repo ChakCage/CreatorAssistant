@@ -86,6 +86,7 @@ class Candidate:
     title: str = ""
     layout_settings: Dict[str, Any] = field(default_factory=dict)
     subtitle_settings: Dict[str, Any] = field(default_factory=dict)
+    branding_settings: Dict[str, Any] = field(default_factory=dict)
     heuristic_score: float = 0.0
     semantic_score: Optional[float] = None
     final_score: float = 0.0

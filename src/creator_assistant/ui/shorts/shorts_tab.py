@@ -30,6 +30,7 @@ from creator_assistant.services.shorts.manifest import ShortsManifestStore, utc_
 from creator_assistant.services.shorts.review_service import CandidateReviewService
 from creator_assistant.services.shorts.render_service import unique_output_path
 from creator_assistant.services.shorts.semantic_cache import SemanticCache
+from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectPaths, ShortsProjectStore
 from creator_assistant.services.shorts.source_service import ShortsSourceService
@@ -287,6 +288,8 @@ class _RenderWorker(QObject):
                 )
                 ass = self.paths.cache / f"{candidate.id}.render.ass"
                 subtitle_service.write(cues, self.paths.cache / f"{candidate.id}.render.srt", ass, settings)
+                branding = candidate.branding_settings or {}
+                render_ass = ass if bool(branding.get("show_subtitles", True)) else self.paths.cache / f"{candidate.id}.no_subtitles.ass"
 
                 def update(value: float, current=job):
                     current.progress = round(value, 1)
@@ -294,7 +297,7 @@ class _RenderWorker(QObject):
                     self.job_updated.emit(current)
 
                 try:
-                    self.container.shorts_render.render(self.source, candidate, ass, target, self.token, update)
+                    self.container.shorts_render.render(self.source, candidate, render_ass, target, self.token, update)
                     job.status, job.progress = "done", 100.0
                     job.speed = self.container.shorts_render.last_speed
                 except Exception as exc:
@@ -334,8 +337,10 @@ class _PreviewRenderWorker(QObject):
             preview = replace(self.candidate, end=min(self.candidate.end, self.candidate.start + 5.0))
             ass = self.paths.cache / f"{self.candidate.id}.preview.ass"
             SubtitleService().write(cues, self.paths.cache / f"{self.candidate.id}.preview.srt", ass, settings)
+            branding = self.candidate.branding_settings or {}
+            render_ass = ass if bool(branding.get("show_subtitles", True)) else self.paths.cache / f"{self.candidate.id}.no_subtitles.ass"
             target = self.paths.renders / f"{self.candidate.id} [preview 5s].mp4"
-            self.container.shorts_render.render(self.source, preview, ass, target, self.token)
+            self.container.shorts_render.render(self.source, preview, render_ass, target, self.token)
             self.finished.emit(target)
         except Exception as exc:
             import traceback
@@ -440,11 +445,15 @@ class ShortsTab(QWidget):
     @Slot()
     def choose_file(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(
-            self, "Выберите готовое видео", "", "Видео (*.mp4 *.mkv *.mov *.m4v *.webm *.avi);;Все файлы (*)"
+            self,
+            "Выберите готовое видео",
+            str(self._initial_video_folder()),
+            "Видео (*.mp4 *.mkv *.mov *.m4v *.webm *.avi);;Все файлы (*)",
         )
         if not selected:
             return
         source = Path(selected)
+        self._remember_video_folder(source.parent)
         suggested = self.project_store.suggested_root(source)
         if bool(self.container.settings.get("auto_shorts_project_folder", True)):
             self._begin_probe(source, suggested)
@@ -485,6 +494,26 @@ class ShortsTab(QWidget):
         else:
             source = candidates[0]
         self._begin_probe(source, folder / "Shorts")
+
+    def _initial_video_folder(self) -> Path:
+        candidates = [
+            self.container.settings.get("shorts_default_video_folder", ""),
+            self.container.settings.get("shorts_last_video_folder", ""),
+            r"E:\YouTube",
+            str(Path.home() / "Videos"),
+        ]
+        for value in candidates:
+            path = Path(str(value))
+            if path.is_dir():
+                return path
+        return Path.home()
+
+    def _remember_video_folder(self, folder: Path) -> None:
+        if not folder.is_dir():
+            return
+        settings = dict(self.container.settings)
+        settings["shorts_last_video_folder"] = str(folder)
+        self.container.save_settings(settings)
 
     def _begin_probe(self, source: Path, root: Path) -> None:
         if self._thread and self._thread.isRunning():
@@ -566,6 +595,7 @@ class ShortsTab(QWidget):
         if not self.paths:
             return
         self._apply_subtitle_defaults(candidate)
+        self._apply_branding_defaults(candidate)
         self.candidate_editor.set_candidate(candidate, self.paths.cache / "analysis_proxy.mp4", self.transcript)
         if self.transcript:
             self.subtitle_editor.set_context(candidate, self.transcript, self.paths)
@@ -585,6 +615,40 @@ class ShortsTab(QWidget):
             self.progress_panel.update_state("Проверка кандидатов", f"{candidate.id}: {label}. Решение сохранено.", 92)
         except Exception as exc:
             ErrorDialog(str(exc), repr(exc), self).exec()
+
+    def _apply_branding_defaults(self, candidate) -> None:
+        defaults = dict(self.container.settings.get("shorts_branding_defaults", {}))
+        if candidate.branding_settings:
+            return
+        source_author = self._source_author_hint()
+        linked_profiles = self.container.settings.get("shorts_channel_profile_links", {})
+        saved_profile = linked_profiles.get(source_author.casefold(), "") if isinstance(linked_profiles, dict) else ""
+        profile = ChannelAssetStore().resolve(
+            saved_profile_id=str(saved_profile or ""),
+            source_author=source_author,
+            aliases=[source_author, Path(self.source.name).stem if self.source else ""],
+        )
+        candidate.branding_settings = {
+            **defaults,
+            "source_author": source_author,
+            "channel_profile_id": profile.id if profile else str(defaults.get("channel_profile_id", "")),
+            "channel_banner_path": str(ChannelAssetStore().banner_path(profile) or ""),
+            "show_channel_card": bool(profile and defaults.get("preset") == "promotion"),
+            "original_video_title": Path(self.source.name).stem if self.source else "",
+            "translated_video_title": "",
+            "short_hook_title": "",
+            "final_title_text": str(defaults.get("final_title_text") or candidate.title or ""),
+        }
+
+    def _source_author_hint(self) -> str:
+        if not self.source:
+            return ""
+        path = Path(self.source.path)
+        parts = [part for part in path.parts]
+        for marker in ("Beppo", "Myles", "Чак", "Chak", "Kazak"):
+            if any(marker.casefold() in part.casefold() for part in parts):
+                return marker
+        return path.parent.name
 
     @Slot(object)
     def _start_render(self, candidates) -> None:
@@ -669,6 +733,7 @@ class ShortsTab(QWidget):
         settings = dict(self.container.settings)
         subtitle = candidate.subtitle_settings or {}
         layout = candidate.layout_settings or {}
+        branding = candidate.branding_settings or {}
         settings["shorts_subtitle_defaults"] = {
             "style": subtitle.get("style", "clean"),
             "position": subtitle.get("position", "lower"),
@@ -684,6 +749,19 @@ class ShortsTab(QWidget):
             "foreground_scale": int(layout.get("foreground_scale", 100)),
             "crop_center": int(layout.get("crop_center", 50)),
             "background_color": layout.get("background_color", "black"),
+        }
+        settings["shorts_branding_defaults"] = {
+            key: value
+            for key, value in {
+                key: branding.get(key)
+                for key in (
+                    "preset", "show_subtitles", "show_title", "final_title_text", "title_size", "title_bold",
+                    "title_color", "title_outline", "title_background", "title_y", "title_max_lines",
+                    "show_channel_card", "channel_profile_id", "banner_scale", "banner_x", "banner_y",
+                    "banner_opacity", "safe_margin",
+                )
+            }.items()
+            if value is not None
         }
         self.container.save_settings(settings)
         self.progress_panel.update_state("Настройки Shorts по умолчанию сохранены", "Новые кандидаты будут использовать текущий стиль, позицию и кадр.", 94)
