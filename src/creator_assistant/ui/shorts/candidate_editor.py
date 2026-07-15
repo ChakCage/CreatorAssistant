@@ -215,6 +215,7 @@ class CandidateEditor(QWidget):
         self.alternatives.blockSignals(False)
         self._reset_timeline()
         if self.player:
+            self.player.setVideoOutput(self.video)
             self.player.setSource(QUrl.fromLocalFile(str(proxy)))
             self.player.setPosition(round(candidate.start * 1000))
 
@@ -285,6 +286,12 @@ class CandidateEditor(QWidget):
     def _open_external(self) -> None:
         if self.proxy and self.proxy.is_file() and os.name == "nt":
             os.startfile(str(self.proxy))
+
+    def release_media(self) -> None:
+        if self.player:
+            self.player.stop()
+            self.player.setVideoOutput(None)
+            self.player.setSource(QUrl())
 
     def _update_duration(self) -> None:
         value = self.end.value() - self.start.value()

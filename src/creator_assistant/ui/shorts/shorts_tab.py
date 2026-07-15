@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Optional
@@ -42,6 +43,9 @@ from creator_assistant.ui.shorts.render_queue import RenderQueue
 from creator_assistant.ui.widgets.error_dialog import ErrorDialog
 
 
+_ACTIVE_ANALYSIS_PROJECTS: set[str] = set()
+
+
 class _ProbeWorker(QObject):
     finished = Signal(object)
     failed = Signal(str, str)
@@ -72,6 +76,11 @@ class _AnalysisWorker(QObject):
 
     @Slot()
     def run(self) -> None:
+        lock_key = str(self.paths.root.resolve()).casefold()
+        if lock_key in _ACTIVE_ANALYSIS_PROJECTS:
+            self.failed.emit("Анализ этого проекта уже выполняется.", "")
+            return
+        _ACTIVE_ANALYSIS_PROJECTS.add(lock_key)
         try:
             store = ShortsManifestStore(self.paths.manifest)
             manifest = store.load()
@@ -142,7 +151,17 @@ class _AnalysisWorker(QObject):
             self.progress.emit("8–10. Кандидаты", "Эвристический отбор, кластеризация дублей и локальная смысловая оценка.", 82)
             candidates_path = self.paths.analysis / "candidates.json"
             ai_settings = dict(self.container.settings.get("shorts_ai", {}))
-            candidate_config = {**asdict(self.candidate_settings), "shorts_ai": ai_settings}
+            stage_fingerprints = dict(manifest.analysis_settings.get("stage_fingerprints", {}))
+            transcript_hash = hashlib.sha256(transcript.text.encode("utf-8")).hexdigest()
+            candidate_config = {
+                **asdict(self.candidate_settings),
+                "shorts_ai": ai_settings,
+                "source_fingerprint": self.source.fingerprint,
+                "transcript_hash": transcript_hash,
+                "heuristic_version": "shorts-heuristic-v2-content-profile",
+                "prompt_version": "shorts-semantic-v1",
+                "clustering": {"overlap": 0.62},
+            }
             if cache.stage_valid("candidates", candidates_path, candidate_config):
                 from creator_assistant.domain.shorts.models import Candidate
                 candidates = [Candidate(**item) for item in json.loads(candidates_path.read_text(encoding="utf-8"))]
@@ -160,7 +179,10 @@ class _AnalysisWorker(QObject):
                 )
             else:
                 raw_candidates = self.container.shorts_candidate_generator.generate(transcript, scenes, audio_features, self.candidate_settings)
-                scored = [self.container.shorts_candidate_scorer.score(item, scenes, audio_features) for item in raw_candidates]
+                scored = [
+                    self.container.shorts_candidate_scorer.score(item, scenes, audio_features, self.candidate_settings.content_type)
+                    for item in raw_candidates
+                ]
                 if ai_settings.get("enabled", False):
                     self.progress.emit(
                         "10. Локальный AI-анализ",
@@ -180,8 +202,9 @@ class _AnalysisWorker(QObject):
                 candidates = analysis_result.candidates
                 candidates_path.write_text(json.dumps([asdict(item) for item in candidates], ensure_ascii=False, indent=2), encoding="utf-8")
                 cache.mark_complete("candidates", candidate_config)
+                stage_fingerprints = dict(manifest.analysis_settings.get("stage_fingerprints", {}))
                 manifest.candidates = [asdict(item) for item in candidates]
-                manifest.analysis_settings = candidate_config
+                manifest.analysis_settings = {**candidate_config, "stage_fingerprints": stage_fingerprints}
                 manifest.ai_analysis = {
                     "backend": analysis_result.backend,
                     "model": analysis_result.model,
@@ -216,6 +239,8 @@ class _AnalysisWorker(QObject):
             else:
                 import traceback
                 self.failed.emit(_friendly_error(exc), traceback.format_exc())
+        finally:
+            _ACTIVE_ANALYSIS_PROJECTS.discard(lock_key)
 
 
 class _RenderWorker(QObject):
@@ -397,6 +422,7 @@ class ShortsTab(QWidget):
         self.subtitle_editor.saved.connect(self._subtitle_saved)
         self.subtitle_editor.configuration_changed.connect(self._subtitle_configuration_changed)
         self.subtitle_editor.test_render_requested.connect(self._start_test_render)
+        self.subtitle_editor.defaults_requested.connect(self._save_subtitle_defaults)
         self.render_queue.render_requested.connect(self._start_render)
         self.render_queue.retry_requested.connect(self._start_render)
         self.render_queue.cancel_requested.connect(self.cancel_analysis)
@@ -485,6 +511,7 @@ class ShortsTab(QWidget):
     def start_analysis(self) -> None:
         if not self.source or not self.paths or (self._thread and self._thread.isRunning()):
             return
+        self.candidate_editor.release_media()
         self._token = CancellationToken()
         capabilities = self.container.shorts_transcription_backend.capabilities()
         self.progress_panel.start_operation(
@@ -538,6 +565,7 @@ class ShortsTab(QWidget):
     def _edit_candidate(self, candidate) -> None:
         if not self.paths:
             return
+        self._apply_subtitle_defaults(candidate)
         self.candidate_editor.set_candidate(candidate, self.paths.cache / "analysis_proxy.mp4", self.transcript)
         if self.transcript:
             self.subtitle_editor.set_context(candidate, self.transcript, self.paths)
@@ -610,6 +638,55 @@ class ShortsTab(QWidget):
             self.subtitle_editor.mark_saved()
         except Exception as exc:
             ErrorDialog(str(exc), repr(exc), self).exec()
+
+    def _apply_subtitle_defaults(self, candidate) -> None:
+        defaults = self.container.settings.get("shorts_subtitle_defaults", {})
+        if not candidate.subtitle_settings and defaults:
+            candidate.subtitle_settings = {
+                "style": defaults.get("style", "clean"),
+                "position": defaults.get("position", "lower"),
+                "vertical_offset": int(defaults.get("vertical_offset", 0)),
+                "size": int(defaults.get("size", 58)),
+                "maximum": int(defaults.get("maximum", 36)),
+                "lines": int(defaults.get("lines", 2)),
+                "outline": int(defaults.get("outline", 3)),
+                "shadow": int(defaults.get("shadow", 1)),
+                "background": bool(defaults.get("background", False)),
+                "safe_margin": int(defaults.get("safe_margin", 120)),
+            }
+        if not candidate.layout_settings and defaults:
+            candidate.layout_settings = {
+                "mode": defaults.get("layout_mode", "center_crop"),
+                "crop_center": int(defaults.get("crop_center", 50)),
+                "foreground_scale": int(defaults.get("foreground_scale", 100)),
+                "background_color": defaults.get("background_color", "black"),
+            }
+
+    @Slot(object)
+    def _save_subtitle_defaults(self, candidate) -> None:
+        if not self.container:
+            return
+        settings = dict(self.container.settings)
+        subtitle = candidate.subtitle_settings or {}
+        layout = candidate.layout_settings or {}
+        settings["shorts_subtitle_defaults"] = {
+            "style": subtitle.get("style", "clean"),
+            "position": subtitle.get("position", "lower"),
+            "vertical_offset": int(subtitle.get("vertical_offset", 0)),
+            "size": int(subtitle.get("size", 58)),
+            "maximum": int(subtitle.get("maximum", 36)),
+            "lines": int(subtitle.get("lines", 2)),
+            "outline": int(subtitle.get("outline", 3)),
+            "shadow": int(subtitle.get("shadow", 1)),
+            "background": bool(subtitle.get("background", False)),
+            "safe_margin": int(subtitle.get("safe_margin", 120)),
+            "layout_mode": layout.get("mode", "center_crop"),
+            "foreground_scale": int(layout.get("foreground_scale", 100)),
+            "crop_center": int(layout.get("crop_center", 50)),
+            "background_color": layout.get("background_color", "black"),
+        }
+        self.container.save_settings(settings)
+        self.progress_panel.update_state("Настройки Shorts по умолчанию сохранены", "Новые кандидаты будут использовать текущий стиль, позицию и кадр.", 94)
 
     @Slot(object)
     def _start_test_render(self, candidate) -> None:

@@ -20,6 +20,10 @@ class AnalysisSettingsPanel(QGroupBox):
         self.content_type = QComboBox()
         for label, value in (("Игровой ролик", "gaming"), ("Обучающий", "education"), ("Разговорный", "talking")):
             self.content_type.addItem(label, value)
+        self.content_type.setToolTip(
+            "Профиль влияет на эвристику, prompt локальной LLM, selection и cache key: "
+            "игровой — динамика/конфликт/развязка; обучающий — проблема/решение; разговорный — мнение/история/вывод."
+        )
         form.addRow("Минимум", self.minimum)
         form.addRow("Максимум", self.maximum)
         form.addRow("Желаемая", self.desired)
