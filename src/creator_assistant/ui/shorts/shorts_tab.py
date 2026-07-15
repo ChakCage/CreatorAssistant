@@ -563,9 +563,17 @@ class ShortsTab(QWidget):
             return
         try:
             self.review_service.update_boundaries(candidate, start, end)
+            rebuilt = []
+            if self.transcript:
+                rebuilt = self.subtitle_editor.rebuild_for_boundaries(candidate, self.transcript)
             self.review_service.save(self.candidates)
             self.candidate_list.refresh()
-            self.progress_panel.update_state("Границы сохранены", f"{candidate.id}: {start:.3f}–{end:.3f} сек.", 92)
+            detail = f"; локальные субтитры пересобраны ({len(rebuilt)} строк)" if rebuilt else ""
+            self.progress_panel.update_state(
+                "Границы сохранены",
+                f"{candidate.id}: {start:.3f}–{end:.3f} сек{detail}.",
+                92,
+            )
         except Exception as exc:
             ErrorDialog(str(exc), repr(exc), self).exec()
 

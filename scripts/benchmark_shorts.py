@@ -28,6 +28,7 @@ def main() -> int:
     parser.add_argument("--ffmpeg", required=True)
     parser.add_argument("--ffprobe", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--modes", default="center_crop,blur_background,solid_color")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -49,7 +50,7 @@ def main() -> int:
     service = ShortsRenderService(runner, args.ffmpeg, args.ffprobe, True, 0)
     subtitle_service = SubtitleService()
     report = {"source": str(source_path), "fps": source.fps, "duration": source.duration, "renders": []}
-    for mode in ("center_crop", "blur_background"):
+    for mode in [item.strip() for item in args.modes.split(",") if item.strip()]:
         for style in ("clean", "large", "gaming"):
             candidate = Candidate(
                 f"{mode}_{style}", 0, 60, 90, LONG_RUSSIAN_TEXT,

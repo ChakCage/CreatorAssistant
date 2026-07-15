@@ -20,6 +20,6 @@ class CenterCropReframe(ReframeBackend):
     def __init__(self, center: int = 50) -> None:
         self.center = center
 
-    def video_filter(self, width: int, height: int) -> str:
+    def video_filter(self, width: int, height: int, fps: float = 30.0) -> str:
         scaled_width, scaled_height, x, y = crop_geometry(width, height, self.center)
         return f"scale={scaled_width}:{scaled_height},crop=1080:1920:{x}:{y},setsar=1"

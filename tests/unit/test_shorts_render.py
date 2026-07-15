@@ -64,6 +64,17 @@ def test_blur_background_is_processed_low_resolution_before_upscale():
     assert graph.count("split=2") == 1
 
 
+def test_solid_color_background_uses_black_canvas_and_preserves_single_decode():
+    candidate = Candidate(
+        "short_001", 0, 30, 1, "",
+        layout_settings={"mode": "solid_color", "foreground_scale": 150},
+    )
+    graph = ShortsFilterGraphBuilder().build(candidate, source(Path("x.mp4")), "", input_clipped=True)
+    assert "color=c=black:s=1080x1920:r=30000/1001" in graph
+    assert "scale=1620:2880:force_original_aspect_ratio=decrease" in graph
+    assert "overlay=(W-w)/2:(H-h)/2:shortest=1" in graph
+
+
 def test_nvenc_failure_falls_back_and_ffprobe_validates(tmp_path):
     class Runner:
         commands = []

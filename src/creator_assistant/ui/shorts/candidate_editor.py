@@ -28,20 +28,52 @@ def format_time(milliseconds: int) -> str:
 
 
 class SeekSlider(QSlider):
-    """A slider that seeks to the point clicked by the user."""
+    """A click-to-seek slider with a continuously draggable handle."""
 
     seek_requested = Signal(int)
+    scrub_started = Signal()
+    scrub_finished = Signal(int)
+
+    def __init__(self, orientation, parent=None) -> None:
+        super().__init__(orientation, parent)
+        self._dragging = False
+
+    def _value_from_x(self, x: float) -> int:
+        handle = self.style().pixelMetric(QStyle.PM_SliderLength, None, self)
+        span = max(1, self.width() - handle)
+        position = max(0, min(span, round(x - handle / 2)))
+        return QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), position, span)
+
+    def _seek_from_event(self, event) -> int:
+        value = self._value_from_x(event.position().x())
+        self.setValue(value)
+        self.seek_requested.emit(value)
+        return value
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
         if event.button() == Qt.LeftButton:
-            value = QStyle.sliderValueFromPosition(
-                self.minimum(), self.maximum(), int(event.position().x()), max(1, self.width())
-            )
-            self.setValue(value)
-            self.seek_requested.emit(value)
+            self._dragging = True
+            self.scrub_started.emit()
+            self._seek_from_event(event)
             event.accept()
             return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._dragging:
+            self._seek_from_event(event)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._dragging and event.button() == Qt.LeftButton:
+            value = self._seek_from_event(event)
+            self._dragging = False
+            self.scrub_finished.emit(value)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class CandidateEditor(QWidget):
@@ -53,6 +85,7 @@ class CandidateEditor(QWidget):
         self.candidate: Candidate | None = None
         self.proxy: Path | None = None
         self._updating_timeline = False
+        self._resume_after_scrub = False
         layout = QVBoxLayout(self)
         self.heading = QLabel("Кандидат не выбран")
         self.heading.setWordWrap(True)
@@ -76,6 +109,8 @@ class CandidateEditor(QWidget):
         self.timeline.setRange(0, 0)
         self.timeline.seek_requested.connect(self._seek_relative)
         self.timeline.sliderMoved.connect(self._seek_relative)
+        self.timeline.scrub_started.connect(self._begin_scrub)
+        self.timeline.scrub_finished.connect(self._end_scrub)
         self.time_label = QLabel("00:00.000 / 00:00.000")
         self.time_label.setMinimumWidth(155)
         timeline_row.addWidget(self.timeline, 1)
@@ -112,11 +147,15 @@ class CandidateEditor(QWidget):
             control.setSuffix(" сек")
         self.duration = QLabel("0.000 сек")
         self.alternatives = QComboBox()
+        self.alternatives.setToolTip(
+            "Другие варианты начала и конца для этого же Short. "
+            "Выбор варианта заполнит поля «Начало» и «Конец»."
+        )
         self.alternatives.currentIndexChanged.connect(self._choose_alternative)
         form.addRow("Начало", self._boundary_row(self.start))
         form.addRow("Конец", self._boundary_row(self.end))
         form.addRow("Длительность", self.duration)
-        form.addRow("Альтернативные границы", self.alternatives)
+        form.addRow("Другие варианты границ этого Short", self.alternatives)
         layout.addLayout(form)
         self.warning = QLabel()
         self.warning.setWordWrap(True)
@@ -201,6 +240,18 @@ class CandidateEditor(QWidget):
             return
         relative = self.player.position() - round(self.start.value() * 1000)
         self._seek_relative(relative + round(seconds * 1000))
+
+    def _begin_scrub(self) -> None:
+        if not self.player:
+            return
+        self._resume_after_scrub = self.player.playbackState() == QMediaPlayer.PlayingState
+        if self._resume_after_scrub:
+            self.player.pause()
+
+    def _end_scrub(self, _relative_ms: int) -> None:
+        if self.player and self._resume_after_scrub:
+            self.player.play()
+        self._resume_after_scrub = False
 
     def _position_changed(self, position: int) -> None:
         if not self.candidate:

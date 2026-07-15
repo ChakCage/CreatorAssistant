@@ -4,7 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from PySide6.QtCore import QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
     QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -42,6 +42,7 @@ class VerticalFramePreview(QWidget):
         scale = min(self.width() / 1080, self.height() / 1920)
         left = (self.width() - 1080 * scale) / 2
         top = (self.height() - 1920 * scale) / 2
+        painter.save()
         painter.translate(left, top)
         painter.scale(scale, scale)
         frame = QRect(0, 0, 1080, 1920)
@@ -52,38 +53,61 @@ class VerticalFramePreview(QWidget):
             painter.fillRect(frame, QColor("#182330"))
             painter.setPen(QColor("#60758a"))
             painter.drawText(frame, Qt.AlignCenter, "PREVIEW 1080×1920")
-        elif self.layout_settings.get("mode", "center_crop") == "blur_background":
-            tiny = pixmap.scaled(270, 480, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            painter.drawPixmap(frame, tiny)
+        elif self.layout_settings.get("mode", "center_crop") in {"blur_background", "solid_color"}:
+            mode = self.layout_settings.get("mode")
+            if mode == "blur_background":
+                expanded = pixmap.scaled(270, 480, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                crop_x = round(max(0, expanded.width() - 270) / 2)
+                crop_y = round(max(0, expanded.height() - 480) / 2)
+                background = expanded.copy(crop_x, crop_y, 270, 480)
+                painter.drawPixmap(frame, background, background.rect())
+            else:
+                painter.fillRect(frame, QColor(str(self.layout_settings.get("background_color", "black"))))
             factor = int(self.layout_settings.get("foreground_scale", 100)) / 100
-            foreground = pixmap.scaled(round(1080 * factor), round(1920 * factor), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            painter.drawPixmap(round((1080 - foreground.width()) / 2), round((1920 - foreground.height()) / 2), foreground)
+            foreground = pixmap.scaled(
+                round(1080 * factor), round(1920 * factor),
+                Qt.KeepAspectRatio, Qt.SmoothTransformation,
+            )
+            painter.drawPixmap(
+                round((1080 - foreground.width()) / 2),
+                round((1920 - foreground.height()) / 2),
+                foreground,
+            )
         else:
             center = int(self.layout_settings.get("crop_center", 50)) / 100
             scaled = pixmap.scaled(1080, 1920, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
             x = round(max(0, scaled.width() - 1080) * center)
             y = round(max(0, scaled.height() - 1920) / 2)
             painter.drawPixmap(frame, scaled, QRect(x, y, 1080, 1920))
+        painter.restore()
 
         style = resolved_style(self.settings)
         max_width = min(886, 1080 - 2 * max(80, int(self.settings.get("safe_margin", 90))))
         pages = pixel_pages(self.sample, style["font"], style["size"], style["outline"], 2, max_width)
         text = pages[0] if pages else self.sample
         font = QFont(style["font"])
-        font.setPixelSize(style["size"])
+        font.setPixelSize(max(8, round(style["size"] * scale)))
         font.setBold(True)
         painter.setFont(font)
         y = POSITION_Y.get(str(self.settings.get("position", "lower")), POSITION_Y["lower"])
-        box = QRectF(90, y - 150, 900, 300)
+        box = QRectF(left + 90 * scale, top + (y - 150) * scale, 900 * scale, 300 * scale)
+        flags = Qt.AlignCenter | Qt.TextWordWrap
         if self.settings.get("background", False):
-            painter.fillRect(box.adjusted(0, 25, 0, -25), QColor(0, 0, 0, 130))
-        painter.setPen(QPen(QColor("#000000"), max(2, style["outline"] * 2)))
-        painter.drawText(box, Qt.AlignCenter | Qt.TextWordWrap, text)
+            painter.fillRect(box, QColor(0, 0, 0, 130))
+        if style["shadow"]:
+            offset = max(1, round(style["shadow"] * 2 * scale))
+            painter.setPen(QColor(0, 0, 0, 170))
+            painter.drawText(box.translated(offset, offset), flags, text)
+        radius = max(1, round(style["outline"] * scale))
+        painter.setPen(QColor("#000000"))
+        for dx, dy in ((-radius, 0), (radius, 0), (0, -radius), (0, radius), (-radius, -radius), (-radius, radius), (radius, -radius), (radius, radius)):
+            painter.drawText(box.translated(dx, dy), flags, text)
         color = QColor("#ffd700") if style["name"] == "gaming" else QColor("#ffffff")
         painter.setPen(color)
-        painter.drawText(box, Qt.AlignCenter | Qt.TextWordWrap, text)
+        painter.drawText(box, flags, text)
         painter.setPen(QColor(255, 255, 255, 70))
-        painter.drawRect(QRectF(90, 120, 900, 1560))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(QRectF(left + 90 * scale, top + 120 * scale, 900 * scale, 1560 * scale))
         painter.end()
 
 
@@ -186,6 +210,32 @@ class SubtitleEditor(QWidget):
         self._dirty = False
         self._update_preview()
         self._set_saved_state()
+
+    def rebuild_for_boundaries(self, candidate, transcript) -> list[SubtitleCue]:
+        """Rebuild only this candidate's local cues after its start/end changes."""
+        if self.candidate is not candidate:
+            return []
+        self._save_timer.stop()
+        settings = self.current_settings()
+        cues = self.service.generate(
+            transcript,
+            candidate,
+            int(settings.get("maximum", 36)),
+            min(2, int(settings.get("lines", 2))),
+        )
+        self.transcript = transcript
+        self.original = deepcopy(cues)
+        self._show(cues)
+        settings["cues"] = [
+            {"start": cue.start, "end": cue.end, "text": cue.text}
+            for cue in cues
+        ]
+        candidate.subtitle_settings = settings
+        candidate.layout_settings = self.vertical.value()
+        self._dirty = False
+        self._update_preview()
+        self._set_saved_state()
+        return cues
 
     def _show(self, cues: list[SubtitleCue]) -> None:
         self.table.blockSignals(True)

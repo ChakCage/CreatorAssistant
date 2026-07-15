@@ -11,13 +11,14 @@ class VerticalLayoutPanel(QGroupBox):
         self.mode = QComboBox()
         self.mode.addItem("Center Crop", "center_crop")
         self.mode.addItem("Blur Background", "blur_background")
+        self.mode.addItem("Color Background (black)", "solid_color")
         self.center = QSlider(Qt.Horizontal)
         self.center.setRange(0, 100)
         self.center.setValue(50)
         self.center_value = QLabel("50%")
         self.center.valueChanged.connect(lambda value: self.center_value.setText(f"{value}%"))
         self.foreground = QSlider(Qt.Horizontal)
-        self.foreground.setRange(70, 115)
+        self.foreground.setRange(70, 150)
         self.foreground.setValue(100)
         self.foreground_value = QLabel("100%")
         self.foreground.valueChanged.connect(lambda value: self.foreground_value.setText(f"{value}%"))
@@ -38,7 +39,12 @@ class VerticalLayoutPanel(QGroupBox):
         self.foreground.setEnabled(not crop)
 
     def value(self) -> dict:
-        return {"mode": self.mode.currentData(), "crop_center": self.center.value(), "foreground_scale": self.foreground.value()}
+        return {
+            "mode": self.mode.currentData(),
+            "crop_center": self.center.value(),
+            "foreground_scale": self.foreground.value(),
+            "background_color": "black",
+        }
 
     def set_value(self, value: dict) -> None:
         self.mode.setCurrentIndex(max(0, self.mode.findData(value.get("mode", "center_crop"))))

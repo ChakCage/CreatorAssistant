@@ -13,7 +13,7 @@ from creator_assistant.services.shorts.transcription_service import srt_timestam
 FRAME_WIDTH = 1080
 MAX_TEXT_WIDTH = round(FRAME_WIDTH * 0.82)
 MIN_FONT_SIZE = 44
-POSITION_Y = {"upper": 420, "center": 930, "lower": 1260}
+POSITION_Y = {"upper": 420, "center": 930, "lower": 1450}
 STYLE_PRESETS = {
     "clean": {
         "font": "Segoe UI", "size": 58, "outline": 3, "shadow": 1,
