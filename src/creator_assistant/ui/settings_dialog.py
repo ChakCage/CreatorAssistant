@@ -141,6 +141,16 @@ class SettingsDialog(QDialog):
         authors_form.addRow(self.project_rescan_status)
         content_layout.addWidget(authors_group)
 
+        shorts_group = QGroupBox("Shorts")
+        shorts_form = QFormLayout(shorts_group)
+        self.auto_shorts_project_folder = QCheckBox("Автоматически выбирать папку проекта Shorts")
+        self.auto_shorts_project_folder.setChecked(bool(settings.get("auto_shorts_project_folder", True)))
+        self.auto_shorts_project_folder.setToolTip(
+            "Для проекта Creator Assistant используется папка Shorts; для отдельного видео — <название> Shorts."
+        )
+        shorts_form.addRow(self.auto_shorts_project_folder)
+        content_layout.addWidget(shorts_group)
+
         access_group = QGroupBox("Доступ к YouTube")
         access_form = QFormLayout(access_group)
         access = settings.get("youtube_access", {})
@@ -744,6 +754,7 @@ class SettingsDialog(QDialog):
         self.result_settings["create_vegas_project_default"] = self.create_vegas_default.isChecked()
         self.result_settings["auto_open_vegas_project"] = self.auto_open_vegas.isChecked()
         self.result_settings["suggest_remember_author"] = self.suggest_remember_author.isChecked()
+        self.result_settings["auto_shorts_project_folder"] = self.auto_shorts_project_folder.isChecked()
         self.result_settings["reaper_initial_audio"] = self.initial_audio.currentData()
         self.result_settings["whisper_backend"] = self.whisper_backend.currentData()
         self.result_settings["whisper_model"] = self.whisper_model.currentData()

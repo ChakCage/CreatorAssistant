@@ -23,6 +23,19 @@ class ShortsProjectPaths:
 
 
 class ShortsProjectStore:
+    @staticmethod
+    def suggested_root(source: Path) -> Path:
+        """Choose a predictable Shorts root without leaking into an author root.
+
+        A Creator Assistant project is identified by its private metadata marker.
+        Standalone media receives a sibling ``<stem> Shorts`` directory.
+        """
+        source = source.resolve()
+        for parent in source.parents:
+            if (parent / ".creator-assistant" / "manifest.json").is_file():
+                return parent / "Shorts"
+        return source.parent / f"{source.stem} Shorts"
+
     DIRECTORY_NAMES = ("Analysis", "Cache", "Approved", "Subtitles", "Renders", "Reports")
 
     @staticmethod

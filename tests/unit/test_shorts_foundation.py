@@ -39,6 +39,22 @@ def test_project_manifest_is_atomic_utf8_and_resumable(tmp_path):
     assert store.open_or_create(tmp_path / "Shorts", source) == paths
 
 
+def test_suggested_shorts_root_uses_creator_project_or_standalone_name(tmp_path):
+    project = tmp_path / "Creator Project"
+    marker = project / ".creator-assistant" / "manifest.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("{}", encoding="utf-8")
+    nested = project / "Материалы" / "movie.mp4"
+    nested.parent.mkdir()
+    nested.write_bytes(b"video")
+    assert ShortsProjectStore.suggested_root(nested) == project / "Shorts"
+
+    standalone = tmp_path / "Exports" / "Minecraft.mp4"
+    standalone.parent.mkdir()
+    standalone.write_bytes(b"video")
+    assert ShortsProjectStore.suggested_root(standalone) == standalone.parent / "Minecraft Shorts"
+
+
 def test_cache_invalidation_uses_stage_settings(tmp_path):
     source = sample_source(tmp_path / "source.mp4")
     source.fingerprint = "abc"

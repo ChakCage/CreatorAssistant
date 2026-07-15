@@ -73,3 +73,16 @@ def test_duplicate_filter_keeps_best_and_records_alternative_boundaries():
     assert result == [best, distinct]
     assert best.alternatives == [[12, 57]]
     assert overlap_ratio(best, duplicate) > 0.9
+
+
+def test_five_overlapping_candidates_form_one_cluster_and_keep_alternatives():
+    candidates = [
+        Candidate(str(index), 10 + index, 50 + index, 90 - index, f"Одна история Minecraft вариант {index}")
+        for index in range(5)
+    ]
+    duplicate_filter = DuplicateFilter()
+    clusters = duplicate_filter.clusters(candidates)
+    result = duplicate_filter.filter(candidates, limit=5)
+    assert len(clusters) == 1
+    assert len(result) == 1
+    assert len(result[0].alternatives) == 4

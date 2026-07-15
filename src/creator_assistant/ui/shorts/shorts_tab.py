@@ -330,6 +330,7 @@ class ShortsTab(QWidget):
         layout.addWidget(splitter, 1)
         self.source_panel.choose_file_requested.connect(self.choose_file)
         self.source_panel.choose_project_requested.connect(self.choose_project)
+        self.source_panel.choose_output_requested.connect(self.choose_output)
         self.start_button.clicked.connect(self.start_analysis)
         self.cancel_button.clicked.connect(self.cancel_analysis)
         self.candidate_list.selected.connect(self._edit_candidate)
@@ -360,9 +361,26 @@ class ShortsTab(QWidget):
         )
         if not selected:
             return
-        output = QFileDialog.getExistingDirectory(self, "Выберите папку, в которой создать проект Shorts", str(Path(selected).parent))
+        source = Path(selected)
+        suggested = self.project_store.suggested_root(source)
+        if bool(self.container.settings.get("auto_shorts_project_folder", True)):
+            self._begin_probe(source, suggested)
+            return
+        output = QFileDialog.getExistingDirectory(
+            self, "Выберите папку проекта Shorts", str(suggested)
+        )
         if output:
-            self._begin_probe(Path(selected), Path(output) / f"{Path(selected).stem} Shorts")
+            self._begin_probe(source, Path(output))
+
+    @Slot()
+    def choose_output(self) -> None:
+        if not self.source:
+            return
+        current = self.paths.root if self.paths else self.project_store.suggested_root(Path(self.source.path))
+        output = QFileDialog.getExistingDirectory(self, "Выберите папку проекта Shorts", str(current))
+        if output:
+            # An explicit choice wins for this source until another source is selected.
+            self._begin_probe(Path(self.source.path), Path(output))
 
     @Slot()
     def choose_project(self) -> None:

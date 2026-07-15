@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QByteArray, QTimer
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QLabel, QMainWindow, QTabWidget, QToolBar
+from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QTabWidget, QToolBar
 
 from creator_assistant.app import ServiceContainer
 from creator_assistant.ui.diagnostics_dialog import DiagnosticsDialog
@@ -17,7 +17,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.container = container
         self.setWindowTitle("Creator Assistant")
-        self.resize(1320, 860)
         self.setMinimumSize(1040, 700)
         toolbar = QToolBar("Основное")
         toolbar.setMovable(False)
@@ -43,6 +42,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.shorts_tab, "Shorts")
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage("Готов к работе")
+        self._restore_or_size_window()
         if self.container.first_run:
             QTimer.singleShot(500, self.open_diagnostics)
 
@@ -56,9 +56,28 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         if self.prep_tab.shutdown_workers() and self.shorts_tab.shutdown_workers():
+            self.container.settings["window_geometry"] = bytes(self.saveGeometry().toBase64()).decode("ascii")
+            self.container.settings_store.save(self.container.settings)
             crash_event("Main window closed after all QThreads finished")
             event.accept()
         else:
             crash_event("Main window close deferred because a QThread is still running")
             self.statusBar().showMessage("Завершаю активную операцию…")
             event.ignore()
+
+    def _restore_or_size_window(self) -> None:
+        encoded = str(self.container.settings.get("window_geometry") or "")
+        if encoded:
+            try:
+                if self.restoreGeometry(QByteArray.fromBase64(encoded.encode("ascii"))):
+                    if any(self.frameGeometry().intersects(screen.availableGeometry()) for screen in QApplication.screens()):
+                        return
+            except (ValueError, TypeError):
+                pass
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else self.geometry()
+        width = max(self.minimumWidth(), int(available.width() * 0.88))
+        height = max(self.minimumHeight(), int(available.height() * 0.88))
+        width, height = min(width, available.width()), min(height, available.height())
+        self.resize(width, height)
+        self.move(available.x() + (available.width() - width) // 2, available.y() + (available.height() - height) // 2)

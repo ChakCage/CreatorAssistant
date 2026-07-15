@@ -45,6 +45,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "Minecraft", "GTA 6", "PS5 Pro", "OLED", "Beppo", "MylesMC",
         "редстоун", "хардкор", "YouTube", "Shorts", "REAPER", "Vegas",
     ],
+    "auto_shorts_project_folder": True,
+    "window_geometry": "",
     "last_update_check": "",
     "latest_yt_dlp_version": "",
     "dependency_sources": {},
