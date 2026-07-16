@@ -632,7 +632,13 @@ class SubtitleEditor(QWidget):
         self.branding_preset.setCurrentIndex(max(0, self.branding_preset.findData(settings.get("preset", "clean"))))
         self.show_subtitles.setChecked(bool(settings.get("show_subtitles", True)))
         self.show_title.setChecked(bool(settings.get("show_title", False)))
-        self.title_text.setText(str(settings.get("final_title_text", "") or ""))
+        title_suggestions = dict(settings.get("title_suggestions") or {})
+        self.title_text.setText(str(
+            title_suggestions.get("manual_title")
+            or settings.get("final_title_text")
+            or settings.get("short_hook_title")
+            or ""
+        ))
         self.original_title_label.setText(str(settings.get("original_video_title") or "—"))
         self.original_title_source.setText(str(settings.get("original_video_title_source") or "—"))
         self.title_style.setCurrentIndex(max(0, self.title_style.findData(settings.get("title_style", "clean"))))
@@ -691,39 +697,32 @@ class SubtitleEditor(QWidget):
         if not self.candidate:
             return
         branding = dict(self.candidate.branding_settings or {})
-        source = str(branding.get("original_video_title") or "").strip()
-        if not self.title_service.is_good_title(source):
+        translated = str(branding.get("translated_video_title") or "").strip()
+        if not translated:
             QMessageBox.warning(
-                self, "Перевод названия",
-                "Не удалось определить исходное название. Введите его вручную.",
+                self,
+                "Перевод названия",
+                "Для этого проекта русский перевод ещё не подготовлен. Запустите анализ или ручную подготовку AI-заголовков.",
             )
             return
-        logging.getLogger("creator_assistant").info(
-            "Short title translation input=%r source=%s model=%s",
-            source, branding.get("original_video_title_source", "—"),
-            getattr(self.semantic_backend, "model", "disabled"),
-        )
-        self._run_ai_title_task(
-            lambda: self.semantic_backend.translate_video_title(source, CancellationToken()),
-            self._translation_ready,
-        )
+        self.title_text.setText(translated)
+        self.show_title.setChecked(True)
+        self._mark_dirty()
 
     def _title_hook_clicked(self) -> None:
         if not self.candidate:
             return
-        context = self.title_service.hook_context(self.candidate, self.transcript)
-        context["original_video_title"] = str(
-            (self.candidate.branding_settings or {}).get("original_video_title") or ""
-        )
-        logging.getLogger("creator_assistant").info(
-            "Short hook request candidate=%s model=%s transcript_chars=%d",
-            self.candidate.id, getattr(self.semantic_backend, "model", "disabled"),
-            len(str(context.get("transcript", ""))),
-        )
-        self._run_ai_title_task(
-            lambda: self.semantic_backend.suggest_short_hooks(context, CancellationToken()),
-            self._hooks_ready,
-        )
+        branding = dict(self.candidate.branding_settings or {})
+        title_suggestions = dict(branding.get("title_suggestions") or {})
+        suggestions = list(title_suggestions.get("suggestions") or branding.get("short_hook_suggestions") or [])
+        if not suggestions:
+            QMessageBox.information(
+                self,
+                "Короткие заголовки",
+                "Для этого кандидата варианты заголовка ещё не подготовлены.",
+            )
+            return
+        self._hooks_ready(title_suggestions or {"suggestions": suggestions})
 
     def _run_ai_title_task(self, function, callback) -> None:
         if not isinstance(self.semantic_backend, OllamaSemanticScorer):
@@ -778,16 +777,46 @@ class SubtitleEditor(QWidget):
         self._mark_dirty()
 
     def _hooks_ready(self, response) -> None:
+        if hasattr(response, "model_dump"):
+            payload = response.model_dump()
+        elif isinstance(response, dict):
+            payload = dict(response)
+        else:
+            payload = {
+                "suggestions": [
+                    item.model_dump() if hasattr(item, "model_dump") else item
+                    for item in getattr(response, "suggestions", [])
+                ],
+                "recommended_id": getattr(response, "recommended_id", ""),
+            }
+        suggestions = [
+            item if isinstance(item, dict) else item.model_dump()
+            for item in list(payload.get("suggestions") or [])
+            if str((item.get("text") if isinstance(item, dict) else getattr(item, "text", "")) or "").strip()
+        ]
+        if not suggestions:
+            QMessageBox.information(
+                self,
+                "Короткие заголовки",
+                "Для этого кандидата варианты заголовка ещё не подготовлены.",
+            )
+            self._set_saved_state()
+            return
         dialog = QDialog(self)
         dialog.setWindowTitle("Выберите короткий заголовок")
         dialog.resize(620, 300)
         layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel("Локальная модель предложила три варианта. Выберите один:"))
+        layout.addWidget(QLabel("Выберите подготовленный вариант. После выбора текст можно редактировать."))
         choices = QListWidget()
-        for suggestion in response.suggestions:
-            choices.addItem(f"{suggestion.text}  ·  {suggestion.score}/100\n{suggestion.reason}")
-            choices.item(choices.count() - 1).setData(Qt.UserRole, suggestion.text)
-        choices.setCurrentRow(0)
+        recommended_id = str(payload.get("recommended_id") or "")
+        recommended_row = 0
+        for row, suggestion in enumerate(suggestions):
+            marker = "  ·  Рекомендуется" if str(suggestion.get("id") or "") == recommended_id else ""
+            choices.addItem(f"{suggestion.get('text', '')}  ·  {suggestion.get('score', '—')}/100{marker}\n{suggestion.get('reason', '')}")
+            choices.item(choices.count() - 1).setData(Qt.UserRole, suggestion)
+            if marker:
+                recommended_row = row
+        choices.setCurrentRow(recommended_row)
         layout.addWidget(choices, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
@@ -796,10 +825,16 @@ class SubtitleEditor(QWidget):
         if dialog.exec() != QDialog.Accepted or not choices.currentItem():
             self._set_saved_state()
             return
-        hook = str(choices.currentItem().data(Qt.UserRole) or "").strip()
+        selected = choices.currentItem().data(Qt.UserRole) or {}
+        hook = str(selected.get("text") if isinstance(selected, dict) else selected).strip()
         branding = dict(self.candidate.branding_settings or {})
+        title_suggestions = dict(branding.get("title_suggestions") or {})
+        if title_suggestions:
+            title_suggestions["selected_id"] = selected.get("id") if isinstance(selected, dict) else None
+            title_suggestions["manual_title"] = None
+            branding["title_suggestions"] = title_suggestions
         branding["short_hook_title"] = hook
-        branding["short_hook_suggestions"] = [item.model_dump() for item in response.suggestions]
+        branding["short_hook_suggestions"] = suggestions
         self.candidate.branding_settings = branding
         self.title_text.setText(hook)
         self.show_title.setChecked(True)
@@ -952,15 +987,28 @@ class SubtitleEditor(QWidget):
     def current_branding_settings(self) -> dict:
         profile_id = str(self.channel_profile.currentData() or "")
         banner = self.assets.banner_path(profile_id)
+        existing = dict(self.candidate.branding_settings or {}) if self.candidate else {}
+        title_suggestions = dict(existing.get("title_suggestions") or {})
+        final_title = self.title_text.text().strip()
+        selected_text = ""
+        selected_id = str(title_suggestions.get("selected_id") or title_suggestions.get("recommended_id") or "")
+        for item in title_suggestions.get("suggestions") or []:
+            if str(item.get("id") or "") == selected_id:
+                selected_text = str(item.get("text") or "").strip()
+                break
+        if title_suggestions and final_title and selected_text and final_title != selected_text:
+            title_suggestions["manual_title"] = final_title
         return {
             "preset": self.branding_preset.currentData(),
             "show_subtitles": self.show_subtitles.isChecked(),
             "show_title": self.show_title.isChecked(),
-            "original_video_title": (self.candidate.branding_settings or {}).get("original_video_title", "") if self.candidate else "",
-            "original_video_title_source": (self.candidate.branding_settings or {}).get("original_video_title_source", "") if self.candidate else "",
-            "translated_video_title": (self.candidate.branding_settings or {}).get("translated_video_title", "") if self.candidate else "",
-            "short_hook_title": (self.candidate.branding_settings or {}).get("short_hook_title", "") if self.candidate else "",
-            "final_title_text": self.title_text.text().strip(),
+            "original_video_title": existing.get("original_video_title", ""),
+            "original_video_title_source": existing.get("original_video_title_source", ""),
+            "translated_video_title": existing.get("translated_video_title", ""),
+            "short_hook_title": existing.get("short_hook_title", ""),
+            "short_hook_suggestions": existing.get("short_hook_suggestions", []),
+            "title_suggestions": title_suggestions,
+            "final_title_text": final_title,
             "title_style": self.title_style.currentData(),
             "title_size": self.title_size.value(),
             "title_bold": self.title_bold.isChecked(),
@@ -1110,3 +1158,4 @@ class SubtitleEditor(QWidget):
         if self.candidate:
             self._apply_configuration()
             self.defaults_requested.emit(self.candidate)
+
