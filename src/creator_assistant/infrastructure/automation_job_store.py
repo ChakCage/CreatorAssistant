@@ -50,3 +50,11 @@ class AutomationJobStore:
     def unfinished(self) -> List[AutomationJob]:
         terminal = {AutomationStatus.COMPLETED.value, AutomationStatus.CANCELLED.value, AutomationStatus.FAILED.value}
         return [job for job in self.list() if job.status not in terminal]
+
+    def delete(self, job_id: str) -> bool:
+        with self._lock:
+            path = self.path_for(job_id)
+            if not path.is_file():
+                return False
+            path.unlink()
+            return True

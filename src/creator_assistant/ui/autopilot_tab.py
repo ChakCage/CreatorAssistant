@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QDate, QThread, QTimer
+from PySide6.QtCore import QDate, QThread, QTimer, Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QFileDialog, QFormLayout, QHBoxLayout,
     QDialog, QDialogButtonBox, QHeaderView, QLabel, QLineEdit, QListWidget,
@@ -22,15 +22,15 @@ class AutopilotResultsDialog(QDialog):
         self.setWindowTitle(f"Результаты автопилота — {job.job_id}")
         self.resize(980, 460)
         layout = QVBoxLayout(self)
-        table = QTableWidget(0, 7)
-        table.setHorizontalHeaderLabels(("Место", "Short ID", "Кандидат", "Start–end", "Статус", "Профиль", "Итоговый файл"))
+        table = QTableWidget(0, 14)
+        table.setHorizontalHeaderLabels(("Место", "Short ID", "Candidate ID", "Start", "End", "Score", "Selected", "Шаблон", "Субтитры", "Рендер", "QC", "Итог", "Файл", "Проблема"))
         rows = self.rows(job)
         table.setRowCount(len(rows))
         for row, values in enumerate(rows):
             for column, value in enumerate(values):
                 table.setItem(row, column, QTableWidgetItem(str(value)))
-        table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
-        table.cellDoubleClicked.connect(lambda row, _column: self._open_file(rows[row][6]))
+        table.horizontalHeader().setSectionResizeMode(12, QHeaderView.Stretch)
+        table.cellDoubleClicked.connect(lambda row, _column: self._open_file(rows[row][12]))
         layout.addWidget(table)
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         open_folder = buttons.addButton("Открыть папку", QDialogButtonBox.ActionRole)
@@ -44,8 +44,12 @@ class AutopilotResultsDialog(QDialog):
         return [
             (
                 short.candidate_rank or "—", short.short_id, short.candidate_id,
-                f"{short.start:.3f}–{short.end:.3f}", short.status,
-                short.profile_id or "—", short.artifact.output_path if short.artifact else "—",
+                f"{short.start:.3f}", f"{short.end:.3f}", f"{short.score:.1f}", "Да",
+                short.composition_snapshot_hash[:10] or "—", short.subtitle_status,
+                "Готов" if short.artifact else "Не создан",
+                "Пройдена" if short.artifact and short.artifact.validated else "Не пройдена",
+                short.status, short.artifact.output_path if short.artifact else "—",
+                "; ".join(issue.message for issue in short.issues) or "—",
             )
             for short in job.shorts
         ]
@@ -98,6 +102,10 @@ class AutopilotTab(QWidget):
         self.profile.addItem("Определить автоматически", "")
         for channel in self.container.channel_assets.profiles():
             self.profile.addItem(channel.display_name, channel.id)
+        self.template_summary = QLabel()
+        self.template_preview = QPushButton("Просмотреть настройки")
+        self.template_preview.clicked.connect(self._show_template_summary)
+        self.profile.currentIndexChanged.connect(self._refresh_template_summary)
         self.minimum_score = QSpinBox(); self.minimum_score.setRange(0, 100); self.minimum_score.setValue(80)
         self.maximum_per_source = QSpinBox(); self.maximum_per_source.setRange(0, 50); self.maximum_per_source.setValue(10)
         self.start_date = QDateEdit(QDate.currentDate()); self.start_date.setCalendarPopup(True)
@@ -109,6 +117,9 @@ class AutopilotTab(QWidget):
         platforms = QWidget(); platform_layout = QHBoxLayout(platforms); platform_layout.setContentsMargins(0, 0, 0, 0); platform_layout.addWidget(self.youtube); platform_layout.addWidget(self.tiktok); platform_layout.addStretch(1)
         form.addRow("Режим", self.mode)
         form.addRow("Профиль", self.profile)
+        template_row = QWidget(); template_layout = QHBoxLayout(template_row); template_layout.setContentsMargins(0, 0, 0, 0)
+        template_layout.addWidget(self.template_summary, 1); template_layout.addWidget(self.template_preview)
+        form.addRow("Шаблон оформления", template_row)
         form.addRow("Количество", QLabel("Автоматически (AUTO)"))
         form.addRow("Минимальный score", self.minimum_score)
         form.addRow("Максимум с источника", self.maximum_per_source)
@@ -123,15 +134,37 @@ class AutopilotTab(QWidget):
         for text, callback in (
             ("Запустить", self.start_job), ("Пауза", self.pause_job), ("Продолжить", self.resume_job),
             ("Отменить", self.cancel_job), ("Открыть результаты", self.open_results),
-            ("Одобрить и запланировать", self.approve_job),
+            ("Одобрить и создать тестовое расписание", self.approve_job),
+            ("Удалить задание", self.delete_job),
         ):
             button = QPushButton(text); button.clicked.connect(callback); actions.addWidget(button)
         actions.addStretch(1)
         root.addLayout(actions)
-        self.jobs = QTableWidget(0, 10)
-        self.jobs.setHorizontalHeaderLabels(("Источник", "Режим", "Этап", "Прогресс", "Найдено", "Выбрано", "Рендер", "Проверка", "ETA", "Ошибка"))
+        self.jobs = QTableWidget(0, 11)
+        self.jobs.setHorizontalHeaderLabels(("Источник", "Режим", "Этап", "Прогресс", "Найдено", "Выбрано", "Отрендерено", "Проверено", "Проблемы", "ETA", "Ошибка"))
         self.jobs.setSelectionBehavior(QTableWidget.SelectRows)
+        self.jobs.setContextMenuPolicy(Qt.ActionsContextMenu)
+        delete_action = self.jobs.addAction("Удалить задание")
+        delete_action.triggered.connect(self.delete_job)
         root.addWidget(self.jobs, 1)
+        self._refresh_template_summary()
+
+    def _refresh_template_summary(self) -> None:
+        profile_name = self.profile.currentText() if hasattr(self, "profile") else "Автоматически"
+        self.template_summary.setText(f"Текущие сохранённые настройки · {profile_name}")
+
+    def _show_template_summary(self) -> None:
+        defaults = self.container.settings.get("shorts_subtitle_defaults", {})
+        branding = self.container.settings.get("shorts_branding_defaults", {})
+        mode = str(defaults.get("layout_mode", "center_crop"))
+        profile = self.profile.currentText()
+        QMessageBox.information(
+            self, "Шаблон оформления",
+            f"Кадр: {mode}\nПередний слой: {int(defaults.get('foreground_scale', 100))}%\n"
+            f"Субтитры: {defaults.get('style', 'clean')}\nБаннер: {profile}\n"
+            f"Заголовок: русский перевод исходного названия\nРендер: 1080×1920 · source FPS · "
+            f"{'H.264 NVENC' if self.container.shorts_render.prefer_nvenc else 'H.264 libx264'} · AAC",
+        )
 
     def sources_clear(self) -> None:
         self.sources.clear()
@@ -216,6 +249,30 @@ class AutopilotTab(QWidget):
     def cancel_job(self) -> None:
         if self.selected_job_id(): self.engine.cancel(self.selected_job_id()); self.refresh_jobs()
 
+    def delete_job(self) -> None:
+        job_id = self.selected_job_id()
+        if not job_id:
+            return
+        answer = QMessageBox.question(
+            self, "Удалить задание",
+            "Удалить запись задания? Готовые MP4 и файлы проекта останутся на диске.",
+            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            self.engine.delete_job(job_id)
+        except ValueError as exc:
+            QMessageBox.information(self, "Автопилот", str(exc))
+            return
+        self.refresh_jobs()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Delete:
+            self.delete_job()
+            return
+        super().keyPressEvent(event)
+
     def approve_job(self) -> None:
         if self.selected_job_id():
             try: self.engine.approve_and_schedule(self.selected_job_id())
@@ -237,9 +294,10 @@ class AutopilotTab(QWidget):
             found = sum(source.candidates_found for source in job.sources)
             selected = len(job.shorts)
             rendered = job.result.rendered_count
-            review = job.result.needs_review_count
+            checked = sum(bool(short.artifact and short.artifact.validated) for short in job.shorts)
+            problems = sum(short.status in {"NEEDS_REVIEW", "FAILED"} for short in job.shorts)
             source_label = Path(job.sources[0].path).name if len(job.sources) == 1 else f"{len(job.sources)} видео"
-            cells = (source_label, job.mode, job.status, f"{job.progress:.0f}%", found, selected, rendered, review, str(job.resume_data.get("eta", "—")), job.error)
+            cells = (source_label, job.mode, job.status, f"{job.progress:.0f}%", found, selected, f"{rendered} / {selected}", f"{checked} / {rendered}", problems, str(job.resume_data.get("eta", "—")), job.error)
             for column, value in enumerate(cells):
                 item = QTableWidgetItem(str(value)); item.setData(256, job.job_id); self.jobs.setItem(row, column, item)
             if job.job_id == select_id:

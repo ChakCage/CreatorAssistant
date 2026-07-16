@@ -149,6 +149,17 @@ class AutomationEngine:
         self._save(job)
         return job
 
+    def delete_job(self, job_id: str) -> bool:
+        job = self._required(job_id)
+        allowed = {
+            AutomationStatus.CREATED.value, AutomationStatus.CANCELLED.value,
+            AutomationStatus.FAILED.value, AutomationStatus.COMPLETED.value,
+            AutomationStatus.WAITING_FOR_APPROVAL.value, AutomationStatus.SCHEDULED.value,
+        }
+        if job.status not in allowed:
+            raise ValueError("Сначала отмените активное задание")
+        return self.store.delete(job_id)
+
     def _schedule(self, job: AutomationJob) -> None:
         eligible = [item for item in job.shorts if item.status in {AutomationShortStatus.RENDERED.value, AutomationShortStatus.APPROVED.value} and item.artifact and item.artifact.validated]
         order = str(job.schedule_settings.get("order", "rank"))
@@ -200,6 +211,10 @@ class AutomationEngine:
     def _save(self, job: AutomationJob) -> None:
         job.updated_at = _now()
         job.result.selected_count = len(job.shorts)
-        job.result.rendered_count = sum(item.artifact is not None for item in job.shorts)
+        job.result.rendered_count = sum(
+            item.artifact is not None
+            and (item.artifact.validated or Path(item.artifact.output_path).is_file())
+            for item in job.shorts
+        )
         job.result.needs_review_count = sum(item.status == AutomationShortStatus.NEEDS_REVIEW.value for item in job.shorts)
         self.store.save(job)
