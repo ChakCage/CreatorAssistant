@@ -29,13 +29,20 @@ class TitleTranslationResponse(BaseModel):
 
 
 class HookSuggestion(BaseModel):
+    id: str = ""
     text: str = Field(min_length=2, max_length=80)
     score: int = Field(ge=1, le=100)
     reason: str = Field(min_length=2, max_length=240)
 
 
 class HookSuggestionsResponse(BaseModel):
+    candidate_id: str = ""
     suggestions: List[HookSuggestion] = Field(min_length=3, max_length=3)
+    recommended_id: str = "hook_1"
+
+
+class HookBatchResponse(BaseModel):
+    results: List[HookSuggestionsResponse] = Field(min_length=1)
 
 
 class SemanticBackendError(RuntimeError):
@@ -338,6 +345,29 @@ class OllamaSemanticScorer(SemanticScorerBackend):
         if self._hooks_are_weak(response, str(context.get("transcript", ""))):
             raise SemanticResponseError("Локальная модель не смогла создать три качественных hook-варианта.")
         return response
+
+    def suggest_short_hooks_batch(self, contexts: List[Dict[str, Any]], cancellation: CancellationToken) -> List[HookSuggestionsResponse]:
+        cancellation.raise_if_cancelled()
+        if not contexts:
+            return []
+        prompt = (
+            "Сгенерируй AI-заголовки для нескольких финальных YouTube Shorts. Для каждого candidate_id верни ровно три "
+            "разных коротких русских hook-заголовка, score, reason и recommended_id. Анализируй полный transcript каждого "
+            "кандидата, context_before/context_after, развитие и финал. Не копируй первую реплику и не используй технические "
+            "слова вроде «Видео», «Видос», «Shorts» или одинокое «Minecraft». Верни только JSON по схеме.\n"
+            + json.dumps(contexts, ensure_ascii=False, separators=(",", ":"))
+        )
+        response = self._structured_chat(prompt, HookBatchResponse, cancellation, think=False)
+        requested = {str(item.get("candidate_id")) for item in contexts}
+        results = response.results
+        returned = [item.candidate_id for item in results]
+        if set(returned) != requested or len(returned) != len(set(returned)):
+            raise SemanticResponseError("Ollama вернула неизвестные, повторяющиеся или пропущенные candidate_id для hook-заголовков.")
+        by_id = {str(item.get("candidate_id")): item for item in contexts}
+        for item in results:
+            if self._hooks_are_weak(item, str(by_id[item.candidate_id].get("transcript", ""))):
+                raise SemanticResponseError("Ollama вернула слабые hook-заголовки в batch.")
+        return results
 
     @staticmethod
     def _hooks_are_weak(response: HookSuggestionsResponse, transcript: str) -> bool:

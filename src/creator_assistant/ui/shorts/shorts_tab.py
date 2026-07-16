@@ -34,6 +34,7 @@ from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectPaths, ShortsProjectStore
 from creator_assistant.services.shorts.source_service import ShortsSourceService
+from creator_assistant.services.shorts.title_assets import ShortTitleAssetService
 from creator_assistant.services.shorts.title_service import ShortTitleService
 from creator_assistant.ui.shorts.analysis_progress_panel import AnalysisProgressPanel
 from creator_assistant.ui.shorts.analysis_settings_panel import AnalysisSettingsPanel
@@ -222,6 +223,24 @@ class _AnalysisWorker(QObject):
                     "metrics": analysis_result.metrics,
                 }
                 store.save(manifest)
+            title_assets = ShortTitleAssetService()
+            title_result = title_assets.prepare(
+                source=self.source,
+                paths=self.paths,
+                manifest=manifest,
+                candidates=candidates,
+                transcript=transcript,
+                backend=self.container.shorts_semantic_backend,
+                ai_settings=ai_settings,
+                cache=SemanticCache(self.paths.analysis / "title_cache.json"),
+                cancellation=self.token,
+                content_type=self.candidate_settings.content_type,
+                batch_size=int(ai_settings.get("title_batch_size", 4) or 4),
+                progress=self.progress.emit,
+            )
+            manifest.candidates = [asdict(item) for item in candidates]
+            candidates_path.write_text(json.dumps(manifest.candidates, ensure_ascii=False, indent=2), encoding="utf-8")
+            store.save(manifest)
             if analysis_result and analysis_result.fallback_reason:
                 summary = f"AI недоступен — применён эвристический fallback: {analysis_result.fallback_reason}"
             elif analysis_result and analysis_result.used_ai:
@@ -230,6 +249,11 @@ class _AnalysisWorker(QObject):
             else:
                 summary = "Использована эвристическая оценка."
             self.progress.emit("11. Ожидание пользователя", f"Подготовлено {len(candidates)} непохожих кандидатов. {summary}", 92)
+            title_summary = (
+                f"AI-заголовки: перевод {'готов' if title_result.translated_ready else 'недоступен'}, "
+                f"hooks {title_result.hook_ready}/{len(candidates)}, cache hits {title_result.cache_hits}."
+            )
+            self.progress.emit("11. Title assets", title_summary, 92)
             self.finished.emit({
                 "transcript": transcript, "candidates": candidates, "scenes": scenes,
                 "audio_features": audio_features, "analysis_result": analysis_result,
@@ -834,6 +858,7 @@ class ShortsTab(QWidget):
             candidate.selected_boundary_variant_id = variant_id
             if self.transcript:
                 candidate.text = self._transcript_for_range(start, end)
+                ShortTitleAssetService().mark_stale(candidate, self.transcript)
             rebuilt = []
             if self.transcript:
                 rebuilt = self.subtitle_editor.rebuild_for_boundaries(candidate, self.transcript)

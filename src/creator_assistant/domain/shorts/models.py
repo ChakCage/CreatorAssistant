@@ -146,6 +146,7 @@ class ShortsManifest:
     whisper_model: str = ""
     analysis_settings: Dict[str, Any] = field(default_factory=dict)
     ai_analysis: Dict[str, Any] = field(default_factory=dict)
+    title_assets: Dict[str, Any] = field(default_factory=dict)
     candidates: List[Dict[str, Any]] = field(default_factory=list)
     approved_clips: List[Dict[str, Any]] = field(default_factory=list)
     render_jobs: List[Dict[str, Any]] = field(default_factory=list)
