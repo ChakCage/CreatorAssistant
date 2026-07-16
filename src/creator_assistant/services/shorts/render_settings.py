@@ -6,6 +6,7 @@ from typing import Any
 
 from creator_assistant.domain.shorts.models import Candidate
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore, ChannelProfile
+from creator_assistant.services.shorts.project_template import ProjectShortsTemplate, TRANSLATED_SOURCE_TITLE
 
 
 @dataclass(frozen=True)
@@ -49,7 +50,14 @@ class VerticalRenderSettingsResolver:
         selected_subtitle_preset: str = "",
         profile_layout: dict[str, Any] | None = None,
         job_layout: dict[str, Any] | None = None,
+        project_template: ProjectShortsTemplate | dict[str, Any] | None = None,
+        use_candidate_override: bool | None = None,
     ) -> ResolvedVerticalRenderSettings:
+        template = (
+            ProjectShortsTemplate.from_dict(project_template)
+            if isinstance(project_template, dict) else project_template
+        )
+        override = candidate.settings_override if use_candidate_override is None else use_candidate_override
         subtitle_defaults = dict(self.settings.get("shorts_subtitle_defaults", {}))
         presets = self.settings.get("shorts_subtitle_presets", {})
         requested_style = str(selected_subtitle_preset or "").strip()
@@ -60,6 +68,10 @@ class VerticalRenderSettingsResolver:
         # style fields; defaults supply layout and any fields absent in the preset.
         subtitle = {**subtitle_defaults, **preset}
         subtitle["style"] = style
+        if template:
+            subtitle.update(template.subtitle)
+        if override:
+            subtitle.update({key: value for key, value in candidate.subtitle_settings.items() if key != "cues"})
         for key in self._DYNAMIC_SUBTITLE_KEYS:
             if key in candidate.subtitle_settings:
                 subtitle[key] = candidate.subtitle_settings[key]
@@ -72,6 +84,10 @@ class VerticalRenderSettingsResolver:
             **dict(profile_layout or {}),
             **dict(job_layout or {}),
         }
+        if template:
+            layout.update(template.layout)
+        if override:
+            layout.update(candidate.layout_settings)
 
         branding_defaults = dict(self.settings.get("shorts_branding_defaults", {}))
         profile = self._resolve_profile(
@@ -84,10 +100,26 @@ class VerticalRenderSettingsResolver:
         banner = self.assets.banner_path(profile)
         profile_branding = self._profile_branding(profile, banner)
         branding = {**branding_defaults, **profile_branding}
+        if template:
+            branding.update(template.branding)
+        if override:
+            branding.update({
+                key: value for key, value in candidate.branding_settings.items()
+                if key not in {"channel_profile_id", "channel_banner_path"}
+            })
+        # Channel identity and image are resolved for the current author; template
+        # geometry remains shared between channels.
+        branding["channel_profile_id"] = profile.id if profile else ""
+        branding["channel_banner_path"] = str(banner or "")
         for key in self._DYNAMIC_BRANDING_KEYS:
             value = candidate.branding_settings.get(key)
             if value not in (None, ""):
                 branding[key] = value
+        if template and template.title_mode == TRANSLATED_SOURCE_TITLE and not override:
+            translated = str(candidate.branding_settings.get("translated_video_title") or "").strip()
+            original = str(candidate.branding_settings.get("original_video_title") or "").strip()
+            branding["final_title_text"] = translated or original
+            branding["title_mode"] = TRANSLATED_SOURCE_TITLE
         if not str(branding.get("final_title_text") or "").strip():
             branding["final_title_text"] = str(candidate.title or "")
         return ResolvedVerticalRenderSettings(

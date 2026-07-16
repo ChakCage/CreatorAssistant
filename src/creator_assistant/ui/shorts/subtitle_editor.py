@@ -404,6 +404,9 @@ class SubtitleEditor(QWidget):
     configuration_changed = Signal(object)
     test_render_requested = Signal(object)
     defaults_requested = Signal(object)
+    template_save_requested = Signal(object)
+    template_apply_all_requested = Signal()
+    template_reset_requested = Signal(object)
     subtitle_preset_changed = Signal(str, object)
 
     def __init__(self, semantic_backend=None, parent=None, subtitle_presets=None) -> None:
@@ -722,7 +725,7 @@ class SubtitleEditor(QWidget):
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.addWidget(self.table, 1)
         actions = QHBoxLayout()
-        for text, handler in (("Объединить", self._merge), ("Разделить", self._split), ("Удалить", self._delete), ("Восстановить исходный вариант", self._restore), ("Сохранить SRT и ASS", self._export), ("Рендер тестовых 5 секунд", self._test_render), ("Использовать эти настройки по умолчанию", self._save_defaults)):
+        for text, handler in (("Объединить", self._merge), ("Разделить", self._split), ("Удалить", self._delete), ("Восстановить исходный вариант", self._restore), ("Сохранить SRT и ASS", self._export), ("Рендер тестовых 5 секунд", self._test_render), ("Использовать эти настройки по умолчанию", self._save_defaults), ("Сохранить как шаблон для всех Shorts проекта", self._save_project_template), ("Применить шаблон ко всем кандидатам", self._apply_project_template_all), ("Сбросить настройки этого Short к шаблону", self._reset_to_project_template)):
             button = QPushButton(text)
             button.clicked.connect(handler)
             actions.addWidget(button)
@@ -1724,6 +1727,7 @@ class SubtitleEditor(QWidget):
         self.candidate.subtitle_settings = self.current_settings()
         self.candidate.layout_settings = self.vertical.value()
         self.candidate.branding_settings = self.current_branding_settings()
+        self.candidate.settings_override = True
         self._dirty = False
         self.configuration_changed.emit(self.candidate)
 
@@ -1796,4 +1800,16 @@ class SubtitleEditor(QWidget):
         if self.candidate:
             self._apply_configuration()
             self.defaults_requested.emit(self.candidate)
+
+    def _save_project_template(self) -> None:
+        if self.candidate:
+            self._apply_configuration()
+            self.template_save_requested.emit(self.candidate)
+
+    def _apply_project_template_all(self) -> None:
+        self.template_apply_all_requested.emit()
+
+    def _reset_to_project_template(self) -> None:
+        if self.candidate:
+            self.template_reset_requested.emit(self.candidate)
 

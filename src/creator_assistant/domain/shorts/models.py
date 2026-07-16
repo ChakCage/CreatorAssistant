@@ -100,6 +100,7 @@ class Candidate:
     ai_mode: str = ""
     selected_boundary_variant_id: str = "main"
     candidate_rank: Optional[int] = None
+    settings_override: bool = False
 
     @property
     def duration(self) -> float:
@@ -157,6 +158,7 @@ class ShortsManifest:
     analysis_settings: Dict[str, Any] = field(default_factory=dict)
     ai_analysis: Dict[str, Any] = field(default_factory=dict)
     title_assets: Dict[str, Any] = field(default_factory=dict)
+    shorts_template: Dict[str, Any] = field(default_factory=dict)
     candidates: List[Dict[str, Any]] = field(default_factory=list)
     approved_clips: List[Dict[str, Any]] = field(default_factory=list)
     render_jobs: List[Dict[str, Any]] = field(default_factory=list)

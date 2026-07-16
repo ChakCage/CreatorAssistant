@@ -38,6 +38,7 @@ from creator_assistant.services.shorts.shorts_project_store import ShortsProject
 from creator_assistant.services.shorts.source_service import ShortsSourceService
 from creator_assistant.services.shorts.title_assets import ShortTitleAssetService
 from creator_assistant.services.shorts.render_settings import VerticalRenderSettingsResolver
+from creator_assistant.services.shorts.project_template import ProjectShortsTemplate
 from creator_assistant.services.shorts.title_service import ShortTitleService
 from creator_assistant.ui.shorts.analysis_progress_panel import AnalysisProgressPanel
 from creator_assistant.ui.shorts.analysis_settings_panel import AnalysisSettingsPanel
@@ -495,6 +496,9 @@ class ShortsTab(QWidget):
         self.subtitle_editor.test_render_requested.connect(self._start_test_render)
         self.subtitle_editor.defaults_requested.connect(self._save_subtitle_defaults)
         self.subtitle_editor.subtitle_preset_changed.connect(self._subtitle_preset_changed)
+        self.subtitle_editor.template_save_requested.connect(self._save_project_template)
+        self.subtitle_editor.template_apply_all_requested.connect(self._apply_project_template_all)
+        self.subtitle_editor.template_reset_requested.connect(self._reset_candidate_to_template)
         self.render_queue.render_requested.connect(self._start_render)
         self.render_queue.retry_requested.connect(self._start_render)
         self.render_queue.cancel_requested.connect(self.cancel_analysis)
@@ -704,37 +708,21 @@ class ShortsTab(QWidget):
             ErrorDialog(str(exc), repr(exc), self).exec()
 
     def _apply_branding_defaults(self, candidate) -> None:
-        defaults = dict(self.container.settings.get("shorts_branding_defaults", {}))
         original = self.title_service.resolve_original_title(self.source, self.paths) if self.source else None
-        if candidate.branding_settings:
-            branding = dict(candidate.branding_settings)
-            if original and not self.title_service.is_good_title(str(branding.get("original_video_title", ""))):
-                branding["original_video_title"] = original.title
-                branding["original_video_title_source"] = original.source
-            elif original and not str(branding.get("original_video_title_source", "")).strip():
-                branding["original_video_title_source"] = original.source
-            if "banner_offset_x" not in branding:
-                # Pre-offset banner_x was absolute; do not reinterpret legacy X=50 as +50.
-                branding["banner_offset_x"] = 0
-            branding.setdefault("banner_offset_y", 0)
-            branding.setdefault("title_style", "clean")
-            branding.setdefault("title_shadow", 2)
-            candidate.branding_settings = branding
-            return
+        branding = dict(candidate.branding_settings or {})
+        if original and not self.title_service.is_good_title(str(branding.get("original_video_title", ""))):
+            branding["original_video_title"] = original.title
+            branding["original_video_title_source"] = original.source
+        elif original and not str(branding.get("original_video_title_source", "")).strip():
+            branding["original_video_title_source"] = original.source
+        candidate.branding_settings = branding
         source_author = self._source_author_hint()
         aliases = [source_author, Path(self.source.name).stem if self.source else ""]
         resolved = VerticalRenderSettingsResolver(self.container.settings, ChannelAssetStore()).resolve(
             candidate, source_author=source_author, aliases=aliases,
+            project_template=self._project_template(),
         )
-        candidate.branding_settings = {
-            **resolved.branding,
-            "source_author": source_author,
-            "original_video_title": original.title if original else "",
-            "original_video_title_source": original.source if original else "",
-            "translated_video_title": "",
-            "short_hook_title": "",
-            "final_title_text": str(defaults.get("final_title_text") or candidate.title or ""),
-        }
+        candidate.branding_settings = resolved.branding
 
     def _source_author_hint(self) -> str:
         if not self.source:
@@ -841,15 +829,104 @@ class ShortsTab(QWidget):
         author_resolver = getattr(self, "_source_author_hint", None)
         source_author = author_resolver() if callable(author_resolver) else ""
         source = getattr(self, "source", None)
+        template_resolver = getattr(self, "_project_template", None)
+        project_template = template_resolver() if callable(template_resolver) else None
         resolved = VerticalRenderSettingsResolver(self.container.settings, ChannelAssetStore()).resolve(
             candidate,
             source_author=source_author,
             aliases=[source_author, Path(source.name).stem if source else ""],
+            project_template=project_template,
         )
-        if not candidate.subtitle_settings:
-            candidate.subtitle_settings = resolved.subtitle
-        if not candidate.layout_settings:
-            candidate.layout_settings = resolved.layout
+        candidate.subtitle_settings = resolved.subtitle
+        candidate.layout_settings = resolved.layout
+
+    def _project_template(self) -> ProjectShortsTemplate | None:
+        if not self.paths:
+            return None
+        manifest = ShortsManifestStore(self.paths.manifest).load()
+        return ProjectShortsTemplate.from_dict(manifest.shorts_template if manifest else None)
+
+    @Slot(object)
+    def _save_project_template(self, candidate) -> None:
+        if not self.paths or not self.review_service:
+            return
+        template = ProjectShortsTemplate.from_candidate(candidate, {
+            "width": 1080, "height": 1920, "fps_policy": "source",
+            "encoder": "h264_nvenc" if self.container.shorts_render.prefer_nvenc else "libx264",
+            "audio_codec": "aac",
+        })
+        manifest_store = ShortsManifestStore(self.paths.manifest)
+        manifest = manifest_store.load()
+        if not manifest:
+            return
+        manifest.shorts_template = template.to_dict()
+        manifest_store.save(manifest)
+        candidate.settings_override = False
+        self._apply_template_to_candidate(candidate, template, reset_override=True)
+        self.review_service.save(self.candidates)
+        self.subtitle_editor.set_context(candidate, self.transcript, self.paths)
+        self.progress_panel.update_state("Шаблон Shorts сохранён", "Общий шаблон проекта применяется ко всем кандидатам без ручного override.", 94)
+
+    @Slot()
+    def _apply_project_template_all(self) -> None:
+        template = self._project_template()
+        if not template or not self.review_service:
+            QMessageBox.information(self, "Шаблон Shorts", "Сначала сохраните шаблон проекта.")
+            return
+        has_overrides = any(candidate.settings_override for candidate in self.candidates)
+        overwrite = False
+        if has_overrides:
+            answer = QMessageBox.question(
+                self, "Применить шаблон",
+                "Перезаписать существующие ручные overrides?\n\nДа — перезаписать. Нет — сохранить ручные настройки.",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.No,
+            )
+            if answer == QMessageBox.Cancel:
+                return
+            overwrite = answer == QMessageBox.Yes
+        for candidate in self.candidates:
+            if candidate.settings_override and not overwrite:
+                continue
+            self._apply_template_to_candidate(candidate, template, reset_override=True)
+        self.review_service.save(self.candidates)
+        current = self.subtitle_editor.candidate
+        if current:
+            self.subtitle_editor.set_context(current, self.transcript, self.paths)
+        self.progress_panel.update_state("Шаблон применён", f"Обновлено кандидатов: {sum(not item.settings_override for item in self.candidates)}.", 94)
+
+    @Slot(object)
+    def _reset_candidate_to_template(self, candidate) -> None:
+        template = self._project_template()
+        if not template or not self.review_service:
+            QMessageBox.information(self, "Шаблон Shorts", "Шаблон проекта ещё не сохранён.")
+            return
+        self._apply_template_to_candidate(candidate, template, reset_override=True)
+        self.review_service.save(self.candidates)
+        self.subtitle_editor.set_context(candidate, self.transcript, self.paths)
+
+    def _apply_template_to_candidate(self, candidate, template: ProjectShortsTemplate, *, reset_override: bool) -> None:
+        cues = list((candidate.subtitle_settings or {}).get("cues") or [])
+        dynamic = {
+            key: value for key, value in (candidate.branding_settings or {}).items()
+            if key in {
+                "source_author", "original_video_title", "original_video_title_source",
+                "translated_video_title", "short_hook_title", "short_hook_suggestions", "title_suggestions",
+            }
+        }
+        if reset_override:
+            candidate.settings_override = False
+        source_author = self._source_author_hint()
+        resolved = VerticalRenderSettingsResolver(self.container.settings, ChannelAssetStore()).resolve(
+            candidate,
+            source_author=source_author,
+            aliases=[source_author, Path(self.source.name).stem if self.source else ""],
+            project_template=template,
+            use_candidate_override=False,
+        )
+        candidate.subtitle_settings = {**resolved.subtitle, "cues": cues}
+        candidate.layout_settings = resolved.layout
+        candidate.branding_settings = {**resolved.branding, **dynamic}
 
     @Slot(str, object)
     def _subtitle_preset_changed(self, name: str, preset) -> None:
