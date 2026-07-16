@@ -215,7 +215,7 @@ def test_subtitle_defaults_and_candidate_override_are_separate(tmp_path):
 def test_render_queue_checkbox_is_independent_from_approved_status(tmp_path):
     qt_app = app()
     first = Candidate("short_001", 0, 10, 90, "one", status="approved", candidate_rank=2)
-    second = Candidate("short_002", 0, 10, 90, "two", status="approved", candidate_rank=1)
+    second = Candidate("short_002", 20, 30, 90, "two", status="approved", candidate_rank=1)
     queue = RenderQueue()
     queue.set_context([first, second], tmp_path)
     assert queue.table.item(0, 0).checkState() == Qt.Unchecked

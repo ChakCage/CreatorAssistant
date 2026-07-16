@@ -25,10 +25,10 @@ class RenderQueue(QWidget):
         self.renders_folder: Path | None = None
         self._refreshing = False
         layout = QVBoxLayout(self)
-        self.table = QTableWidget(0, 8)
-        self.table.setHorizontalHeaderLabels(("Выбрать", "Место", "Кандидат", "Длина", "Статус", "Прогресс", "Скорость", "Файл / ошибка"))
+        self.table = QTableWidget(0, 9)
+        self.table.setHorizontalHeaderLabels(("Выбрать", "Место", "Кандидат", "Start–end", "Длина", "Статус", "Прогресс", "Скорость", "Файл / ошибка"))
         self.table.horizontalHeaderItem(1).setToolTip("Место кандидата в итоговом рейтинге анализа")
-        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.Stretch)
         self.table.itemChanged.connect(self._selection_changed)
         layout.addWidget(self.table, 1)
         actions = QHBoxLayout()
@@ -52,7 +52,7 @@ class RenderQueue(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
-        approved = [item for item in self.candidates if item.status == "approved"]
+        approved = self._unique_approved()
         self._refreshing = True
         self.table.setRowCount(len(approved))
         for row, candidate in enumerate(approved):
@@ -62,7 +62,7 @@ class RenderQueue(QWidget):
             choose.setData(Qt.UserRole, candidate)
             job = self.jobs.get(candidate.id)
             rank = str(candidate.candidate_rank) if candidate.candidate_rank is not None else "—"
-            values = (rank, candidate.id, f"{candidate.duration:.1f} с", STATUS.get(job.status, job.status) if job else "Не добавлен", f"{job.progress:.1f}%" if job and job.progress is not None else "—", job.speed if job else "", (job.error or job.output_path) if job else "")
+            values = (rank, candidate.id, f"{candidate.start:.3f}–{candidate.end:.3f}", f"{candidate.duration:.1f} с", STATUS.get(job.status, job.status) if job else "Не добавлен", f"{job.progress:.1f}%" if job and job.progress is not None else "—", job.speed if job else "", (job.error or job.output_path) if job else "")
             self.table.setItem(row, 0, choose)
             for column, value in enumerate(values, 1):
                 self.table.setItem(row, column, QTableWidgetItem(str(value)))
@@ -93,9 +93,29 @@ class RenderQueue(QWidget):
 
     def _retry(self) -> None:
         failed_ids = {job.candidate_id for job in self.jobs.values() if job.status in {"error", "cancelled"}}
-        failed = [item for item in self.candidates if item.id in failed_ids and item.status == "approved"]
+        failed = [item for item in self._unique_approved() if item.id in failed_ids]
         if failed:
             self.retry_requested.emit(failed)
+
+    def _unique_approved(self) -> list[Candidate]:
+        ranked = sorted(
+            (item for item in self.candidates if item.status == "approved"),
+            key=lambda item: (-(item.final_score or item.score), item.candidate_rank or 10**9, item.start),
+        )
+        winners: list[Candidate] = []
+        identifiers: set[str] = set()
+        segments: set[tuple[int, int]] = set()
+        for candidate in ranked:
+            identifier = candidate.id.strip().casefold()
+            segment = (round(candidate.start * 1000), round(candidate.end * 1000))
+            if identifier in identifiers or segment in segments:
+                continue
+            identifiers.add(identifier)
+            segments.add(segment)
+            winners.append(candidate)
+        # Preserve the order chosen in the candidate table; ranking remains an
+        # explicit column and must not silently rearrange the user's queue.
+        return [item for item in self.candidates if any(item is winner for winner in winners)]
 
     def _open_folder(self) -> None:
         if self.renders_folder:

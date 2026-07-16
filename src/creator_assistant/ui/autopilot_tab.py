@@ -6,12 +6,60 @@ from pathlib import Path
 from PySide6.QtCore import QDate, QThread, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QFileDialog, QFormLayout, QHBoxLayout,
-    QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QSpinBox,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QDialog, QDialogButtonBox, QHeaderView, QLabel, QLineEdit, QListWidget,
+    QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from creator_assistant.domain.automation.models import AutomationMode, AutomationProfile, AutomationStatus
 from creator_assistant.ui.workers import FunctionWorker
+
+
+class AutopilotResultsDialog(QDialog):
+    def __init__(self, job, parent=None) -> None:
+        super().__init__(parent)
+        self.job = job
+        self.setWindowTitle(f"Результаты автопилота — {job.job_id}")
+        self.resize(980, 460)
+        layout = QVBoxLayout(self)
+        table = QTableWidget(0, 7)
+        table.setHorizontalHeaderLabels(("Место", "Short ID", "Кандидат", "Start–end", "Статус", "Профиль", "Итоговый файл"))
+        rows = self.rows(job)
+        table.setRowCount(len(rows))
+        for row, values in enumerate(rows):
+            for column, value in enumerate(values):
+                table.setItem(row, column, QTableWidgetItem(str(value)))
+        table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
+        table.cellDoubleClicked.connect(lambda row, _column: self._open_file(rows[row][6]))
+        layout.addWidget(table)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        open_folder = buttons.addButton("Открыть папку", QDialogButtonBox.ActionRole)
+        open_folder.clicked.connect(self._open_folder)
+        buttons.rejected.connect(self.close)
+        layout.addWidget(buttons)
+        self.table = table
+
+    @staticmethod
+    def rows(job) -> list[tuple]:
+        return [
+            (
+                short.candidate_rank or "—", short.short_id, short.candidate_id,
+                f"{short.start:.3f}–{short.end:.3f}", short.status,
+                short.profile_id or "—", short.artifact.output_path if short.artifact else "—",
+            )
+            for short in job.shorts
+        ]
+
+    @staticmethod
+    def _open_file(path: str) -> None:
+        target = Path(path)
+        if os.name == "nt" and target.is_file():
+            os.startfile(str(target))
+
+    def _open_folder(self) -> None:
+        artifact = next((short.artifact for short in self.job.shorts if short.artifact), None)
+        if artifact and os.name == "nt":
+            os.startfile(str(Path(artifact.output_path).parent))
 
 
 class AutopilotTab(QWidget):
@@ -176,9 +224,11 @@ class AutopilotTab(QWidget):
 
     def open_results(self) -> None:
         job = self.engine.store.load(self.selected_job_id()) if self.selected_job_id() else None
-        artifact = next((short.artifact for short in (job.shorts if job else []) if short.artifact), None)
-        if artifact and os.name == "nt":
-            os.startfile(str(Path(artifact.output_path).parent))
+        if not job:
+            return
+        self._results_dialog = AutopilotResultsDialog(job, self)
+        self._results_dialog.show()
+        self._results_dialog.raise_()
 
     def refresh_jobs(self, select_id: str = "") -> None:
         values = self.engine.store.list()

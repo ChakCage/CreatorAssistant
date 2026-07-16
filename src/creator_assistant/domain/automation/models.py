@@ -62,7 +62,8 @@ class AutomationProfile:
     channel_profile_id: str = ""
     auto_detect: bool = True
     banner_required: bool = False
-    subtitle_preset: str = "clean"
+    # Empty means "use the preset currently saved in Vertical Editor".
+    subtitle_preset: str = ""
     composition_preset: Dict[str, Any] = field(default_factory=dict)
 
 

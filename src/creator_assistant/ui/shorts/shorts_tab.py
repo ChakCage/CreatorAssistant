@@ -37,6 +37,7 @@ from creator_assistant.services.shorts.subtitle_layout import subtitle_preset_va
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectPaths, ShortsProjectStore
 from creator_assistant.services.shorts.source_service import ShortsSourceService
 from creator_assistant.services.shorts.title_assets import ShortTitleAssetService
+from creator_assistant.services.shorts.render_settings import VerticalRenderSettingsResolver
 from creator_assistant.services.shorts.title_service import ShortTitleService
 from creator_assistant.ui.shorts.analysis_progress_panel import AnalysisProgressPanel
 from creator_assistant.ui.shorts.analysis_settings_panel import AnalysisSettingsPanel
@@ -721,25 +722,13 @@ class ShortsTab(QWidget):
             candidate.branding_settings = branding
             return
         source_author = self._source_author_hint()
-        linked_profiles = self.container.settings.get("shorts_channel_profile_links", {})
-        saved_profile = linked_profiles.get(source_author.casefold(), "") if isinstance(linked_profiles, dict) else ""
-        profile = ChannelAssetStore().resolve(
-            saved_profile_id=str(saved_profile or ""),
-            source_author=source_author,
-            aliases=[source_author, Path(self.source.name).stem if self.source else ""],
+        aliases = [source_author, Path(self.source.name).stem if self.source else ""]
+        resolved = VerticalRenderSettingsResolver(self.container.settings, ChannelAssetStore()).resolve(
+            candidate, source_author=source_author, aliases=aliases,
         )
         candidate.branding_settings = {
-            **defaults,
+            **resolved.branding,
             "source_author": source_author,
-            "channel_profile_id": profile.id if profile else str(defaults.get("channel_profile_id", "")),
-            "channel_banner_path": str(ChannelAssetStore().banner_path(profile) or ""),
-            "show_channel_card": bool(profile and defaults.get("preset") == "promotion"),
-            "banner_scale": profile.default_banner_scale if profile else int(defaults.get("banner_scale", 100) or 100),
-            "banner_offset_x": profile.default_banner_offset_x if profile else int(defaults.get("banner_offset_x", 0) or 0),
-            "banner_offset_y": profile.default_banner_offset_y if profile else int(defaults.get("banner_offset_y", 0) or 0),
-            "banner_opacity": profile.default_banner_opacity if profile else int(defaults.get("banner_opacity", 100) or 100),
-            "banner_anchor": profile.default_banner_anchor if profile else str(defaults.get("banner_anchor", "bottom_center")),
-            "banner_fit_mode": profile.default_banner_fit_mode if profile else str(defaults.get("banner_fit_mode", "contain")),
             "original_video_title": original.title if original else "",
             "original_video_title_source": original.source if original else "",
             "translated_video_title": "",
@@ -849,35 +838,18 @@ class ShortsTab(QWidget):
             self._start_configuration_save()
 
     def _apply_subtitle_defaults(self, candidate) -> None:
-        defaults = dict(self.container.settings.get("shorts_subtitle_defaults", {}))
-        style = str(defaults.get("style") or "clean")
-        defaults.update(subtitle_preset_value(self.container.settings.get("shorts_subtitle_presets", {}), style))
-        if not candidate.subtitle_settings and defaults:
-            candidate.subtitle_settings = {
-                "style": defaults.get("style", "clean"),
-                "position": defaults.get("position", "lower"),
-                "alignment": defaults.get("alignment", "center"),
-                "horizontal_offset": int(defaults.get("horizontal_offset", 0)),
-                "font_family": defaults.get("font_family", "Segoe UI"),
-                "vertical_offset": int(defaults.get("vertical_offset", 0)),
-                "size": int(defaults.get("size", 58)),
-                "maximum": int(defaults.get("maximum", 36)),
-                "lines": int(defaults.get("lines", 2)),
-                "outline": int(defaults.get("outline", 3)),
-                "shadow": int(defaults.get("shadow", 1)),
-                "background": bool(defaults.get("background", False)),
-                "safe_margin": int(defaults.get("safe_margin", 120)),
-                "auto_above_banner": bool(defaults.get("auto_above_banner", True)),
-                "line_anchor_mode": str(defaults.get("line_anchor_mode", "first_line_fixed")),
-                "banner_gap": int(defaults.get("banner_gap", 15)),
-            }
-        if not candidate.layout_settings and defaults:
-            candidate.layout_settings = {
-                "mode": defaults.get("layout_mode", "center_crop"),
-                "crop_center": int(defaults.get("crop_center", 50)),
-                "foreground_scale": int(defaults.get("foreground_scale", 100)),
-                "background_color": defaults.get("background_color", "black"),
-            }
+        author_resolver = getattr(self, "_source_author_hint", None)
+        source_author = author_resolver() if callable(author_resolver) else ""
+        source = getattr(self, "source", None)
+        resolved = VerticalRenderSettingsResolver(self.container.settings, ChannelAssetStore()).resolve(
+            candidate,
+            source_author=source_author,
+            aliases=[source_author, Path(source.name).stem if source else ""],
+        )
+        if not candidate.subtitle_settings:
+            candidate.subtitle_settings = resolved.subtitle
+        if not candidate.layout_settings:
+            candidate.layout_settings = resolved.layout
 
     @Slot(str, object)
     def _subtitle_preset_changed(self, name: str, preset) -> None:
