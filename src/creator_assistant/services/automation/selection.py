@@ -26,11 +26,7 @@ class AutomaticCandidateSelector:
             # alternative represents this candidate/segment.
             seen_candidate_ids.add(candidate_key)
             seen_segments.add(segment_key)
-            if any(
-                abs(candidate.start - previous.start) < distance
-                or min(candidate.end, previous.end) - max(candidate.start, previous.start) > 0
-                for previous in selected
-            ):
+            if any(self._same_episode(candidate, previous, distance) for previous in selected):
                 continue
             selected.append(candidate)
             if len(selected) >= maximum:
@@ -40,6 +36,14 @@ class AutomaticCandidateSelector:
             "остальные ниже порога или являются дублями"
         )
         return selected, summary
+
+    @staticmethod
+    def _same_episode(candidate: Candidate, previous: Candidate, distance: float) -> bool:
+        overlap = max(0.0, min(candidate.end, previous.end) - max(candidate.start, previous.start))
+        shorter = max(0.001, min(candidate.duration, previous.duration))
+        # Partial overlap is common for distinct story beats.  Treat it as an
+        # alternative only when at least 70% of the shorter window is identical.
+        return abs(candidate.start - previous.start) < distance and overlap / shorter >= 0.70
 
 
 def unique_automation_shorts(shorts):
