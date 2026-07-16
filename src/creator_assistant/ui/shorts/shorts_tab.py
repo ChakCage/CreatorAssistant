@@ -223,6 +223,8 @@ class _AnalysisWorker(QObject):
                     ),
                 )
                 candidates = analysis_result.candidates
+                from creator_assistant.services.shorts.candidate_ranking import assign_candidate_ranks
+                assign_candidate_ranks(candidates)
                 candidates_path.write_text(json.dumps([asdict(item) for item in candidates], ensure_ascii=False, indent=2), encoding="utf-8")
                 cache.mark_complete("candidates", candidate_config)
                 stage_fingerprints = dict(manifest.analysis_settings.get("stage_fingerprints", {}))
@@ -243,6 +245,8 @@ class _AnalysisWorker(QObject):
                     "metrics": analysis_result.metrics,
                 }
                 store.save(manifest)
+            from creator_assistant.services.shorts.candidate_ranking import assign_candidate_ranks
+            assign_candidate_ranks(candidates)
             title_assets = ShortTitleAssetService()
             title_result = title_assets.prepare(
                 source=self.source,
@@ -321,7 +325,11 @@ class _RenderWorker(QObject):
                 except ValueError:
                     index = len(jobs) + 1
                 target = unique_output_path(self.paths.renders, Path(self.source.name).stem, index, candidate.title)
-                job = RenderJob(f"render_{candidate.id}", candidate.id, str(target), "rendering", 0.0)
+                job = RenderJob(
+                    id=f"render_{candidate.id}", candidate_id=candidate.id,
+                    output_path=str(target), status="rendering", progress=0.0,
+                    candidate_rank=candidate.candidate_rank,
+                )
                 jobs.append(job)
                 self.job_updated.emit(job)
                 settings = candidate.subtitle_settings or {"style": "clean", "position": "lower", "size": 58}
@@ -345,6 +353,12 @@ class _RenderWorker(QObject):
                     self.container.shorts_render.render(self.source, candidate, render_ass, target, self.token, update)
                     job.status, job.progress = "done", 100.0
                     job.speed = self.container.shorts_render.last_speed
+                    from creator_assistant.domain.shorts.models import RenderArtifact
+                    job.artifact = asdict(RenderArtifact(
+                        candidate_id=candidate.id,
+                        candidate_rank=candidate.candidate_rank,
+                        output_path=str(target),
+                    ))
                 except Exception as exc:
                     if self.token.is_cancelled:
                         job.status, job.error = "cancelled", "Операция отменена пользователем."
@@ -1040,8 +1054,18 @@ class ShortsTab(QWidget):
             from creator_assistant.domain.shorts.models import Candidate
             try:
                 self.candidates = [Candidate(**item) for item in json.loads(candidates_path.read_text(encoding="utf-8"))]
+                from creator_assistant.services.shorts.candidate_ranking import assign_candidate_ranks
+                ranks_changed = assign_candidate_ranks(self.candidates)
+                if ranks_changed:
+                    candidates_path.write_text(
+                        json.dumps([asdict(item) for item in self.candidates], ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
                 self.candidate_list.set_candidates(self.candidates)
                 manifest = ShortsManifestStore(self.paths.manifest).load()
+                if manifest and ranks_changed:
+                    manifest.candidates = [asdict(item) for item in self.candidates]
+                    ShortsManifestStore(self.paths.manifest).save(manifest)
                 jobs = [RenderJob(**item) for item in (manifest.render_jobs if manifest else [])]
                 self.render_queue.set_context(self.candidates, self.paths.renders, jobs)
                 if self.candidates:

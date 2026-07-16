@@ -27,6 +27,7 @@ def test_candidate_list_hides_empty_warning_column_and_shows_details():
         final_score=91,
         ai_model="qwen3:14b",
         ai_mode="balanced",
+        candidate_rank=1,
     )
     widget.set_candidates([candidate])
     assert widget.table.isColumnHidden(10)
@@ -39,18 +40,28 @@ def test_candidate_list_hides_empty_warning_column_and_shows_details():
     widget.close()
 
 
-def test_candidate_list_recalculates_rank_after_sort_and_keeps_stable_id():
+def test_candidate_list_keeps_final_rank_after_sort_and_stable_id():
     application = app()
     widget = CandidateList()
-    first = Candidate("short_001", 30, 55, 60, "first", heuristic_score=60, final_score=60)
-    second = Candidate("short_002", 10, 40, 90, "second", heuristic_score=90, final_score=90, warnings=["warn"])
+    first = Candidate("short_001", 5, 30, 60, "first", heuristic_score=60, final_score=60, candidate_rank=2)
+    second = Candidate("short_002", 10, 40, 90, "second", heuristic_score=90, final_score=90, warnings=["warn"], candidate_rank=1)
     widget.set_candidates([first, second])
     assert widget.table.item(0, 0).text() == "1"
     assert widget.table.item(0, 0).data(256).id == "short_002"
     assert not widget.table.isColumnHidden(10)
     widget.sort.setCurrentIndex(widget.sort.findData("time"))
-    assert widget.table.item(0, 0).text() == "1"
-    assert widget.table.item(0, 0).data(256).id == "short_002"
-    assert widget.table.item(1, 0).data(256).id == "short_001"
+    assert widget.table.item(0, 0).text() == "2"
+    assert widget.table.item(0, 0).data(256).id == "short_001"
+    assert widget.table.item(1, 0).text() == "1"
+    assert widget.table.item(1, 0).data(256).id == "short_002"
+    widget.close()
+    application.processEvents()
+
+
+def test_candidate_list_displays_dash_when_rank_is_missing():
+    application = app()
+    widget = CandidateList()
+    widget.set_candidates([Candidate("legacy", 0, 10, 50, "legacy")])
+    assert widget.table.item(0, 0).text() == "—"
     widget.close()
     application.processEvents()

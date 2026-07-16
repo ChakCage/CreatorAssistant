@@ -99,6 +99,7 @@ class Candidate:
     ai_model: str = ""
     ai_mode: str = ""
     selected_boundary_variant_id: str = "main"
+    candidate_rank: Optional[int] = None
 
     @property
     def duration(self) -> float:
@@ -131,6 +132,15 @@ class RenderJob:
     progress: Optional[float] = None
     error: str = ""
     speed: str = ""
+    candidate_rank: Optional[int] = None
+    artifact: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class RenderArtifact:
+    candidate_id: str
+    output_path: str
+    candidate_rank: Optional[int] = None
 
 
 @dataclass

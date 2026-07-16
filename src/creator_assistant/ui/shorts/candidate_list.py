@@ -107,7 +107,8 @@ class CandidateList(QWidget):
             if candidate.ai_verdict:
                 details += f"\n{self._short_text(candidate.ai_verdict, 90)}"
             cells = (
-                str(row + 1), f"{candidate.start:.1f}", f"{candidate.end:.1f}",
+                str(candidate.candidate_rank) if candidate.candidate_rank is not None else "—",
+                f"{candidate.start:.1f}", f"{candidate.end:.1f}",
                 f"{candidate.duration:.1f} с", f"{candidate.heuristic_score or candidate.score:.1f}",
                 ai_score, f"{candidate.final_score or candidate.score:.1f}", source,
                 STATUS_LABELS.get(candidate.status, candidate.status), details,
