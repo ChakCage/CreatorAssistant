@@ -222,7 +222,7 @@ def test_render_queue_checkbox_is_independent_from_approved_status(tmp_path):
     assert queue.table.item(1, 0).checkState() == Qt.Unchecked
     assert queue.table.item(0, 1).text() == "2"
     assert queue.table.item(1, 1).text() == "1"
-    assert queue.table.horizontalHeaderItem(1).toolTip() == "Итоговое место кандидата после анализа"
+    assert queue.table.horizontalHeaderItem(1).toolTip() == "Место кандидата в итоговом рейтинге анализа"
     queue.table.item(0, 0).setCheckState(Qt.Checked)
     emitted = []
     queue.render_requested.connect(emitted.append)

@@ -27,7 +27,7 @@ class RenderQueue(QWidget):
         layout = QVBoxLayout(self)
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(("Выбрать", "Место", "Кандидат", "Длина", "Статус", "Прогресс", "Скорость", "Файл / ошибка"))
-        self.table.horizontalHeaderItem(1).setToolTip("Итоговое место кандидата после анализа")
+        self.table.horizontalHeaderItem(1).setToolTip("Место кандидата в итоговом рейтинге анализа")
         self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
         self.table.itemChanged.connect(self._selection_changed)
         layout.addWidget(self.table, 1)
