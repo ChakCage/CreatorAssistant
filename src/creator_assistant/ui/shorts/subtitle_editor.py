@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QRect, QRectF, Qt, QThread, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QHeaderView, QLabel, QListWidget, QGridLayout, QLineEdit, QMessageBox, QPushButton,
@@ -21,6 +21,7 @@ except ImportError:
 
 from creator_assistant.domain.shorts.models import SubtitleCue
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
+from creator_assistant.services.shorts.font_resolver import DEFAULT_FONT_FAMILY, resolve_font
 from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator, layout_title_text
 from creator_assistant.services.shorts.title_service import ShortTitleService
 from creator_assistant.services.shorts.semantic_backend import OllamaSemanticScorer
@@ -37,6 +38,13 @@ TITLE_STYLE_PRESETS = {
     "large": {"size": 98, "bold": True, "outline": 6, "shadow": 3, "color": "#ffffff"},
     "gaming": {"size": 88, "bold": True, "outline": 7, "shadow": 5, "color": "#ffd54a"},
 }
+
+
+def _format_fps(value: float) -> str:
+    if value <= 0:
+        return "—"
+    text = f"{value:.2f}".rstrip("0").rstrip(".")
+    return text.replace(".", ",")
 
 
 class _AiTitleWorker(QObject):
@@ -56,10 +64,11 @@ class _AiTitleWorker(QObject):
 
 
 class VerticalFramePreview(QWidget):
+    resized = Signal()
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setMinimumSize(216, 384)
-        self.setMaximumWidth(320)
         self.candidate = None
         self.settings: dict = {}
         self.layout_settings: dict = {}
@@ -81,6 +90,23 @@ class VerticalFramePreview(QWidget):
         if image and not image.isNull():
             self.video_frame = image.copy()
             self.update()
+
+    def effective_preview_size(self) -> tuple[int, int]:
+        scale = min(self.width() / 1080, self.height() / 1920)
+        return max(1, round(1080 * scale)), max(1, round(1920 * scale))
+
+    def set_target_preview_size(self, width: int, height: int) -> None:
+        width = max(216, int(width))
+        height = max(384, int(height))
+        self.setMinimumSize(width, height)
+        self.setMaximumWidth(width)
+        self.setMaximumHeight(height)
+        self.updateGeometry()
+        self.resized.emit()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self.resized.emit()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt API
         painter = QPainter(self)
@@ -175,25 +201,35 @@ class VerticalFramePreview(QWidget):
                     title,
                     int(self.branding_settings.get("title_size", 78)),
                     bool(self.branding_settings.get("title_bold", True)),
+                    font_family=self._title_font_family(),
                 )
-                font = QFont("Arial")
+                font = QFont(self._title_font_family())
                 font.setPixelSize(max(8, round(effective_size * scale)))
                 font.setBold(bool(self.branding_settings.get("title_bold", True)))
                 painter.setFont(font)
-                box = QRectF(left + 90 * scale, top + int(self.branding_settings.get("title_y", 180)) * scale, 900 * scale, 260 * scale)
+                offset_x = max(-300, min(300, int(self.branding_settings.get("title_offset_x", 0) or 0)))
+                box = QRectF(
+                    left + (90 + offset_x) * scale,
+                    top + int(self.branding_settings.get("title_y", 180)) * scale,
+                    900 * scale,
+                    260 * scale,
+                )
+                align_name = str(self.branding_settings.get("title_alignment", "center") or "center")
+                align_flag = {"left": Qt.AlignLeft, "right": Qt.AlignRight}.get(align_name, Qt.AlignCenter)
+                flags = align_flag | Qt.AlignVCenter | Qt.TextWordWrap
                 if bool(self.branding_settings.get("title_background", False)):
                     painter.fillRect(box.adjusted(-18 * scale, -10 * scale, 18 * scale, 10 * scale), QColor(0, 0, 0, 135))
                 shadow = max(0, round(int(self.branding_settings.get("title_shadow", 2)) * scale))
                 if shadow:
                     painter.setPen(QColor(0, 0, 0, 190))
-                    painter.drawText(box.translated(shadow, shadow), Qt.AlignCenter | Qt.TextWordWrap, title)
+                    painter.drawText(box.translated(shadow, shadow), flags, title)
                 outline = max(0, round(int(self.branding_settings.get("title_outline", 4)) * scale))
                 for dx, dy in ((-outline, 0), (outline, 0), (0, -outline), (0, outline), (-outline, -outline), (outline, outline)):
                     if outline:
                         painter.setPen(QColor("#000000"))
-                        painter.drawText(box.translated(dx, dy), Qt.AlignCenter | Qt.TextWordWrap, title)
+                        painter.drawText(box.translated(dx, dy), flags, title)
                 painter.setPen(QColor(str(self.branding_settings.get("title_color", "#ffffff"))))
-                painter.drawText(box, Qt.AlignCenter | Qt.TextWordWrap, title)
+                painter.drawText(box, flags, title)
         if bool(self.branding_settings.get("show_channel_card", False)):
             banner = Path(str(self.branding_settings.get("channel_banner_path") or ""))
             pixmap = QPixmap(str(banner)) if banner.is_file() else QPixmap()
@@ -203,6 +239,12 @@ class VerticalFramePreview(QWidget):
                 painter.setOpacity(max(0, min(100, int(self.branding_settings.get("banner_opacity", 100)))) / 100)
                 painter.drawPixmap(left + rect.x * scale, top + rect.y * scale, scaled)
                 painter.setOpacity(1.0)
+
+    def _title_font_family(self) -> str:
+        if bool(self.branding_settings.get("use_subtitle_font_for_title", True)):
+            style = resolved_style(self.settings)
+            return str(style.get("font") or DEFAULT_FONT_FAMILY)
+        return str(self.branding_settings.get("title_font_family") or DEFAULT_FONT_FAMILY)
 
 
 class SubtitleEditor(QWidget):
@@ -229,6 +271,11 @@ class SubtitleEditor(QWidget):
         self._ai_worker = None
         self._preview_generation_id = 0
         self._preview_position_ms = 0
+        self._source_info = None
+        self._proxy_info = None
+        self._proxy_path: Path | None = None
+        self._render_encoder = ""
+        self._preview_state = "Быстрый предпросмотр"
         self._resume_after_scrub = False
         layout = QVBoxLayout(self)
         heading_row = QHBoxLayout()
@@ -289,6 +336,15 @@ class SubtitleEditor(QWidget):
         self.title_outline = QSpinBox(); self.title_outline.setRange(0, 16); self.title_outline.setValue(4)
         self.title_shadow = QSpinBox(); self.title_shadow.setRange(0, 16); self.title_shadow.setValue(2)
         self.title_y = QSpinBox(); self.title_y.setRange(60, 650); self.title_y.setValue(180)
+        self.use_subtitle_font_for_title = QCheckBox("Использовать шрифт субтитров для заголовка")
+        self.use_subtitle_font_for_title.setChecked(True)
+        self.title_font = QComboBox()
+        self._fill_font_combo(self.title_font, DEFAULT_FONT_FAMILY)
+        self.title_alignment = QComboBox()
+        for label, value in (("Слева", "left"), ("По центру", "center"), ("Справа", "right")):
+            self.title_alignment.addItem(label, value)
+        self.title_alignment.setCurrentIndex(max(0, self.title_alignment.findData("center")))
+        self.title_offset_x = QSpinBox(); self.title_offset_x.setRange(-300, 300); self.title_offset_x.setSuffix(" px"); self.title_offset_x.setValue(0)
         self.show_channel_card = QCheckBox("Показывать карточку канала")
         self.channel_profile = QComboBox()
         self.channel_profile.addItem("Не выбрано", "")
@@ -315,6 +371,10 @@ class SubtitleEditor(QWidget):
         branding_form.addRow("Обводка заголовка", self.title_outline)
         branding_form.addRow("Тень заголовка", self.title_shadow)
         branding_form.addRow("Y заголовка", self.title_y)
+        branding_form.addRow(self.use_subtitle_font_for_title)
+        branding_form.addRow("Шрифт заголовка", self.title_font)
+        branding_form.addRow("Выравнивание заголовка", self.title_alignment)
+        branding_form.addRow("X заголовка", self.title_offset_x)
         branding_form.addRow(self.show_channel_card)
         branding_form.addRow("Профиль канала", self.channel_profile)
         banner_actions = self._row(self.banner_import)
@@ -335,6 +395,8 @@ class SubtitleEditor(QWidget):
         self.style = QComboBox()
         for label, value in (("Чистый", "clean"), ("Крупный", "large"), ("Игровой", "gaming")):
             self.style.addItem(label, value)
+        self.subtitle_font = QComboBox()
+        self._fill_font_combo(self.subtitle_font, DEFAULT_FONT_FAMILY)
         self.position = QComboBox()
         for label, value in (("Верхняя треть", "upper"), ("Центр", "center"), ("Нижняя треть", "lower")):
             self.position.addItem(label, value)
@@ -359,14 +421,24 @@ class SubtitleEditor(QWidget):
         offset_layout.addWidget(self.offset, 1)
         offset_layout.addWidget(self.offset_value)
         offset_layout.addWidget(self.offset_reset)
-        for label, control in (("Стиль", self.style), ("Положение", self.position), ("Размер", self.size), ("Примерная длина строки", self.maximum), ("Строк", self.lines), ("Обводка", self.outline), ("Тень", self.shadow), ("Безопасный отступ", self.margin)):
+        for label, control in (("Стиль", self.style), ("Шрифт", self.subtitle_font), ("Положение", self.position), ("Размер", self.size), ("Примерная длина строки", self.maximum), ("Строк", self.lines), ("Обводка", self.outline), ("Тень", self.shadow), ("Безопасный отступ", self.margin)):
             style_form.addRow(label, control)
         style_form.addRow("Смещение по вертикали", offset_row)
         style_form.addRow(self.background)
         self.preview = VerticalFramePreview()
-        self.preview.setMinimumSize(360, 640)
+        self.preview_quality = QComboBox()
+        for label, size in (
+            ("Fast 360×640", (360, 640)),
+            ("Medium 540×960", (540, 960)),
+            ("High 720×1280", (720, 1280)),
+            ("Full HD 1080×1920", (1080, 1920)),
+        ):
+            self.preview_quality.addItem(label, size)
+        self._restore_preview_quality()
+        self.preview.resized.connect(self._update_technical_info)
         preview_panel = QWidget()
         preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.addWidget(self._row(QLabel("Качество preview"), self.preview_quality))
         preview_layout.addWidget(self.preview, 1, Qt.AlignCenter)
         self.player = None
         self.audio = None
@@ -415,6 +487,10 @@ class SubtitleEditor(QWidget):
         player_row.addWidget(self.refresh_preview)
         player_row.addWidget(self.fullscreen_preview)
         preview_layout.addLayout(player_row)
+        self.preview_technical = QLabel("Предпросмотр: —\nРендер: —")
+        self.preview_technical.setProperty("class", "muted")
+        self.preview_technical.setWordWrap(True)
+        preview_layout.addWidget(self.preview_technical)
         self.settings_layout.addWidget(self.vertical)
         self.settings_layout.addWidget(style_widget)
         self.settings_layout.addWidget(branding_widget)
@@ -459,14 +535,17 @@ class SubtitleEditor(QWidget):
         self.banner_reset_position.clicked.connect(self._reset_banner_position)
         self.banner_save_profile.clicked.connect(self._save_banner_profile_defaults)
         self.channel_profile.currentIndexChanged.connect(self._profile_selected)
-        for control in (self.position, self.size, self.maximum, self.lines, self.outline, self.shadow, self.margin, self.offset):
+        for control in (self.position, self.subtitle_font, self.size, self.maximum, self.lines, self.outline, self.shadow, self.margin, self.offset):
             signal = control.currentIndexChanged if isinstance(control, QComboBox) else control.valueChanged
             signal.connect(self._mark_dirty)
-        for control in (self.branding_preset, self.title_size, self.title_outline, self.title_shadow, self.title_y, self.channel_profile, self.banner_scale, self.banner_x, self.banner_y, self.banner_opacity):
+        for control in (self.branding_preset, self.title_font, self.title_alignment, self.title_offset_x, self.title_size, self.title_outline, self.title_shadow, self.title_y, self.channel_profile, self.banner_scale, self.banner_x, self.banner_y, self.banner_opacity):
             signal = control.currentIndexChanged if isinstance(control, QComboBox) else control.valueChanged
             signal.connect(self._mark_dirty)
-        for checkbox in (self.show_subtitles, self.show_title, self.title_bold, self.show_channel_card):
+        for checkbox in (self.show_subtitles, self.show_title, self.use_subtitle_font_for_title, self.title_bold, self.show_channel_card):
             checkbox.toggled.connect(self._mark_dirty)
+        self.use_subtitle_font_for_title.toggled.connect(self.title_font.setDisabled)
+        self.title_font.setDisabled(self.use_subtitle_font_for_title.isChecked())
+        self.preview_quality.currentIndexChanged.connect(self._preview_quality_changed)
         self.title_text.textEdited.connect(self._mark_dirty)
         self.background.toggled.connect(self._mark_dirty)
         self.vertical.changed.connect(self._mark_dirty)
@@ -481,6 +560,47 @@ class SubtitleEditor(QWidget):
         for widget in widgets:
             layout.addWidget(widget)
         return row
+
+    @staticmethod
+    def _fill_font_combo(combo: QComboBox, preferred: str) -> None:
+        families = QFontDatabase.families()
+        priority = [DEFAULT_FONT_FAMILY, "Arial", "Arial Black", "Tahoma", "Verdana"]
+        ordered = []
+        for family in priority + families:
+            if family and family not in ordered:
+                ordered.append(family)
+        combo.clear()
+        for family in ordered:
+            info = resolve_font(family)
+            suffix = " · fallback" if info.fallback else ""
+            combo.addItem(f"{family}{suffix}", family)
+        combo.setCurrentIndex(max(0, combo.findData(preferred or DEFAULT_FONT_FAMILY)))
+
+    def _restore_preview_quality(self) -> None:
+        settings = QSettings("CreatorAssistant", "CreatorAssistant")
+        stored = str(settings.value("shorts/vertical_editor/preview_quality", "540x960") or "540x960")
+        mapping = {"360x640": 0, "540x960": 1, "720x1280": 2, "1080x1920": 3}
+        self.preview_quality.setCurrentIndex(mapping.get(stored, 1))
+        self._apply_preview_quality()
+
+    def _preview_quality_changed(self) -> None:
+        self._apply_preview_quality()
+        size = self.preview_quality.currentData() or (540, 960)
+        settings = QSettings("CreatorAssistant", "CreatorAssistant")
+        settings.setValue("shorts/vertical_editor/preview_quality", f"{int(size[0])}x{int(size[1])}")
+        self._preview_generation_id += 1
+        self._sync_preview_time(self._preview_position_ms)
+
+    def _apply_preview_quality(self) -> None:
+        size = self.preview_quality.currentData() if hasattr(self, "preview_quality") else (540, 960)
+        width, height = size if isinstance(size, tuple) else (540, 960)
+        if hasattr(self, "preview"):
+            self.preview.set_target_preview_size(int(width), int(height))
+            if int(width) >= 1080 and hasattr(self, "preview_technical"):
+                self.preview_technical.setToolTip(
+                    self.preview_technical.toolTip()
+                    + "\nFull HD preview может быть тяжелее, но финальный render не меняется."
+                )
 
     def _restore_splitters(self) -> None:
         settings = QSettings("CreatorAssistant", "CreatorAssistant")
@@ -525,8 +645,67 @@ class SubtitleEditor(QWidget):
         """Apply an asynchronous exact frame only when it belongs to the latest composition."""
         if generation_id != self._preview_generation_id or image.isNull():
             return False
+        self._preview_state = "Точный кадр FFmpeg"
         self.preview.set_video_frame(image)
+        self._update_technical_info()
         return True
+
+    def set_technical_context(self, *, source_info=None, proxy_info=None, proxy_path: Path | None = None, render_encoder: str = "") -> None:
+        self._source_info = source_info
+        self._proxy_info = proxy_info
+        self._proxy_path = proxy_path
+        self._render_encoder = render_encoder
+        self._update_technical_info()
+
+    def _update_technical_info(self) -> None:
+        if not hasattr(self, "preview_technical"):
+            return
+        preview_w, preview_h = self.preview.effective_preview_size() if hasattr(self, "preview") else (0, 0)
+        preview_info = self._proxy_info or self._source_info
+        preview_fps = _format_fps(float(getattr(preview_info, "fps", 0.0) or 0.0))
+        source_label = "Proxy" if self._proxy_info else ("Источник" if self._source_info else "—")
+        render_fps = _format_fps(float(getattr(self._source_info, "fps", 0.0) or 0.0))
+        encoder = self._render_encoder or "H.264 NVENC"
+        font_info = self._font_diagnostics()
+        self.preview_technical.setText(
+            f"Предпросмотр: {preview_w}×{preview_h} · {preview_fps} FPS · {source_label} · {self._preview_state}\n"
+            f"Рендер: 1080×1920 · {render_fps} FPS · {encoder}"
+        )
+        proxy_resolution = (
+            f"{getattr(self._proxy_info, 'width', 0)}×{getattr(self._proxy_info, 'height', 0)} · "
+            f"{_format_fps(float(getattr(self._proxy_info, 'fps', 0.0) or 0.0))} FPS"
+            if self._proxy_info else "—"
+        )
+        self.preview_technical.setToolTip(
+            "Диагностика preview/render\n"
+            f"Proxy-файл: {self._proxy_path or '—'}\n"
+            f"Proxy: {proxy_resolution}\n"
+            f"Realtime preview: {preview_w}×{preview_h} · {preview_fps} FPS · {source_label}\n"
+            "Точный single-frame preview: 1080×1920\n"
+            f"Итоговый render: 1080×1920 · {render_fps} FPS · {encoder}"
+        )
+        tooltip = self.preview_technical.toolTip()
+        if font_info not in tooltip:
+            self.preview_technical.setToolTip(f"{tooltip}\n{font_info}")
+
+    def _font_diagnostics(self) -> str:
+        if not hasattr(self, "subtitle_font"):
+            return "Fonts: —"
+        subtitle_family = str(self.subtitle_font.currentData() or DEFAULT_FONT_FAMILY)
+        subtitle_info = resolve_font(subtitle_family)
+        title_family = subtitle_family
+        if hasattr(self, "use_subtitle_font_for_title") and not self.use_subtitle_font_for_title.isChecked():
+            title_family = str(self.title_font.currentData() or DEFAULT_FONT_FAMILY)
+        title_info = resolve_font(title_family)
+        subtitle_file = subtitle_info.file_for_weight(True)
+        title_file = title_info.file_for_weight(bool(self.title_bold.isChecked()) if hasattr(self, "title_bold") else True)
+        return (
+            "Fonts:\n"
+            f"  Subtitle: family={subtitle_info.family}; ASS FontName={subtitle_info.ass_font_name}; "
+            f"file={subtitle_file or '—'}; fallback={subtitle_info.fallback}\n"
+            f"  Title: family={title_info.family}; drawtext file={title_file or '—'}; "
+            f"fallback={title_info.fallback}"
+        )
 
     def _clip_duration_ms(self) -> int:
         return max(0, round((self.candidate.duration if self.candidate else 0) * 1000))
@@ -574,7 +753,9 @@ class SubtitleEditor(QWidget):
             return
         image = frame.toImage()
         if not image.isNull():
+            self._preview_state = "Быстрый предпросмотр"
             self.preview.set_video_frame(image)
+            self._update_technical_info()
 
     @Slot(int)
     def _player_position_changed(self, absolute_ms: int) -> None:
@@ -647,6 +828,11 @@ class SubtitleEditor(QWidget):
         self.title_outline.setValue(int(settings.get("title_outline", 4)))
         self.title_shadow.setValue(int(settings.get("title_shadow", 2)))
         self.title_y.setValue(int(settings.get("title_y", 180)))
+        self.use_subtitle_font_for_title.setChecked(bool(settings.get("use_subtitle_font_for_title", True)))
+        self.title_font.setCurrentIndex(max(0, self.title_font.findData(str(settings.get("title_font_family") or DEFAULT_FONT_FAMILY))))
+        self.title_font.setDisabled(self.use_subtitle_font_for_title.isChecked())
+        self.title_alignment.setCurrentIndex(max(0, self.title_alignment.findData(str(settings.get("title_alignment", "center")))))
+        self.title_offset_x.setValue(int(settings.get("title_offset_x", 0)))
         profile_id = str(settings.get("channel_profile_id", ""))
         self.channel_profile.setCurrentIndex(max(0, self.channel_profile.findData(profile_id)))
         self.show_channel_card.setChecked(bool(settings.get("show_channel_card", False)))
@@ -895,6 +1081,8 @@ class SubtitleEditor(QWidget):
         self.style.setCurrentIndex(max(0, self.style.findData(settings.get("style", "clean"))))
         self.position.setCurrentIndex(max(0, self.position.findData(settings.get("position", "lower"))))
         preset = STYLE_PRESETS.get(str(settings.get("style", "clean")), STYLE_PRESETS["clean"])
+        font_family = str(settings.get("font_family") or preset.get("font") or DEFAULT_FONT_FAMILY)
+        self.subtitle_font.setCurrentIndex(max(0, self.subtitle_font.findData(font_family)))
         self.size.setValue(int(settings.get("size", preset["size"])))
         self.maximum.setValue(int(settings.get("maximum", 36)))
         self.lines.setValue(min(2, int(settings.get("lines", 2))))
@@ -920,6 +1108,7 @@ class SubtitleEditor(QWidget):
         self._loading = False
         self._dirty = False
         self._update_preview()
+        self._update_technical_info()
         self._set_saved_state()
 
     def rebuild_for_boundaries(self, candidate, transcript) -> list[SubtitleCue]:
@@ -976,6 +1165,7 @@ class SubtitleEditor(QWidget):
     def current_settings(self) -> dict:
         return {
             "style": self.style.currentData(), "position": self.position.currentData(),
+            "font_family": self.subtitle_font.currentData() or DEFAULT_FONT_FAMILY,
             "size": self.size.value(), "maximum": self.maximum.value(), "lines": self.lines.value(),
             "outline": self.outline.value(), "shadow": self.shadow.value(),
             "background": self.background.isChecked(), "safe_margin": self.margin.value(),
@@ -1012,6 +1202,10 @@ class SubtitleEditor(QWidget):
             "title_style": self.title_style.currentData(),
             "title_size": self.title_size.value(),
             "title_bold": self.title_bold.isChecked(),
+            "use_subtitle_font_for_title": self.use_subtitle_font_for_title.isChecked(),
+            "title_font_family": self.title_font.currentData() or DEFAULT_FONT_FAMILY,
+            "title_alignment": self.title_alignment.currentData() or "center",
+            "title_offset_x": self.title_offset_x.value(),
             "title_color": TITLE_STYLE_PRESETS.get(str(self.title_style.currentData()), TITLE_STYLE_PRESETS["clean"])["color"],
             "title_outline": self.title_outline.value(),
             "title_shadow": self.title_shadow.value(),

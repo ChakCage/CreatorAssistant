@@ -26,7 +26,9 @@ def test_filter_graph_contains_trim_reframe_subtitles_and_audio():
     assert "trim=start=10.125:end=55.500" in graph
     assert "setpts=PTS-STARTPTS" in graph
     assert "crop=1080:1920" in graph
-    assert "subtitles=filename='short_001.ass':charenc=UTF-8" in graph
+    assert "subtitles=filename='short_001.ass'" in graph
+    assert "fontsdir=" in graph
+    assert ":charenc=UTF-8" in graph
     assert "atrim=start=10.125:end=55.500,asetpts=PTS-STARTPTS" in graph
 
 
@@ -72,6 +74,8 @@ def test_render_command_adds_title_and_channel_banner_overlay(tmp_path):
             "final_title_text": "Лучший момент: Beppo",
             "title_size": 84,
             "title_y": 160,
+            "title_alignment": "right",
+            "title_offset_x": -120,
             "show_channel_card": True,
             "channel_banner_path": str(banner),
             "banner_scale": 80,
@@ -84,6 +88,8 @@ def test_render_command_adds_title_and_channel_banner_overlay(tmp_path):
     graph = command[command.index("-filter_complex") + 1]
     assert str(banner) in command
     assert graph.count("drawtext=") == 1
+    assert "fontfile=" in graph
+    assert "w-text_w-90+-120" in graph
     assert "overlay=x='max(80,min(W-w-80,(W-w)/2+40))'" in graph
     assert "H-h-80+-60" in graph
     assert "colorchannelmixer=aa=0.900" in graph

@@ -63,6 +63,8 @@ class _ApproximateFontMetrics:
 def resolved_style(settings: dict) -> dict:
     name = str(settings.get("style", "clean"))
     preset = dict(STYLE_PRESETS.get(name, STYLE_PRESETS["clean"]))
+    if str(settings.get("font_family", "")).strip():
+        preset["font"] = str(settings.get("font_family")).strip()
     preset["size"] = int(settings.get("size", preset["size"]))
     preset["outline"] = int(settings.get("outline", preset["outline"]))
     preset["shadow"] = int(settings.get("shadow", preset["shadow"]))

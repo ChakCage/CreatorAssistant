@@ -46,31 +46,32 @@ def layout_title_text(
     max_width: int = 900,
     max_lines: int = 2,
     minimum_size: int = 32,
+    font_family: str = "Segoe UI",
 ) -> tuple[str, int]:
-    """Wrap a title by the actual Arial pixel width and shrink only when two lines cannot fit."""
+    """Wrap a title by the actual font pixel width and shrink only when two lines cannot fit."""
     cleaned = " ".join(str(text or "").replace("\n", " ").split())
     requested_size = max(minimum_size, int(requested_size or 78))
     if not cleaned:
         return "", requested_size
     for size in range(requested_size, minimum_size - 1, -2):
-        measure = _title_measurer(size, bold)
+        measure = _title_measurer(size, bold, font_family)
         lines = _pixel_wrap(cleaned, measure, max_width)
         if len(lines) <= max_lines:
             return "\n".join(lines), size
     # At the minimum size, preserve every character; hooks up to 60 chars fit this path in two lines.
-    return "\n".join(_pixel_wrap(cleaned, _title_measurer(minimum_size, bold), max_width)[:max_lines]), minimum_size
+    return "\n".join(_pixel_wrap(cleaned, _title_measurer(minimum_size, bold, font_family), max_width)[:max_lines]), minimum_size
 
 
-def _title_measurer(size: int, bold: bool):
+def _title_measurer(size: int, bold: bool, font_family: str):
     if QGuiApplication.instance() is not None:
-        font = QFont("Arial")
+        font = QFont(font_family or "Segoe UI")
         font.setPixelSize(size)
         font.setBold(bool(bold))
         metrics = QFontMetrics(font)
         return metrics.horizontalAdvance
 
     def approximate(value: str) -> int:
-        # Headless render/benchmark fallback equivalent to Arial's conservative glyph widths.
+        # Headless render/benchmark fallback equivalent to Segoe UI's conservative glyph widths.
         units = sum(0.34 if char.isspace() else 0.76 if ord(char) > 127 else 0.64 for char in value)
         return round(units * size * (1.04 if bold else 1.0))
 

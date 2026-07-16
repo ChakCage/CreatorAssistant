@@ -625,6 +625,24 @@ class ShortsTab(QWidget):
         self._apply_branding_defaults(candidate)
         self.candidate_editor.set_candidate(candidate, self.paths.cache / "analysis_proxy.mp4", self.transcript)
         if self.transcript:
+            proxy_path = self.paths.cache / "analysis_proxy.mp4"
+            proxy_info = None
+            if proxy_path.is_file():
+                try:
+                    proxy_info = self.source_service.probe(proxy_path)
+                except Exception:
+                    proxy_info = None
+            encoder = self.container.shorts_render.last_encoder or ("H.264 NVENC" if self.container.shorts_render.prefer_nvenc else "H.264 libx264")
+            if encoder == "h264_nvenc":
+                encoder = "H.264 NVENC"
+            elif encoder == "libx264":
+                encoder = "H.264 libx264"
+            self.subtitle_editor.set_technical_context(
+                source_info=self.source,
+                proxy_info=proxy_info,
+                proxy_path=proxy_path,
+                render_encoder=encoder,
+            )
             self.subtitle_editor.set_context(candidate, self.transcript, self.paths)
         self.workspace.setCurrentWidget(self.candidate_editor)
 

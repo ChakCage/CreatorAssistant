@@ -8,7 +8,7 @@ from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from creator_assistant.domain.shorts.models import Candidate, Transcript, TranscriptSegment
+from creator_assistant.domain.shorts.models import Candidate, SourceInfo, Transcript, TranscriptSegment
 from creator_assistant.services.shorts.cache import ShortsCache
 from creator_assistant.domain.shorts.models import ShortsManifest
 from creator_assistant.ui.shorts import candidate_editor as candidate_editor_module
@@ -248,6 +248,29 @@ def test_vertical_editor_timeline_drags_and_subtitle_row_seeks(tmp_path):
     editor._subtitle_row_clicked(0, 2)
     assert editor._preview_position_ms == 0
     assert editor.table.currentRow() == 0
+
+
+def test_vertical_editor_shows_actual_preview_render_and_font_technical_info(tmp_path):
+    qt_app = app()
+    editor = SubtitleEditor()
+    source = SourceInfo("source.mp4", "source.mp4", 10, 1, 120, 3840, 2160, 59.94, "h264", "aac", 2, 48000)
+    proxy = SourceInfo(str(tmp_path / "analysis_proxy.mp4"), "analysis_proxy.mp4", 10, 1, 120, 1280, 720, 59.94, "h264", "aac", 2, 48000)
+    editor.set_technical_context(
+        source_info=source,
+        proxy_info=proxy,
+        proxy_path=tmp_path / "analysis_proxy.mp4",
+        render_encoder="H.264 NVENC",
+    )
+    text = editor.preview_technical.text()
+    tooltip = editor.preview_technical.toolTip()
+    assert "540×960" in text
+    assert "59,94 FPS" in text
+    assert "Proxy" in text
+    assert "1080×1920" in text
+    assert "H.264 NVENC" in text
+    assert "analysis_proxy.mp4" in tooltip
+    assert "ASS FontName=Segoe UI" in tooltip
+    assert qt_app is QApplication.instance()
 
 
 def test_title_presets_are_distinct_and_legacy_banner_x_is_centered(tmp_path):

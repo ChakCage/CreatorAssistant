@@ -7,6 +7,8 @@ from creator_assistant.services.shorts.reframe.blur_background import BlurBackgr
 from creator_assistant.services.shorts.reframe.center_crop import CenterCropReframe
 from creator_assistant.services.shorts.reframe.solid_color import SolidColorReframe
 from creator_assistant.services.shorts.overlay_layout import layout_title_text
+from creator_assistant.services.shorts.font_resolver import drawtext_font_option, fonts_dir_option
+from creator_assistant.services.shorts.subtitle_layout import resolved_style
 
 
 class ShortsFilterGraphBuilder:
@@ -29,7 +31,7 @@ class ShortsFilterGraphBuilder:
         subtitle = ""
         if subtitle_file:
             safe_name = Path(subtitle_file).name.replace("'", r"\'").replace(":", r"\:")
-            subtitle = f",subtitles=filename='{safe_name}':charenc=UTF-8"
+            subtitle = f",subtitles=filename='{safe_name}'{fonts_dir_option()}:charenc=UTF-8"
         if input_clipped:
             video_prefix = "[0:v:0]setpts=PTS-STARTPTS,"
             audio_chain = "[0:a:0]asetpts=PTS-STARTPTS[a]"
@@ -47,20 +49,35 @@ class ShortsFilterGraphBuilder:
         if show_title:
             raw_title = str(branding.get("final_title_text", "")).strip()
             requested_size = max(24, min(180, int(branding.get("title_size", 78) or 78)))
+            title_bold = bool(branding.get("title_bold", True))
+            subtitle_style = resolved_style(candidate.subtitle_settings or {})
+            title_font_family = (
+                str(subtitle_style.get("font") or "Segoe UI")
+                if bool(branding.get("use_subtitle_font_for_title", True))
+                else str(branding.get("title_font_family") or subtitle_style.get("font") or "Segoe UI")
+            )
             wrapped_title, size = layout_title_text(
-                raw_title, requested_size, bool(branding.get("title_bold", True)), 900, 2,
+                raw_title, requested_size, title_bold, 900, 2, font_family=title_font_family,
             )
             text = _escape_drawtext(wrapped_title)
             y = max(0, min(1800, int(branding.get("title_y", 180) or 180)))
             border = max(0, min(20, int(branding.get("title_outline", 4) or 4)))
             shadow = max(0, min(20, int(branding.get("title_shadow", 2) or 0)))
             fontcolor = str(branding.get("title_color", "#ffffff") or "#ffffff").replace("#", "0x")
-            font = "Arial Bold" if bool(branding.get("title_bold", True)) else "Arial"
+            font_option = drawtext_font_option(title_font_family, title_bold)
+            alignment = str(branding.get("title_alignment", "center") or "center")
+            offset_x = max(-300, min(300, int(branding.get("title_offset_x", 0) or 0)))
+            if alignment == "left":
+                x_expr = f"max(90,min(w-text_w-90,90+{offset_x}))"
+            elif alignment == "right":
+                x_expr = f"max(90,min(w-text_w-90,w-text_w-90+{offset_x}))"
+            else:
+                x_expr = f"max(90,min(w-text_w-90,(w-text_w)/2+{offset_x}))"
             next_label = "title"
             filters.append(
                 f"[{current}]drawtext=text='{text}':fontcolor={fontcolor}:fontsize={size}:"
-                f"font='{font}':borderw={border}:bordercolor=black:shadowx={shadow}:shadowy={shadow}:"
-                f"shadowcolor=black@0.75:x=(w-text_w)/2:y={y}:"
+                f"{font_option}:borderw={border}:bordercolor=black:shadowx={shadow}:shadowy={shadow}:"
+                f"shadowcolor=black@0.75:x='{x_expr}':y={y}:"
                 f"line_spacing=8[{next_label}]"
             )
             current = next_label
