@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QComboBox, QFormLayout, QGroupBox, QLabel, QSlider
+from PySide6.QtWidgets import QComboBox, QFormLayout, QGroupBox, QLabel, QSlider, QSpinBox
 
 
 class VerticalLayoutPanel(QGroupBox):
@@ -18,12 +18,16 @@ class VerticalLayoutPanel(QGroupBox):
         self.center_value = QLabel("50%")
         self.center.valueChanged.connect(lambda value: self.center_value.setText(f"{value}%"))
         self.foreground = QSlider(Qt.Horizontal)
-        self.foreground.setRange(70, 150)
+        self.foreground.setRange(50, 550)
         self.foreground.setValue(100)
-        self.foreground.setToolTip("Масштаб переднего слоя для Blur Background и Color Background.")
-        self.foreground_value = QLabel("100%")
+        self.foreground.setToolTip("Доступно только в режимах Blur Background и Solid Color Background.")
+        self.foreground_value = QSpinBox()
+        self.foreground_value.setRange(50, 550)
+        self.foreground_value.setSuffix("%")
+        self.foreground_value.setValue(100)
         self.foreground_value.setToolTip(self.foreground.toolTip())
-        self.foreground.valueChanged.connect(lambda value: self.foreground_value.setText(f"{value}%"))
+        self.foreground.valueChanged.connect(self.foreground_value.setValue)
+        self.foreground_value.valueChanged.connect(self.foreground.setValue)
         form.addRow("Режим", self.mode)
         form.addRow("Горизонтальный центр", self.center)
         form.addRow("Центр", self.center_value)
@@ -41,8 +45,8 @@ class VerticalLayoutPanel(QGroupBox):
         self.foreground.setEnabled(not crop)
         self.foreground_value.setEnabled(not crop)
         self.foreground.setToolTip(
-            "В Center Crop переднего слоя нет — используйте горизонтальный центр кадра."
-            if crop else "Масштаб переднего слоя для Blur Background и Color Background."
+            "Доступно только в режимах Blur Background и Solid Color Background."
+            if crop else "Доступно только в режимах Blur Background и Solid Color Background."
         )
         self.foreground_value.setToolTip(self.foreground.toolTip())
 

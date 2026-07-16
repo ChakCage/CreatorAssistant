@@ -5,7 +5,7 @@ class SolidColorReframe(ReframeBackend):
     """Place the source over a fixed black 1080x1920 background."""
 
     def __init__(self, foreground_scale: int = 100, color: str = "black") -> None:
-        self.foreground_scale = max(70, min(150, foreground_scale))
+        self.foreground_scale = max(50, min(550, foreground_scale))
         self.color = color or "black"
 
     def video_filter(self, width: int, height: int, fps: float = 30.0) -> str:

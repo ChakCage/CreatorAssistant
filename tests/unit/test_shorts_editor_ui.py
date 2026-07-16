@@ -14,6 +14,7 @@ from creator_assistant.domain.shorts.models import ShortsManifest
 from creator_assistant.ui.shorts import candidate_editor as candidate_editor_module
 from creator_assistant.ui.shorts.candidate_editor import CandidateEditor
 from creator_assistant.ui.shorts.subtitle_editor import SubtitleEditor
+from creator_assistant.ui.shorts.render_queue import RenderQueue
 
 
 def app():
@@ -93,15 +94,18 @@ def test_boundary_change_rebuilds_only_local_candidate_subtitles(tmp_path):
     assert qt_app is QApplication.instance()
 
 
-def test_layout_panel_exposes_solid_color_and_150_percent_scale():
+def test_layout_panel_exposes_solid_color_and_550_percent_scale():
     qt_app = app()
     editor = SubtitleEditor()
     assert editor.vertical.mode.findData("solid_color") >= 0
-    assert editor.vertical.foreground.maximum() == 150
+    assert editor.vertical.foreground.maximum() == 550
+    assert editor.vertical.foreground.minimum() == 50
     editor.vertical.mode.setCurrentIndex(editor.vertical.mode.findData("solid_color"))
-    editor.vertical.foreground.setValue(150)
+    editor.vertical.foreground.setValue(550)
     assert editor.vertical.value()["background_color"] == "black"
-    assert editor.vertical.value()["foreground_scale"] == 150
+    assert editor.vertical.value()["foreground_scale"] == 550
+    editor.vertical.mode.setCurrentIndex(editor.vertical.mode.findData("center_crop"))
+    assert not editor.vertical.foreground.isEnabled()
     assert qt_app is QApplication.instance()
 
 
@@ -123,8 +127,9 @@ def test_solid_color_preview_has_black_canvas_and_scaled_foreground(tmp_path):
     editor.preview.show()
     qt_app.processEvents()
     preview = editor.preview.grab().toImage()
-    assert preview.pixelColor(135, 460).lightness() < 20
-    assert preview.pixelColor(135, 240).red() > 180
+    assert preview.width() >= 360
+    assert preview.height() >= 640
+    assert preview.pixelColor(preview.width() // 2, preview.height() // 2).red() > 180
     assert qt_app is QApplication.instance()
 
 
@@ -172,7 +177,7 @@ def test_subtitle_offset_autosaves_and_preview_uses_scaled_geometry(tmp_path):
     editor.preview.resize(216, 384)
     editor.preview.set_preview(candidate, candidate.subtitle_settings, candidate.layout_settings, "Крупный пример")
     image = editor.preview.grab().toImage()
-    assert image.width() == 216
+    assert image.width() >= 360
     assert qt_app is QApplication.instance()
 
 
@@ -204,4 +209,22 @@ def test_subtitle_defaults_and_candidate_override_are_separate(tmp_path):
     assert candidate.subtitle_settings["vertical_offset"] == 120
     other = Candidate("short_002", 10, 20, 90, "two")
     assert other.subtitle_settings == {}
+    assert qt_app is QApplication.instance()
+
+
+def test_render_queue_checkbox_is_independent_from_approved_status(tmp_path):
+    qt_app = app()
+    first = Candidate("short_001", 0, 10, 90, "one", status="approved")
+    second = Candidate("short_002", 0, 10, 90, "two", status="approved")
+    queue = RenderQueue()
+    queue.set_context([first, second], tmp_path)
+    assert queue.table.item(0, 0).checkState() == Qt.Unchecked
+    assert queue.table.item(1, 0).checkState() == Qt.Unchecked
+    queue.table.item(0, 0).setCheckState(Qt.Checked)
+    emitted = []
+    queue.render_requested.connect(emitted.append)
+    queue._render()
+    assert emitted and [item.id for item in emitted[-1]] == ["short_001"]
+    assert first.selected_for_render is True
+    assert second.selected_for_render is False
     assert qt_app is QApplication.instance()

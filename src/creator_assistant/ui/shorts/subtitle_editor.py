@@ -3,15 +3,18 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 
-from PySide6.QtCore import QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QSettings, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QFileDialog, QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QPushButton, QSlider, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QFileDialog, QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
+    QGridLayout, QLineEdit, QPushButton, QScrollArea, QSlider, QSplitter, QSpinBox,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from creator_assistant.domain.shorts.models import SubtitleCue
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
+from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator
+from creator_assistant.services.shorts.title_service import ShortTitleService
 from creator_assistant.services.shorts.subtitle_layout import SubtitleLayoutCalculator
 from creator_assistant.services.shorts.subtitle_service import (
     STYLE_PRESETS, SubtitleService, resolved_style,
@@ -147,12 +150,10 @@ class VerticalFramePreview(QWidget):
             banner = Path(str(self.branding_settings.get("channel_banner_path") or ""))
             pixmap = QPixmap(str(banner)) if banner.is_file() else QPixmap()
             if not pixmap.isNull():
-                factor = max(10, min(200, int(self.branding_settings.get("banner_scale", 100)))) / 100
-                width = round(pixmap.width() * factor * scale)
-                height = round(pixmap.height() * factor * scale)
-                scaled = pixmap.scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                rect = OverlayLayoutCalculator().banner_rect(pixmap.width(), pixmap.height(), self.branding_settings)
+                scaled = pixmap.scaled(round(rect.width * scale), round(rect.height * scale), Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 painter.setOpacity(max(0, min(100, int(self.branding_settings.get("banner_opacity", 100)))) / 100)
-                painter.drawPixmap(left + int(self.branding_settings.get("banner_x", 50)) * scale, top + int(self.branding_settings.get("banner_y", 1600)) * scale, scaled)
+                painter.drawPixmap(left + rect.x * scale, top + rect.y * scale, scaled)
                 painter.setOpacity(1.0)
 
 
@@ -174,6 +175,7 @@ class SubtitleEditor(QWidget):
         self._save_timer.setInterval(250)
         self._save_timer.timeout.connect(self._apply_configuration)
         self.assets = ChannelAssetStore()
+        self.title_service = ShortTitleService()
         layout = QVBoxLayout(self)
         heading_row = QHBoxLayout()
         self.heading = QLabel("Выберите кандидата")
@@ -182,7 +184,15 @@ class SubtitleEditor(QWidget):
         heading_row.addWidget(self.heading, 1)
         heading_row.addWidget(self.dirty_label)
         layout.addLayout(heading_row)
-        top = QHBoxLayout()
+        self.main_splitter = QSplitter(Qt.Vertical)
+        self.top_splitter = QSplitter(Qt.Horizontal)
+        self.settings_content = QWidget()
+        self.settings_layout = QVBoxLayout(self.settings_content)
+        self.settings_layout.setContentsMargins(4, 4, 4, 4)
+        self.settings_layout.setSpacing(10)
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setWidgetResizable(True)
+        self.settings_scroll.setWidget(self.settings_content)
         self.vertical = VerticalLayoutPanel()
         branding_widget = QWidget()
         branding_form = QFormLayout(branding_widget)
@@ -192,15 +202,31 @@ class SubtitleEditor(QWidget):
         self.show_subtitles = QCheckBox("Показывать субтитры")
         self.show_subtitles.setChecked(True)
         self.show_title = QCheckBox("Показывать верхний заголовок")
+        self.original_title_label = QLabel("—")
+        self.original_title_label.setWordWrap(True)
+        self.original_title_source = QLabel("—")
+        self.original_title_source.setProperty("class", "muted")
+        self.original_title_source.setWordWrap(True)
         self.title_text = QLineEdit()
         self.title_text.setPlaceholderText("Заголовок Short")
-        title_buttons = QHBoxLayout()
+        title_buttons_widget = QWidget()
+        title_buttons = QGridLayout(title_buttons_widget)
+        title_buttons.setContentsMargins(0, 0, 0, 0)
+        title_buttons.setHorizontalSpacing(6)
+        title_buttons.setVerticalSpacing(6)
         self.title_from_video = QPushButton("Взять название видео")
+        self.title_from_video.setText("Взять исходное название")
         self.title_translate = QPushButton("Перевести локальной моделью")
         self.title_hook = QPushButton("Короткий заголовок")
         self.title_reset = QPushButton("Сбросить")
+        self.title_translate.setMinimumWidth(210)
         for button in (self.title_from_video, self.title_translate, self.title_hook, self.title_reset):
-            title_buttons.addWidget(button)
+            button.setMinimumHeight(30)
+            button.setSizePolicy(button.sizePolicy().horizontalPolicy(), button.sizePolicy().verticalPolicy())
+        title_buttons.addWidget(self.title_from_video, 0, 0)
+        title_buttons.addWidget(self.title_translate, 0, 1)
+        title_buttons.addWidget(self.title_hook, 1, 0)
+        title_buttons.addWidget(self.title_reset, 1, 1)
         self.title_size = QSpinBox(); self.title_size.setRange(36, 140); self.title_size.setValue(78)
         self.title_bold = QCheckBox("Жирный"); self.title_bold.setChecked(True)
         self.title_y = QSpinBox(); self.title_y.setRange(60, 650); self.title_y.setValue(180)
@@ -211,25 +237,37 @@ class SubtitleEditor(QWidget):
         self.banner_preview = QLabel("Баннер не выбран")
         self.banner_preview.setWordWrap(True)
         self.banner_scale = QSpinBox(); self.banner_scale.setRange(20, 200); self.banner_scale.setSuffix("%"); self.banner_scale.setValue(100)
-        self.banner_x = QSpinBox(); self.banner_x.setRange(-200, 1080); self.banner_x.setValue(50)
-        self.banner_y = QSpinBox(); self.banner_y.setRange(0, 1920); self.banner_y.setValue(1600)
+        self.banner_x = QSpinBox(); self.banner_x.setRange(-480, 480); self.banner_x.setSuffix(" px"); self.banner_x.setValue(0)
+        self.banner_y = QSpinBox(); self.banner_y.setRange(-720, 240); self.banner_y.setSuffix(" px"); self.banner_y.setValue(0)
         self.banner_opacity = QSpinBox(); self.banner_opacity.setRange(0, 100); self.banner_opacity.setSuffix("%"); self.banner_opacity.setValue(100)
+        self.banner_reset_position = QPushButton("Сбросить положение")
+        self.banner_save_profile = QPushButton("Сохранить как настройки профиля канала")
         self._refresh_profiles()
         branding_form.addRow("Пресет", self.branding_preset)
         branding_form.addRow(self.show_subtitles)
         branding_form.addRow(self.show_title)
+        branding_form.addRow("Исходное название", self.original_title_label)
+        branding_form.addRow("Источник", self.original_title_source)
         branding_form.addRow("Заголовок", self.title_text)
-        branding_form.addRow(title_buttons)
+        branding_form.addRow(title_buttons_widget)
         branding_form.addRow("Размер заголовка", self.title_size)
         branding_form.addRow(self.title_bold)
         branding_form.addRow("Y заголовка", self.title_y)
         branding_form.addRow(self.show_channel_card)
         branding_form.addRow("Профиль канала", self.channel_profile)
-        branding_form.addRow(self.banner_import)
-        branding_form.addRow("Preview", self.banner_preview)
+        banner_actions = self._row(self.banner_import)
+        self.banner_open_file = QPushButton("Открыть файл")
+        self.banner_open_folder = QPushButton("Открыть папку")
+        banner_actions.layout().addWidget(self.banner_open_file)
+        banner_actions.layout().addWidget(self.banner_open_folder)
+        branding_form.addRow(banner_actions)
+        branding_form.addRow("Баннер", self.banner_preview)
         branding_form.addRow("Масштаб баннера", self.banner_scale)
-        branding_form.addRow("X / Y", self._row(self.banner_x, self.banner_y))
+        branding_form.addRow("Смещение по горизонтали", self.banner_x)
+        branding_form.addRow("Смещение по вертикали", self.banner_y)
         branding_form.addRow("Прозрачность", self.banner_opacity)
+        branding_form.addRow(self.banner_reset_position)
+        branding_form.addRow(self.banner_save_profile)
         style_widget = QWidget()
         style_form = QFormLayout(style_widget)
         self.style = QComboBox()
@@ -244,7 +282,8 @@ class SubtitleEditor(QWidget):
         self.lines = QSpinBox(); self.lines.setRange(1, 2); self.lines.setValue(2)
         self.outline = QSpinBox(); self.outline.setRange(0, 10); self.outline.setValue(3)
         self.shadow = QSpinBox(); self.shadow.setRange(0, 10); self.shadow.setValue(1)
-        self.background = QCheckBox("Полупрозрачный фон")
+        self.background = QCheckBox("Подложка под субтитрами")
+        self.background.setToolTip("Добавляет полупрозрачную тёмную область за текстом, чтобы субтитры лучше читались на светлом фоне")
         self.margin = QSpinBox(); self.margin.setRange(80, 500); self.margin.setValue(120)
         self.offset = QSlider(Qt.Horizontal); self.offset.setRange(-300, 300); self.offset.setSingleStep(10); self.offset.setPageStep(10); self.offset.setValue(0)
         self.offset_value = QSpinBox(); self.offset_value.setRange(-300, 300); self.offset_value.setSingleStep(10); self.offset_value.setSuffix(" px")
@@ -263,22 +302,43 @@ class SubtitleEditor(QWidget):
         style_form.addRow("Смещение по вертикали", offset_row)
         style_form.addRow(self.background)
         self.preview = VerticalFramePreview()
-        top.addWidget(self.vertical)
-        top.addWidget(style_widget)
-        top.addWidget(branding_widget)
-        top.addWidget(self.preview)
-        layout.addLayout(top)
+        self.preview.setMinimumSize(360, 640)
+        self.big_preview = QPushButton("Открыть большое предпросмотр")
+        self.big_preview.clicked.connect(self._open_big_preview)
+        preview_panel = QWidget()
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.addWidget(self.preview, 1, Qt.AlignCenter)
+        preview_layout.addWidget(self.big_preview)
+        self.settings_layout.addWidget(self.vertical)
+        self.settings_layout.addWidget(style_widget)
+        self.settings_layout.addWidget(branding_widget)
+        self.settings_layout.addStretch(1)
+        self.top_splitter.addWidget(self.settings_scroll)
+        self.top_splitter.addWidget(preview_panel)
+        self.top_splitter.setStretchFactor(0, 1)
+        self.top_splitter.setStretchFactor(1, 2)
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(("Start", "End", "Text"))
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        layout.addWidget(self.table, 1)
+        table_panel = QWidget()
+        table_layout = QVBoxLayout(table_panel)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.addWidget(self.table, 1)
         actions = QHBoxLayout()
         for text, handler in (("Объединить", self._merge), ("Разделить", self._split), ("Удалить", self._delete), ("Восстановить исходный вариант", self._restore), ("Сохранить SRT и ASS", self._export), ("Рендер тестовых 5 секунд", self._test_render), ("Использовать эти настройки по умолчанию", self._save_defaults)):
             button = QPushButton(text)
             button.clicked.connect(handler)
             actions.addWidget(button)
         actions.addStretch(1)
-        layout.addLayout(actions)
+        table_layout.addLayout(actions)
+        self.main_splitter.addWidget(self.top_splitter)
+        self.main_splitter.addWidget(table_panel)
+        self.main_splitter.setStretchFactor(0, 3)
+        self.main_splitter.setStretchFactor(1, 1)
+        layout.addWidget(self.main_splitter, 1)
+        self._restore_splitters()
+        self.main_splitter.splitterMoved.connect(self._save_splitters)
+        self.top_splitter.splitterMoved.connect(self._save_splitters)
 
         self.style.currentIndexChanged.connect(self._style_selected)
         self.branding_preset.currentIndexChanged.connect(self._branding_preset_selected)
@@ -287,6 +347,10 @@ class SubtitleEditor(QWidget):
         self.title_hook.clicked.connect(self._title_hook_clicked)
         self.title_reset.clicked.connect(self._title_reset_clicked)
         self.banner_import.clicked.connect(self._import_banner)
+        self.banner_open_file.clicked.connect(self._open_banner_file)
+        self.banner_open_folder.clicked.connect(self._open_banner_folder)
+        self.banner_reset_position.clicked.connect(self._reset_banner_position)
+        self.banner_save_profile.clicked.connect(self._save_banner_profile_defaults)
         self.channel_profile.currentIndexChanged.connect(self._profile_selected)
         for control in (self.position, self.size, self.maximum, self.lines, self.outline, self.shadow, self.margin, self.offset):
             signal = control.currentIndexChanged if isinstance(control, QComboBox) else control.valueChanged
@@ -310,6 +374,37 @@ class SubtitleEditor(QWidget):
             layout.addWidget(widget)
         return row
 
+    def _restore_splitters(self) -> None:
+        settings = QSettings("CreatorAssistant", "CreatorAssistant")
+        main = settings.value("shorts/vertical_editor/main_splitter")
+        top = settings.value("shorts/vertical_editor/top_splitter")
+        if isinstance(main, list) and all(str(item).isdigit() for item in main):
+            self.main_splitter.setSizes([int(item) for item in main])
+        else:
+            self.main_splitter.setSizes([720, 260])
+        if isinstance(top, list) and all(str(item).isdigit() for item in top):
+            self.top_splitter.setSizes([360, 640])
+            self.top_splitter.setSizes([int(item) for item in top])
+        else:
+            self.top_splitter.setSizes([420, 720])
+
+    def _save_splitters(self) -> None:
+        settings = QSettings("CreatorAssistant", "CreatorAssistant")
+        settings.setValue("shorts/vertical_editor/main_splitter", self.main_splitter.sizes())
+        settings.setValue("shorts/vertical_editor/top_splitter", self.top_splitter.sizes())
+
+    def _open_big_preview(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Большое предпросмотр Short")
+        dialog.resize(540, 960)
+        layout = QVBoxLayout(dialog)
+        preview = VerticalFramePreview()
+        preview.setMinimumSize(540, 960)
+        sample = self._cues()[0].text if self._cues() else "Пример безопасных субтитров"
+        preview.set_preview(self.candidate, self.current_settings(), self.vertical.value(), sample, self.current_branding_settings())
+        layout.addWidget(preview, 1)
+        dialog.exec()
+
     def _refresh_profiles(self) -> None:
         current = self.channel_profile.currentData() if hasattr(self, "channel_profile") else ""
         self.channel_profile.blockSignals(True)
@@ -329,6 +424,8 @@ class SubtitleEditor(QWidget):
         self.show_subtitles.setChecked(bool(settings.get("show_subtitles", True)))
         self.show_title.setChecked(bool(settings.get("show_title", False)))
         self.title_text.setText(str(settings.get("final_title_text", "") or ""))
+        self.original_title_label.setText(str(settings.get("original_video_title") or "—"))
+        self.original_title_source.setText(str(settings.get("original_video_title_source") or "—"))
         self.title_size.setValue(int(settings.get("title_size", 78)))
         self.title_bold.setChecked(bool(settings.get("title_bold", True)))
         self.title_y.setValue(int(settings.get("title_y", 180)))
@@ -336,8 +433,8 @@ class SubtitleEditor(QWidget):
         self.channel_profile.setCurrentIndex(max(0, self.channel_profile.findData(profile_id)))
         self.show_channel_card.setChecked(bool(settings.get("show_channel_card", False)))
         self.banner_scale.setValue(int(settings.get("banner_scale", 100)))
-        self.banner_x.setValue(int(settings.get("banner_x", 50)))
-        self.banner_y.setValue(int(settings.get("banner_y", 1600)))
+        self.banner_x.setValue(int(settings.get("banner_offset_x", settings.get("banner_x", 0))))
+        self.banner_y.setValue(int(settings.get("banner_offset_y", int(settings.get("banner_y", 1600)) - 1600 if "banner_y" in settings else 0)))
         self.banner_opacity.setValue(int(settings.get("banner_opacity", 100)))
         self._update_banner_label()
 
@@ -348,7 +445,8 @@ class SubtitleEditor(QWidget):
     def _update_banner_label(self) -> None:
         profile_id = str(self.channel_profile.currentData() or "")
         path = self.assets.banner_path(profile_id)
-        self.banner_preview.setText(str(path) if path else "Баннер не выбран")
+        self.banner_preview.setText(f"{path.name}\nБаннер загружен ✓" if path else "Баннер не выбран")
+        self.banner_preview.setToolTip(str(path or ""))
 
     def _branding_preset_selected(self) -> None:
         if self._loading:
@@ -380,19 +478,19 @@ class SubtitleEditor(QWidget):
         if not self.candidate:
             return
         branding = dict(self.candidate.branding_settings or {})
-        source = str(branding.get("original_video_title") or self.title_text.text()).strip()
+        source = str(branding.get("original_video_title") or "").strip()
         if source and not branding.get("translated_video_title"):
-            branding["translated_video_title"] = source
+            branding["translated_video_title"] = self.title_service.translate_title_fallback(source)
             self.candidate.branding_settings = branding
-        if source and not self.title_text.text().strip():
-            self.title_text.setText(source)
+        if branding.get("translated_video_title") and not self.title_text.text().strip():
+            self.title_text.setText(str(branding["translated_video_title"]))
         self._mark_dirty()
 
     def _title_hook_clicked(self) -> None:
         if not self.candidate:
             return
-        source = self.title_text.text().strip() or str((self.candidate.branding_settings or {}).get("original_video_title") or "")
-        hook = " ".join(source.split()[:7]).strip()
+        source = str((self.candidate.branding_settings or {}).get("original_video_title") or "")
+        hook = self.title_service.heuristic_hook(self.candidate, self.transcript, source)
         if hook:
             branding = dict(self.candidate.branding_settings or {})
             branding["short_hook_title"] = hook
@@ -404,6 +502,18 @@ class SubtitleEditor(QWidget):
         self.title_text.clear()
         self.show_title.setChecked(False)
         self._mark_dirty()
+
+    def _open_banner_file(self) -> None:
+        path = self.assets.banner_path(str(self.channel_profile.currentData() or ""))
+        if path and path.is_file():
+            import os
+            os.startfile(str(path))
+
+    def _open_banner_folder(self) -> None:
+        path = self.assets.banner_path(str(self.channel_profile.currentData() or ""))
+        if path and path.is_file():
+            import os
+            os.startfile(str(path.parent))
 
     def _import_banner(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(
@@ -543,11 +653,24 @@ class SubtitleEditor(QWidget):
             "channel_profile_id": profile_id,
             "channel_banner_path": str(banner or ""),
             "banner_scale": self.banner_scale.value(),
-            "banner_x": self.banner_x.value(),
-            "banner_y": self.banner_y.value(),
+            "banner_anchor": "bottom_center",
+            "banner_fit_mode": "contain",
+            "banner_offset_x": self.banner_x.value(),
+            "banner_offset_y": self.banner_y.value(),
             "banner_opacity": self.banner_opacity.value(),
             "safe_margin": 80,
         }
+
+    def _reset_banner_position(self) -> None:
+        self.banner_x.setValue(0)
+        self.banner_y.setValue(0)
+        self._mark_dirty()
+
+    def _save_banner_profile_defaults(self) -> None:
+        profile_id = str(self.channel_profile.currentData() or "")
+        if profile_id:
+            self.assets.save_banner_defaults(profile_id, self.current_branding_settings())
+            self.banner_preview.setText(self.banner_preview.text() + "\nНастройки профиля сохранены ✓")
 
     def _style_selected(self) -> None:
         if self._loading:
