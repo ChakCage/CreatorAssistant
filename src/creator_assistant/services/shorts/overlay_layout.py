@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from PySide6.QtGui import QFontMetrics, QGuiApplication
 
 from creator_assistant.services.shorts.font_resolver import resolved_qfont
+from creator_assistant.services.shorts.subtitle_layout import SubtitleLayout, SubtitleLayoutCalculator
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,29 @@ class OverlayLayoutCalculator:
         x = max(safe, min(self.width - safe - target_width, x))
         y = max(safe, min(self.height - safe - target_height, y))
         return Rect(x, y, target_width, target_height)
+
+    def subtitle_layout(
+        self,
+        text: str,
+        subtitle_settings: dict,
+        branding_settings: dict | None = None,
+        banner_size: tuple[int, int] | None = None,
+    ) -> SubtitleLayout:
+        """Calculate the one canonical subtitle geometry used by Qt and ASS.
+
+        Coordinates are always expressed in the final 1080x1920 canvas.  Preview
+        quality only scales this result and therefore cannot change placement.
+        """
+        settings = dict(subtitle_settings or {})
+        branding = dict(branding_settings or {})
+        if (
+            bool(settings.get("auto_above_banner", True))
+            and bool(branding.get("show_channel_card", False))
+            and banner_size
+        ):
+            banner = self.banner_rect(banner_size[0], banner_size[1], branding)
+            settings["maximum_bottom"] = banner.y - max(20, int(settings.get("banner_gap", 32) or 32))
+        return SubtitleLayoutCalculator().calculate(text, settings)
 
 
 def layout_title_text(

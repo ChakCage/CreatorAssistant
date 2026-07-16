@@ -172,7 +172,11 @@ class SubtitleLayoutCalculator:
         requested_offset = int(settings.get("vertical_offset", 0))
         base_y = POSITION_Y.get(str(settings.get("position", "lower")), POSITION_Y["lower"])
         min_y = safe_margin + height // 2
-        max_y = FRAME_HEIGHT - safe_margin - height // 2
+        max_bottom = min(
+            FRAME_HEIGHT - safe_margin,
+            int(settings.get("maximum_bottom", FRAME_HEIGHT - safe_margin) or FRAME_HEIGHT - safe_margin),
+        )
+        max_y = max(min_y, max_bottom - height // 2)
         y = max(min_y, min(max_y, base_y + requested_offset))
         return SubtitleLayout(
             text="\n".join(lines),

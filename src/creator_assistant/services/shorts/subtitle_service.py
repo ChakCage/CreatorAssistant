@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import Iterable
 
+from PySide6.QtGui import QImageReader
+
 from creator_assistant.domain.shorts.models import Candidate, SubtitleCue, Transcript
 from creator_assistant.services.shorts.subtitle_layout import (
     FRAME_WIDTH,
@@ -17,6 +19,7 @@ from creator_assistant.services.shorts.subtitle_layout import (
     resolved_style,
 )
 from creator_assistant.services.shorts.text_alignment import HorizontalTextAlignment, ass_anchor
+from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator
 from creator_assistant.services.shorts.transcription_service import srt_timestamp
 
 
@@ -91,7 +94,14 @@ class SubtitleService:
             cues.append(SubtitleCue(round(start - candidate.start, 3), round(end - candidate.start, 3), wrap_subtitle(segment.text, maximum, lines)))
         return cues
 
-    def write(self, cues: Iterable[SubtitleCue], srt_path: Path, ass_path: Path, settings: dict) -> None:
+    def write(
+        self,
+        cues: Iterable[SubtitleCue],
+        srt_path: Path,
+        ass_path: Path,
+        settings: dict,
+        branding_settings: dict | None = None,
+    ) -> None:
         cues, style = fit_cues(cues, settings)
         srt_path.parent.mkdir(parents=True, exist_ok=True)
         srt_lines = []
@@ -113,9 +123,21 @@ class SubtitleService:
             "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
         )
         events = []
+        branding = dict(branding_settings or {})
+        banner_path = Path(str(branding.get("channel_banner_path") or ""))
+        banner_size = None
+        if bool(branding.get("show_channel_card", False)) and banner_path.is_file():
+            size = QImageReader(str(banner_path)).size()
+            if size.isValid():
+                banner_size = (size.width(), size.height())
         for cue in cues:
             text = cue.text.replace("{", "(").replace("}", ")").replace("\n", r"\N")
-            cue_layout = SubtitleLayoutCalculator().calculate(cue.text, {**settings, "size": style["size"]})
+            cue_layout = OverlayLayoutCalculator().subtitle_layout(
+                cue.text,
+                {**settings, "size": style["size"]},
+                branding,
+                banner_size,
+            )
             y = cue_layout.y
             position = str(settings.get("position", "lower"))
             if position == "lower":
