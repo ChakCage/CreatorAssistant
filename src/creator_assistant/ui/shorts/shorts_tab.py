@@ -312,8 +312,8 @@ class _RenderWorker(QObject):
                     subtitle_service.generate(self.transcript, candidate, int(settings.get("maximum", 36)), int(settings.get("lines", 2)))
                 )
                 ass = self.paths.cache / f"{candidate.id}.render.ass"
-                subtitle_service.write(cues, self.paths.cache / f"{candidate.id}.render.srt", ass, settings)
                 branding = candidate.branding_settings or {}
+                subtitle_service.write(cues, self.paths.cache / f"{candidate.id}.render.srt", ass, settings, branding)
                 render_ass = ass if bool(branding.get("show_subtitles", True)) else self.paths.cache / f"{candidate.id}.no_subtitles.ass"
 
                 def update(value: float, current=job):
@@ -361,8 +361,8 @@ class _PreviewRenderWorker(QObject):
             )
             preview = replace(self.candidate, end=min(self.candidate.end, self.candidate.start + 5.0))
             ass = self.paths.cache / f"{self.candidate.id}.preview.ass"
-            SubtitleService().write(cues, self.paths.cache / f"{self.candidate.id}.preview.srt", ass, settings)
             branding = self.candidate.branding_settings or {}
+            SubtitleService().write(cues, self.paths.cache / f"{self.candidate.id}.preview.srt", ass, settings, branding)
             render_ass = ass if bool(branding.get("show_subtitles", True)) else self.paths.cache / f"{self.candidate.id}.no_subtitles.ass"
             target = self.paths.renders / f"{self.candidate.id} [preview 5s].mp4"
             self.container.shorts_render.render(self.source, preview, render_ass, target, self.token)
@@ -642,6 +642,7 @@ class ShortsTab(QWidget):
                 proxy_info=proxy_info,
                 proxy_path=proxy_path,
                 render_encoder=encoder,
+                ffmpeg_path=self.container.shorts_render.ffmpeg_path,
             )
             self.subtitle_editor.set_context(candidate, self.transcript, self.paths)
         self.workspace.setCurrentWidget(self.candidate_editor)

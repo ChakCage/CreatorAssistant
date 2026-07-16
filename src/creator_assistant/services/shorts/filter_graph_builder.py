@@ -13,7 +13,15 @@ from creator_assistant.services.shorts.text_alignment import HorizontalTextAlign
 
 
 class ShortsFilterGraphBuilder:
-    def build(self, candidate: Candidate, source: SourceInfo, subtitle_file: str = "", input_clipped: bool = False, has_channel_banner: bool = False) -> str:
+    def build(
+        self,
+        candidate: Candidate,
+        source: SourceInfo,
+        subtitle_file: str = "",
+        input_clipped: bool = False,
+        has_channel_banner: bool = False,
+        output_size: tuple[int, int] = (1080, 1920),
+    ) -> str:
         layout = candidate.layout_settings or {}
         mode = layout.get("mode", "center_crop")
         if mode == "blur_background":
@@ -32,7 +40,7 @@ class ShortsFilterGraphBuilder:
         subtitle = ""
         if subtitle_file:
             safe_name = Path(subtitle_file).name.replace("'", r"\'").replace(":", r"\:")
-            subtitle = f",subtitles=filename='{safe_name}'{fonts_dir_option()}:charenc=UTF-8"
+            subtitle = f"subtitles=filename='{safe_name}'{fonts_dir_option()}:charenc=UTF-8"
         if input_clipped:
             video_prefix = "[0:v:0]setpts=PTS-STARTPTS,"
             audio_chain = "[0:a:0]asetpts=PTS-STARTPTS[a]"
@@ -43,10 +51,32 @@ class ShortsFilterGraphBuilder:
         show_title = bool(branding.get("show_title", False)) and str(branding.get("final_title_text", "")).strip()
         show_banner = bool(branding.get("show_channel_card", False)) and has_channel_banner
         if not show_title and not show_banner:
-            return f"{video_prefix}{video}{tone_map}{subtitle}[v];{audio_chain}"
+            suffix = f",{subtitle}" if subtitle else ""
+            resize = _output_resize(output_size)
+            return f"{video_prefix}{video}{tone_map}{suffix}{resize}[v];{audio_chain}"
 
-        filters = [f"{video_prefix}{video}{tone_map}{subtitle}[base]"]
+        filters = [f"{video_prefix}{video}{tone_map}[base]"]
         current = "base"
+        # The shared visual stack is background/video -> banner -> title -> subtitles.
+        # Subtitles are deliberately last so no bitmap overlay can hide glyph tails,
+        # punctuation, outline, or shadow.
+        if show_banner:
+            scale = max(0.1, min(2.0, float(branding.get("banner_scale", 100) or 100) / 100))
+            opacity = max(0.0, min(1.0, float(branding.get("banner_opacity", 100) or 100) / 100))
+            safe = max(0, int(branding.get("safe_margin", 80) or 80))
+            offset_x = int(branding.get("banner_offset_x", 0) or 0)
+            offset_y = int(branding.get("banner_offset_y", 0) or 0)
+            if "banner_y" in branding and "banner_offset_y" not in branding:
+                offset_y = int(branding.get("banner_y", 1600) or 1600) - 1600
+            max_width = max(120, int(1080 * 0.90) - safe * 2)
+            filters.append(
+                f"[1:v]scale=w='min(iw*{scale:.3f},{max_width})':h=-1,"
+                f"format=rgba,colorchannelmixer=aa={opacity:.3f}[banner]"
+            )
+            x_expr = f"max({safe},min(W-w-{safe},(W-w)/2+{offset_x}))"
+            y_expr = f"max({safe},min(H-h-{safe},H-h-{safe}+{offset_y}))"
+            filters.append(f"[{current}][banner]overlay=x='{x_expr}':y='{y_expr}':format=auto[overlayed]")
+            current = "overlayed"
         if show_title:
             raw_title = str(branding.get("final_title_text", "")).strip()
             requested_size = max(24, min(180, int(branding.get("title_size", 78) or 78)))
@@ -85,24 +115,11 @@ class ShortsFilterGraphBuilder:
                     f"shadowcolor=black@0.75:x='{x_expr}':y={line_y}[{next_label}]"
                 )
                 current = next_label
-        if show_banner:
-            scale = max(0.1, min(2.0, float(branding.get("banner_scale", 100) or 100) / 100))
-            opacity = max(0.0, min(1.0, float(branding.get("banner_opacity", 100) or 100) / 100))
-            safe = max(0, int(branding.get("safe_margin", 80) or 80))
-            offset_x = int(branding.get("banner_offset_x", 0) or 0)
-            offset_y = int(branding.get("banner_offset_y", 0) or 0)
-            if "banner_y" in branding and "banner_offset_y" not in branding:
-                offset_y = int(branding.get("banner_y", 1600) or 1600) - 1600
-            max_width = max(120, int(1080 * 0.90) - safe * 2)
-            filters.append(
-                f"[1:v]scale=w='min(iw*{scale:.3f},{max_width})':h=-1,"
-                f"format=rgba,colorchannelmixer=aa={opacity:.3f}[banner]"
-            )
-            x_expr = f"max({safe},min(W-w-{safe},(W-w)/2+{offset_x}))"
-            y_expr = f"max({safe},min(H-h-{safe},H-h-{safe}+{offset_y}))"
-            filters.append(f"[{current}][banner]overlay=x='{x_expr}':y='{y_expr}':format=auto[overlayed]")
-            current = "overlayed"
-        filters.append(f"[{current}]null[v]")
+        if subtitle:
+            filters.append(f"[{current}]{subtitle}[subtitled]")
+            current = "subtitled"
+        resize = _output_resize(output_size)
+        filters.append(f"[{current}]{resize[1:] if resize else 'null'}[v]")
         return ";".join(filters + [audio_chain])
 
 
@@ -114,3 +131,12 @@ def _escape_drawtext(value: str) -> str:
         .replace("%", r"\%")
         .replace(",", r"\,")
     )
+
+
+def _output_resize(output_size: tuple[int, int]) -> str:
+    width, height = (int(output_size[0]), int(output_size[1]))
+    if (width, height) == (1080, 1920):
+        return ""
+    if (width, height) not in {(360, 640), (540, 960), (720, 1280)}:
+        raise ValueError(f"Unsupported preview composition size: {width}x{height}")
+    return f",scale={width}:{height}:flags=lanczos"

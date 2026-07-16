@@ -1,9 +1,10 @@
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QSize, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -394,3 +395,25 @@ def test_stale_exact_preview_generation_cannot_replace_current_frame():
     image.fill(QColor("green"))
     assert not editor.apply_exact_preview_frame(image, old_generation)
     assert editor.apply_exact_preview_frame(image, editor._preview_generation_id)
+
+
+def test_quality_modes_are_real_backing_resolutions_and_zoom_is_independent():
+    qt_app = app()
+    editor = SubtitleEditor()
+    viewport_size = editor.preview_scroll.size()
+    for index, expected in enumerate(((360, 640), (540, 960), (720, 1280), (1080, 1920))):
+        editor.preview_quality.setCurrentIndex(index)
+        assert editor.preview.composition_size == expected
+    editor.preview_zoom.setCurrentIndex(editor.preview_zoom.findData("fit"))
+    assert editor.preview_scroll.size() == viewport_size
+    editor.preview_zoom.setCurrentIndex(editor.preview_zoom.findData(200))
+    assert editor.preview.size() == QSize(2160, 3840)
+    assert editor.preview.composition_size == (1080, 1920)
+    assert qt_app is QApplication.instance()
+
+
+def test_realtime_blur_uses_reduced_background_branch():
+    source = Path(__file__).parents[2] / "src" / "creator_assistant" / "ui" / "shorts" / "subtitle_editor.py"
+    text = source.read_text(encoding="utf-8")
+    assert "background.scaled(45, 80" in text
+    assert "background.scaled(270, 480" in text

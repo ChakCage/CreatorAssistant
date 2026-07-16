@@ -98,12 +98,69 @@ def test_render_command_adds_title_and_channel_banner_overlay(tmp_path):
     assert "colorchannelmixer=aa=0.900" in graph
 
 
+def test_subtitles_are_composited_after_banner_and_title(tmp_path):
+    banner = tmp_path / "banner.png"
+    banner.write_bytes(b"png")
+    candidate = Candidate(
+        "short_001", 0, 10, 1, "",
+        branding_settings={
+            "show_channel_card": True, "channel_banner_path": str(banner),
+            "show_title": True, "final_title_text": "Заголовок",
+        },
+    )
+    graph = ShortsFilterGraphBuilder().build(
+        candidate, source(Path("x.mp4")), "short.ass",
+        input_clipped=True, has_channel_banner=True,
+    )
+    assert graph.index("overlay=x=") < graph.index("drawtext=") < graph.index("subtitles=filename=")
+    assert "[subtitled]" in graph
+
+
+@pytest.mark.parametrize("size", [(360, 640), (540, 960), (720, 1280), (1080, 1920)])
+def test_exact_preview_quality_has_real_output_dimensions(size):
+    graph = ShortsFilterGraphBuilder().build(
+        Candidate("short_001", 0, 10, 1, ""), source(Path("x.mp4")),
+        input_clipped=True, output_size=size,
+    )
+    if size == (1080, 1920):
+        assert "scale=1080:1920:flags=lanczos" not in graph
+    else:
+        assert f"scale={size[0]}:{size[1]}:flags=lanczos" in graph
+
+
 def test_banner_geometry_contains_whole_wide_card_inside_safe_bounds():
     rect = OverlayLayoutCalculator().banner_rect(2048, 682, {"banner_scale": 100, "safe_margin": 80})
     assert rect.width <= 1080 * 0.90
     assert rect.x >= 80
     assert rect.x + rect.width <= 1000
     assert rect.y + rect.height <= 1840
+
+
+def test_two_line_subtitle_is_automatically_kept_above_banner():
+    calculator = OverlayLayoutCalculator()
+    branding = {"show_channel_card": True, "banner_scale": 100, "safe_margin": 80}
+    banner = calculator.banner_rect(2048, 682, branding)
+    layout = calculator.subtitle_layout(
+        "Я поменял камень на\nнезерский",
+        {"style": "clean", "position": "lower", "lines": 2, "auto_above_banner": True, "banner_gap": 32},
+        branding,
+        (2048, 682),
+    )
+    assert layout.y + layout.height // 2 + 32 <= banner.y
+
+
+def test_manual_overlap_keeps_subtitles_above_banner_by_layer_only():
+    calculator = OverlayLayoutCalculator()
+    branding = {"show_channel_card": True, "banner_scale": 100, "safe_margin": 80}
+    automatic = calculator.subtitle_layout(
+        "Я сделал платформу из\nкамня, а",
+        {"position": "lower", "auto_above_banner": True}, branding, (2048, 682),
+    )
+    manual = calculator.subtitle_layout(
+        "Я сделал платформу из\nкамня, а",
+        {"position": "lower", "auto_above_banner": False}, branding, (2048, 682),
+    )
+    assert automatic.y < manual.y
 
 
 def test_legacy_absolute_banner_x_is_not_reinterpreted_as_offset():

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QEvent, QPoint, QSettings, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, QEvent, QPoint, QProcess, QSettings, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
@@ -23,6 +24,7 @@ from creator_assistant.domain.shorts.models import SubtitleCue
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
 from creator_assistant.services.shorts.font_resolver import DEFAULT_FONT_FAMILY, resolve_font, resolved_qfont
 from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator, layout_title_text
+from creator_assistant.services.shorts.filter_graph_builder import ShortsFilterGraphBuilder
 from creator_assistant.services.shorts.text_alignment import HorizontalTextAlignment, aligned_left
 from creator_assistant.services.shorts.title_service import ShortTitleService
 from creator_assistant.services.shorts.semantic_backend import OllamaSemanticScorer
@@ -77,6 +79,7 @@ class VerticalFramePreview(QWidget):
         self.layout_settings: dict = {}
         self.branding_settings: dict = {}
         self.video_frame = QImage()
+        self.exact_frame = QImage()
         self.sample = "Длинный пример субтитров безопасно помещается в кадре"
 
     def set_preview(self, candidate, settings: dict, layout_settings: dict, sample: str | None = None, branding_settings: dict | None = None) -> None:
@@ -92,7 +95,16 @@ class VerticalFramePreview(QWidget):
     def set_video_frame(self, image: QImage) -> None:
         if image and not image.isNull():
             self.video_frame = image.copy()
+            self.exact_frame = QImage()
             self.update()
+
+    def set_exact_frame(self, image: QImage) -> None:
+        if image and not image.isNull():
+            self.exact_frame = image.copy()
+            self.update()
+
+    def invalidate_exact_frame(self) -> None:
+        self.exact_frame = QImage()
 
     def effective_preview_size(self) -> tuple[int, int]:
         scale = min(self.width() / 1080, self.height() / 1920)
@@ -111,12 +123,26 @@ class VerticalFramePreview(QWidget):
         self.resized.emit()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt API
-        painter = QPainter(self)
+        # Paint the scene into a real backing image at the selected quality.
+        # In Fit mode the widget stays the same physical size, while text, banner,
+        # blur and video are still rasterized at 360p/540p/720p/1080p as selected.
+        composition_w, composition_h = self.composition_size
+        canvas = QImage(composition_w, composition_h, QImage.Format_ARGB32_Premultiplied)
+        canvas.fill(QColor("#0b0f14"))
+        painter = QPainter(canvas)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#0b0f14"))
-        scale = min(self.width() / 1080, self.height() / 1920)
-        left = (self.width() - 1080 * scale) / 2
-        top = (self.height() - 1920 * scale) / 2
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        if not self.exact_frame.isNull():
+            painter.drawImage(QRect(0, 0, composition_w, composition_h), self.exact_frame)
+            painter.end()
+            display = QPainter(self)
+            display.setRenderHint(QPainter.SmoothPixmapTransform)
+            display.drawImage(self.rect(), canvas)
+            display.end()
+            return
+        scale = composition_w / 1080
+        left = 0.0
+        top = 0.0
         painter.save()
         painter.translate(left, top)
         painter.scale(scale, scale)
@@ -135,6 +161,11 @@ class VerticalFramePreview(QWidget):
                 crop_x = round(max(0, expanded.width() - 270) / 2)
                 crop_y = round(max(0, expanded.height() - 480) / 2)
                 background = expanded.copy(crop_x, crop_y, 270, 480)
+                # A cheap but genuine realtime blur: aggressively reduce the
+                # background before smooth upscaling, matching the optimized
+                # low-resolution background branch of the final FFmpeg graph.
+                background = background.scaled(45, 80, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                background = background.scaled(270, 480, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
                 painter.drawPixmap(frame, background, background.rect())
             else:
                 painter.fillRect(frame, QColor(str(self.layout_settings.get("background_color", "black"))))
@@ -163,9 +194,16 @@ class VerticalFramePreview(QWidget):
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(QRectF(left + 90 * scale, top + 120 * scale, 900 * scale, 1560 * scale))
             painter.end()
+            display = QPainter(self)
+            display.setRenderHint(QPainter.SmoothPixmapTransform)
+            display.drawImage(self.rect(), canvas)
+            display.end()
             return
 
-        layout = SubtitleLayoutCalculator().calculate(self.sample, self.settings)
+        banner_size = self._banner_source_size()
+        layout = OverlayLayoutCalculator().subtitle_layout(
+            self.sample, self.settings, self.branding_settings, banner_size,
+        )
         font = resolved_qfont(layout.font_name, bold=True, pixel_size=max(8, round(layout.font_size * scale)))
         font.setWeight(QFont.Weight.Bold)
         painter.setFont(font)
@@ -202,8 +240,30 @@ class VerticalFramePreview(QWidget):
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(QRectF(left + 90 * scale, top + 120 * scale, 900 * scale, 1560 * scale))
         painter.end()
+        display = QPainter(self)
+        display.setRenderHint(QPainter.SmoothPixmapTransform)
+        target = self.rect()
+        display.drawImage(target, canvas)
+        display.end()
+
+    def _banner_source_size(self) -> tuple[int, int] | None:
+        banner = Path(str(self.branding_settings.get("channel_banner_path") or ""))
+        pixmap = QPixmap(str(banner)) if banner.is_file() else QPixmap()
+        if pixmap.isNull():
+            return None
+        return pixmap.width(), pixmap.height()
 
     def _draw_branding(self, painter: QPainter, scale: float, left: float, top: float) -> None:
+        # Banner is below both text layers in preview, exactly as in FFmpeg.
+        if bool(self.branding_settings.get("show_channel_card", False)):
+            banner = Path(str(self.branding_settings.get("channel_banner_path") or ""))
+            pixmap = QPixmap(str(banner)) if banner.is_file() else QPixmap()
+            if not pixmap.isNull():
+                rect = OverlayLayoutCalculator().banner_rect(pixmap.width(), pixmap.height(), self.branding_settings)
+                scaled = pixmap.scaled(round(rect.width * scale), round(rect.height * scale), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                painter.setOpacity(max(0, min(100, int(self.branding_settings.get("banner_opacity", 100)))) / 100)
+                painter.drawPixmap(left + rect.x * scale, top + rect.y * scale, scaled)
+                painter.setOpacity(1.0)
         if bool(self.branding_settings.get("show_title", False)):
             title = str(self.branding_settings.get("final_title_text") or "").strip()
             if title:
@@ -251,15 +311,6 @@ class VerticalFramePreview(QWidget):
                             painter.drawText(box.translated(dx, dy), flags, line)
                     painter.setPen(QColor(str(self.branding_settings.get("title_color", "#ffffff"))))
                     painter.drawText(box, flags, line)
-        if bool(self.branding_settings.get("show_channel_card", False)):
-            banner = Path(str(self.branding_settings.get("channel_banner_path") or ""))
-            pixmap = QPixmap(str(banner)) if banner.is_file() else QPixmap()
-            if not pixmap.isNull():
-                rect = OverlayLayoutCalculator().banner_rect(pixmap.width(), pixmap.height(), self.branding_settings)
-                scaled = pixmap.scaled(round(rect.width * scale), round(rect.height * scale), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                painter.setOpacity(max(0, min(100, int(self.branding_settings.get("banner_opacity", 100)))) / 100)
-                painter.drawPixmap(left + rect.x * scale, top + rect.y * scale, scaled)
-                painter.setOpacity(1.0)
 
     def _title_font_family(self) -> str:
         if bool(self.branding_settings.get("use_subtitle_font_for_title", True)):
@@ -339,6 +390,14 @@ class SubtitleEditor(QWidget):
         self._proxy_info = None
         self._proxy_path: Path | None = None
         self._render_encoder = ""
+        self._ffmpeg_path = ""
+        self._exact_process: QProcess | None = None
+        self._exact_target: Path | None = None
+        self._exact_generation = -1
+        self._exact_timer = QTimer(self)
+        self._exact_timer.setSingleShot(True)
+        self._exact_timer.setInterval(220)
+        self._exact_timer.timeout.connect(self._request_exact_preview)
         self._preview_state = "Быстрый предпросмотр"
         self._resume_after_scrub = False
         layout = QVBoxLayout(self)
@@ -478,6 +537,9 @@ class SubtitleEditor(QWidget):
         self.background = QCheckBox("Подложка под субтитрами")
         self.background.setToolTip("Добавляет полупрозрачную тёмную область за текстом, чтобы субтитры лучше читались на светлом фоне")
         self.margin = QSpinBox(); self.margin.setRange(80, 500); self.margin.setValue(120)
+        self.auto_above_banner = QCheckBox("Автоматически размещать субтитры над баннером")
+        self.auto_above_banner.setChecked(True)
+        self.auto_above_banner.setToolTip("Сохраняет зазор 32 px между нижней границей текста и карточкой канала")
         self.offset = QSlider(Qt.Horizontal); self.offset.setRange(-300, 300); self.offset.setSingleStep(10); self.offset.setPageStep(10); self.offset.setValue(0)
         self.offset_value = QSpinBox(); self.offset_value.setRange(-300, 300); self.offset_value.setSingleStep(10); self.offset_value.setSuffix(" px")
         self.offset_reset = QPushButton("Сбросить")
@@ -494,30 +556,38 @@ class SubtitleEditor(QWidget):
             style_form.addRow(label, control)
         style_form.addRow("Смещение по вертикали", offset_row)
         style_form.addRow(self.background)
+        style_form.addRow(self.auto_above_banner)
         self.preview = VerticalFramePreview()
         self.preview_quality = QComboBox()
-        for label, size in (
-            ("Fast 360×640", (360, 640)),
-            ("Medium 540×960", (540, 960)),
-            ("High 720×1280", (720, 1280)),
-            ("Full HD 1080×1920", (1080, 1920)),
+        for label, size, hint in (
+            ("Быстрое 360×640", (360, 640), "Для плавного воспроизведения"),
+            ("Среднее 540×960", (540, 960), "Оптимально для обычного редактирования"),
+            ("Высокое 720×1280", (720, 1280), "Для проверки текста и композиции"),
+            ("Full HD 1080×1920", (1080, 1920), "Для финальной проверки качества перед рендером"),
         ):
             self.preview_quality.addItem(label, size)
+            self.preview_quality.setItemData(self.preview_quality.count() - 1, hint, Qt.ToolTipRole)
+        self.preview_quality.setToolTip(
+            "Качество изменяет внутреннее разрешение предпросмотра. Масштаб просмотра только "
+            "увеличивает или уменьшает изображение и не добавляет детализации"
+        )
         self._restore_preview_quality()
         self.preview.resized.connect(self._update_technical_info)
         self.preview_zoom = QComboBox()
-        for label, value in (("Вписать", "fit"), ("50%", 50), ("75%", 75), ("100%", 100)):
+        for label, value in (("Вписать", "fit"), ("50%", 50), ("75%", 75), ("100%", 100), ("200%", 200)):
             self.preview_zoom.addItem(label, value)
         self.preview_fit = QPushButton("Вписать в окно")
         self.preview_100 = QPushButton("100%")
+        self.preview_detail = QPushButton("Проверить качество")
+        self.preview_detail.setToolTip("Показать реальные пиксели композиции 1:1; область можно перемещать мышью")
         self.preview_scroll = PreviewViewport()
         self.preview_scroll.setWidget(self.preview)
         self.preview_scroll.resized.connect(self._apply_preview_zoom)
         self.preview_scroll.zoom_requested.connect(self._zoom_preview_by)
         preview_panel = QWidget()
         preview_layout = QVBoxLayout(preview_panel)
-        preview_layout.addWidget(self._row(QLabel("Качество preview"), self.preview_quality))
-        preview_layout.addWidget(self._row(QLabel("Масштаб просмотра"), self.preview_zoom, self.preview_fit, self.preview_100))
+        preview_layout.addWidget(self._row(QLabel("Качество композиции"), self.preview_quality))
+        preview_layout.addWidget(self._row(QLabel("Масштаб просмотра"), self.preview_zoom, self.preview_fit, self.preview_100, self.preview_detail))
         preview_layout.addWidget(self.preview_scroll, 1)
         self.player = None
         self.audio = None
@@ -530,6 +600,7 @@ class SubtitleEditor(QWidget):
             self.player.setVideoSink(self.video_sink)
             self.video_sink.videoFrameChanged.connect(self._video_frame_changed)
             self.player.positionChanged.connect(self._player_position_changed)
+            self.player.playbackStateChanged.connect(self._playback_state_changed)
         self.timeline = SeekSlider(Qt.Horizontal)
         self.timeline.setRange(0, 0)
         self.timeline.seek_requested.connect(self._seek_relative)
@@ -620,7 +691,7 @@ class SubtitleEditor(QWidget):
         for control in (self.branding_preset, self.title_font, self.title_alignment, self.title_offset_x, self.title_size, self.title_outline, self.title_shadow, self.title_y, self.channel_profile, self.banner_scale, self.banner_x, self.banner_y, self.banner_opacity):
             signal = control.currentIndexChanged if isinstance(control, QComboBox) else control.valueChanged
             signal.connect(self._mark_dirty)
-        for checkbox in (self.show_subtitles, self.show_title, self.use_subtitle_font_for_title, self.title_bold, self.show_channel_card):
+        for checkbox in (self.show_subtitles, self.show_title, self.use_subtitle_font_for_title, self.title_bold, self.show_channel_card, self.auto_above_banner):
             checkbox.toggled.connect(self._mark_dirty)
         self.use_subtitle_font_for_title.toggled.connect(self.title_font.setDisabled)
         self.title_font.setDisabled(self.use_subtitle_font_for_title.isChecked())
@@ -628,6 +699,7 @@ class SubtitleEditor(QWidget):
         self.preview_zoom.currentIndexChanged.connect(self._preview_zoom_changed)
         self.preview_fit.clicked.connect(lambda: self.preview_zoom.setCurrentIndex(self.preview_zoom.findData("fit")))
         self.preview_100.clicked.connect(lambda: self.preview_zoom.setCurrentIndex(self.preview_zoom.findData(100)))
+        self.preview_detail.clicked.connect(lambda: self.preview_zoom.setCurrentIndex(self.preview_zoom.findData(100)))
         self._restore_preview_zoom()
         self.title_text.textEdited.connect(self._mark_dirty)
         self.background.toggled.connect(self._mark_dirty)
@@ -673,6 +745,7 @@ class SubtitleEditor(QWidget):
         settings.setValue("shorts/vertical_editor/preview_quality", f"{int(size[0])}x{int(size[1])}")
         self._preview_generation_id += 1
         self._sync_preview_time(self._preview_position_ms)
+        self._schedule_exact_preview()
 
     def _apply_preview_quality(self) -> None:
         size = self.preview_quality.currentData() if hasattr(self, "preview_quality") else (540, 960)
@@ -700,8 +773,8 @@ class SubtitleEditor(QWidget):
     def _zoom_preview_by(self, delta: int) -> None:
         current = self.preview_zoom.currentData()
         current_value = 50 if current == "fit" else int(current or 50)
-        choices = [50, 75, 100]
-        target = min(choices, key=lambda item: abs(item - max(50, min(100, current_value + delta))))
+        choices = [50, 75, 100, 200]
+        target = min(choices, key=lambda item: abs(item - max(50, min(200, current_value + delta))))
         self.preview_zoom.setCurrentIndex(self.preview_zoom.findData(target))
 
     def _apply_preview_zoom(self) -> None:
@@ -769,15 +842,16 @@ class SubtitleEditor(QWidget):
         if generation_id != self._preview_generation_id or image.isNull():
             return False
         self._preview_state = "Точный кадр FFmpeg"
-        self.preview.set_video_frame(image)
+        self.preview.set_exact_frame(image)
         self._update_technical_info()
         return True
 
-    def set_technical_context(self, *, source_info=None, proxy_info=None, proxy_path: Path | None = None, render_encoder: str = "") -> None:
+    def set_technical_context(self, *, source_info=None, proxy_info=None, proxy_path: Path | None = None, render_encoder: str = "", ffmpeg_path: str = "") -> None:
         self._source_info = source_info
         self._proxy_info = proxy_info
         self._proxy_path = proxy_path
         self._render_encoder = render_encoder
+        self._ffmpeg_path = str(ffmpeg_path or self._ffmpeg_path)
         self._update_technical_info()
 
     def _update_technical_info(self) -> None:
@@ -785,16 +859,28 @@ class SubtitleEditor(QWidget):
             return
         display_w, display_h = self.preview.effective_preview_size()
         composition_w, composition_h = self.preview.composition_size
-        preview_info = self._proxy_info or self._source_info
+        exact = self._preview_state.startswith("Точный кадр FFmpeg")
+        preview_info = self._source_info if exact else (self._proxy_info or self._source_info)
         preview_fps = _format_fps(float(getattr(preview_info, "fps", 0.0) or 0.0))
-        source_label = "Proxy" if self._proxy_info else ("Источник" if self._source_info else "—")
+        source_label = "Original" if exact and self._source_info else ("Proxy" if self._proxy_info else ("Источник" if self._source_info else "—"))
         render_fps = _format_fps(float(getattr(self._source_info, "fps", 0.0) or 0.0))
         encoder = self._render_encoder or "H.264 NVENC"
         zoom = self.preview_zoom.currentData() if hasattr(self, "preview_zoom") else "fit"
         zoom_label = "Вписано в окно" if zoom == "fit" else f"{int(zoom or 100)}%"
+        source_resolution = (
+            f"{getattr(self._source_info, 'width', 0)}×{getattr(self._source_info, 'height', 0)} original"
+            if self._source_info else "—"
+        )
+        playback_resolution = (
+            f"{getattr(self._proxy_info, 'width', 0)}×{getattr(self._proxy_info, 'height', 0)} proxy"
+            if self._proxy_info else source_resolution
+        )
         self.preview_technical.setText(
             f"Качество композиции: {composition_w}×{composition_h}\n"
-            f"Отображение: {zoom_label} · {display_w}×{display_h} · {preview_fps} FPS · {source_label} · {self._preview_state}\n"
+            f"Источник видео: {source_resolution}\n"
+            f"Playback: {playback_resolution} · {preview_fps} FPS\n"
+            f"Точный кадр: {composition_w}×{composition_h} FFmpeg · {self._preview_state}\n"
+            f"Отображение: {zoom_label} · {display_w}×{display_h} · {source_label}\n"
             f"Итоговый рендер: 1080×1920 · {render_fps} FPS · {encoder}"
         )
         proxy_resolution = (
@@ -847,6 +933,11 @@ class SubtitleEditor(QWidget):
             self.player.setPosition(start)
         self.player.play()
 
+    @Slot(object)
+    def _playback_state_changed(self, state) -> None:
+        if self.player and state != QMediaPlayer.PlayingState:
+            self._schedule_exact_preview()
+
     def _seek_relative(self, relative_ms: int) -> None:
         if not self.candidate:
             return
@@ -855,6 +946,7 @@ class SubtitleEditor(QWidget):
         if self.player:
             self.player.setPosition(round(self.candidate.start * 1000) + relative_ms)
         self._sync_preview_time(relative_ms)
+        self._schedule_exact_preview()
 
     def _step_preview(self, seconds: float) -> None:
         self._seek_relative(self._preview_position_ms + round(seconds * 1000))
@@ -871,6 +963,7 @@ class SubtitleEditor(QWidget):
         if self.player and self._resume_after_scrub:
             self.player.play()
         self._resume_after_scrub = False
+        self._schedule_exact_preview()
 
     @Slot(object)
     def _video_frame_changed(self, frame) -> None:
@@ -881,6 +974,73 @@ class SubtitleEditor(QWidget):
             self._preview_state = "Быстрый предпросмотр"
             self.preview.set_video_frame(image)
             self._update_technical_info()
+
+    def _schedule_exact_preview(self) -> None:
+        if not self.candidate or not self._ffmpeg_path or not self._source_info or not self.paths:
+            return
+        if self.player and self.player.playbackState() == QMediaPlayer.PlayingState:
+            return
+        self._exact_timer.start()
+
+    def _request_exact_preview(self) -> None:
+        if not self.candidate or not self.paths or not self._source_info or not self._ffmpeg_path:
+            return
+        if self.player and self.player.playbackState() == QMediaPlayer.PlayingState:
+            return
+        if self._exact_process and self._exact_process.state() != QProcess.NotRunning:
+            self._exact_process.kill()
+        generation = self._preview_generation_id
+        cache = Path(self.paths.cache)
+        cache.mkdir(parents=True, exist_ok=True)
+        ass = cache / f"{self.candidate.id}.exact_preview.ass"
+        cue_text = self.preview.sample.strip()
+        cues = [SubtitleCue(0.0, 1.0, cue_text)] if cue_text else []
+        settings = self.current_settings()
+        branding = self.current_branding_settings()
+        self.service.write(cues, cache / f"{self.candidate.id}.exact_preview.srt", ass, settings, branding)
+        exact_candidate = replace(self.candidate)
+        exact_candidate.subtitle_settings = settings
+        exact_candidate.layout_settings = self.vertical.value()
+        exact_candidate.branding_settings = branding
+        banner = Path(str(branding.get("channel_banner_path") or ""))
+        has_banner = bool(branding.get("show_channel_card", False)) and banner.is_file()
+        quality = self.preview_quality.currentData() or (540, 960)
+        graph = ShortsFilterGraphBuilder().build(
+            exact_candidate, self._source_info, ass.name if cues and branding.get("show_subtitles", True) else "",
+            input_clipped=True, has_channel_banner=has_banner,
+            output_size=(int(quality[0]), int(quality[1])),
+        )
+        # A still image has no audio output; discard the builder's audio branch.
+        graph = graph.rsplit(";[0:a:0]", 1)[0]
+        target = cache / f"{self.candidate.id}.exact_preview.{generation}.{quality[0]}x{quality[1]}.png"
+        target.unlink(missing_ok=True)
+        args = ["-hide_banner", "-loglevel", "error", "-y", "-ss", f"{self.candidate.start + self._preview_position_ms / 1000:.3f}", "-i", str(self._source_info.path)]
+        if has_banner:
+            args += ["-loop", "1", "-i", str(banner)]
+        args += ["-filter_complex", graph, "-map", "[v]", "-frames:v", "1", str(target)]
+        process = QProcess(self)
+        process.setWorkingDirectory(str(cache))
+        process.finished.connect(lambda code, _status, p=process, g=generation, t=target: self._exact_preview_finished(p, g, t, code))
+        self._exact_process = process
+        self._exact_target = target
+        self._exact_generation = generation
+        self._preview_state = f"Точный кадр FFmpeg: создание {quality[0]}×{quality[1]}"
+        self._update_technical_info()
+        process.start(self._ffmpeg_path, args)
+
+    def _exact_preview_finished(self, process: QProcess, generation: int, target: Path, exit_code: int) -> None:
+        if process is not self._exact_process:
+            process.deleteLater()
+            return
+        self._exact_process = None
+        if exit_code == 0 and target.is_file():
+            self.apply_exact_preview_frame(QImage(str(target)), generation)
+        else:
+            error = bytes(process.readAllStandardError()).decode("utf-8", "replace").strip()
+            logging.getLogger("creator_assistant").warning("Exact Shorts preview failed: %s", error)
+            self._preview_state = "Быстрый предпросмотр"
+            self._update_technical_info()
+        process.deleteLater()
 
     @Slot(int)
     def _player_position_changed(self, absolute_ms: int) -> None:
@@ -1216,6 +1376,7 @@ class SubtitleEditor(QWidget):
         self.outline.setValue(int(settings.get("outline", preset["outline"])))
         self.shadow.setValue(int(settings.get("shadow", preset["shadow"])))
         self.background.setChecked(bool(settings.get("background", False)))
+        self.auto_above_banner.setChecked(bool(settings.get("auto_above_banner", True)))
         self.margin.setValue(int(settings.get("safe_margin", 120)))
         self.offset.setValue(int(settings.get("vertical_offset", 0)))
         self.vertical.set_value(candidate.layout_settings or {})
@@ -1235,6 +1396,7 @@ class SubtitleEditor(QWidget):
         self._loading = False
         self._dirty = False
         self._update_preview()
+        self._schedule_exact_preview()
         self._update_technical_info()
         self._set_saved_state()
 
@@ -1299,6 +1461,8 @@ class SubtitleEditor(QWidget):
             "outline": self.outline.value(), "shadow": self.shadow.value(),
             "background": self.background.isChecked(), "safe_margin": self.margin.value(),
             "vertical_offset": self.offset.value(),
+            "auto_above_banner": self.auto_above_banner.isChecked(),
+            "banner_gap": 32,
             "minimum_size": 44,
             "cues": [{"start": cue.start, "end": cue.end, "text": cue.text} for cue in self._cues()],
         }
@@ -1390,14 +1554,22 @@ class SubtitleEditor(QWidget):
         self._clamp_offset_to_safe_area()
         self._dirty = True
         self._preview_generation_id += 1
+        self.preview.invalidate_exact_frame()
         self.dirty_label.setText("Изменено · автосохранение…")
         self.dirty_label.setStyleSheet("color: #e6b450;")
         self._update_preview()
+        self._schedule_exact_preview()
         self._save_timer.start()
 
     def _clamp_offset_to_safe_area(self) -> None:
         sample = self._cues()[0].text if self._cues() else "Пример безопасных субтитров"
-        layout = SubtitleLayoutCalculator().calculate(sample, self.current_settings())
+        branding = self.current_branding_settings()
+        banner_path = Path(str(branding.get("channel_banner_path") or ""))
+        banner_pixmap = QPixmap(str(banner_path)) if banner_path.is_file() else QPixmap()
+        banner_size = None if banner_pixmap.isNull() else (banner_pixmap.width(), banner_pixmap.height())
+        layout = OverlayLayoutCalculator().subtitle_layout(
+            sample, self.current_settings(), branding, banner_size,
+        )
         if layout.clamped_vertical_offset != self.offset.value():
             self.offset.blockSignals(True)
             self.offset_value.blockSignals(True)
@@ -1474,7 +1646,11 @@ class SubtitleEditor(QWidget):
         if not self.candidate or not self.paths:
             return
         self._apply_configuration()
-        self.service.write(self._cues(), self.paths.subtitles / f"{self.candidate.id}.srt", self.paths.subtitles / f"{self.candidate.id}.ass", self.current_settings())
+        self.service.write(
+            self._cues(), self.paths.subtitles / f"{self.candidate.id}.srt",
+            self.paths.subtitles / f"{self.candidate.id}.ass", self.current_settings(),
+            self.current_branding_settings(),
+        )
         self.saved.emit(self.candidate)
 
     def _test_render(self) -> None:
