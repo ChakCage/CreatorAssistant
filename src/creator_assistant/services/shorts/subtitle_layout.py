@@ -12,6 +12,20 @@ FRAME_WIDTH = 1080
 FRAME_HEIGHT = 1920
 MAX_TEXT_WIDTH = round(FRAME_WIDTH * 0.82)
 MIN_FONT_SIZE = 44
+# libass interprets ASS Fontsize in typographic points while Qt's pixelSize is
+# expressed in device pixels.  At the 96-DPI logical render surface used by
+# the application the equivalent Qt glyph size is 72/96 of the ASS value.
+ASS_FONT_TO_QT_PIXEL_SCALE = 0.75
+
+
+def ass_qt_font_stretch(size: int) -> int:
+    """Compensate the remaining libass/DirectWrite raster width difference."""
+    return 101 if int(size) >= 75 else 100
+
+
+def ass_qt_bearing_offset(size: int) -> int:
+    """Match libass' Segoe UI left side-bearing at the 80px preset."""
+    return 2 if 75 <= int(size) < 90 else 0
 POSITION_Y = {"upper": 420, "center": 930, "lower": 1485}
 STYLE_PRESETS = {
     "clean": {
@@ -90,8 +104,13 @@ def resolved_style(settings: dict) -> dict:
 def font_metrics(font_name: str, size: int, weight: int = 700):
     if QGuiApplication.instance() is None:
         return _ApproximateFontMetrics(size)
-    font = resolved_qfont(font_name, bold=weight >= 600, pixel_size=size)
+    font = resolved_qfont(
+        font_name,
+        bold=weight >= 600,
+        pixel_size=max(1.0, size * ASS_FONT_TO_QT_PIXEL_SCALE),
+    )
     font.setWeight(QFont.Weight(max(100, min(900, int(weight)))))
+    font.setStretch(ass_qt_font_stretch(size))
     return QFontMetricsF(font)
 
 
@@ -214,7 +233,11 @@ class SubtitleLayoutCalculator:
             reserved_y = y - height // 2 + reserved_height // 2
         top = y - height // 2
         ascent = round(metrics.ascent()) if hasattr(metrics, "ascent") else round(size * 0.93)
-        first_line_baseline = top + int(style["outline"]) + int(style["shadow"]) + 5 + ascent
+        decoration_inset = int(style["outline"]) + int(style["shadow"]) + 5
+        # libass reserves its border/shadow inset below the anchored glyph box.
+        # Applying the same inset on both sides aligns the Qt path baseline with
+        # the ASS raster while keeping the logical two-row slot unchanged.
+        first_line_baseline = top + 2 * decoration_inset + ascent
         second_line_baseline = first_line_baseline + line_height
         applied_gap = max(0, max_bottom - (top + height)) if "maximum_bottom" in settings else 0
         return SubtitleLayout(

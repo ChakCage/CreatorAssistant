@@ -69,7 +69,15 @@ def fit_cues(cues: Iterable[SubtitleCue], settings: dict) -> tuple[list[Subtitle
     result: list[SubtitleCue] = []
     max_lines = min(2, int(settings.get("lines", 2)))
     for cue in cues:
-        pages = pixel_pages(cue.text, style["font"], size, style["outline"], max_lines, max_width, int(style.get("weight", 700)))
+        metrics = font_metrics(style["font"], size, int(style.get("weight", 700)))
+        explicit_lines = [line.strip() for line in cue.text.splitlines() if line.strip()]
+        if (
+            1 < len(explicit_lines) <= max_lines
+            and all(metrics.horizontalAdvance(line) <= available for line in explicit_lines)
+        ):
+            pages = ["\n".join(explicit_lines)]
+        else:
+            pages = pixel_pages(cue.text, style["font"], size, style["outline"], max_lines, max_width, int(style.get("weight", 700)))
         if not pages:
             continue
         duration = max(0.01, cue.end - cue.start)

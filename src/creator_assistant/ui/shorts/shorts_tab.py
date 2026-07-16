@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import hashlib
 from dataclasses import asdict, replace
@@ -62,6 +63,24 @@ class _ProbeWorker(QObject):
     def run(self) -> None:
         try:
             self.finished.emit(self.service.probe(self.path))
+        except Exception as exc:
+            self.failed.emit(str(exc), repr(exc))
+
+
+class _ConfigurationSaveWorker(QObject):
+    finished = Signal()
+    failed = Signal(str, str)
+
+    def __init__(self, service: CandidateReviewService, candidates) -> None:
+        super().__init__()
+        self.service = service
+        self.candidates = candidates
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.service.save(self.candidates)
+            self.finished.emit()
         except Exception as exc:
             self.failed.emit(str(exc), repr(exc))
 
@@ -400,6 +419,8 @@ class ShortsTab(QWidget):
         self.transcript = None
         self._pending_root: Optional[Path] = None
         self._thread: Optional[QThread] = None
+        self._configuration_save_thread: Optional[QThread] = None
+        self._configuration_save_pending = False
         self._token: Optional[CancellationToken] = None
         self._build_ui()
 
@@ -764,11 +785,46 @@ class ShortsTab(QWidget):
     def _subtitle_configuration_changed(self, candidate) -> None:
         if not self.review_service:
             return
-        try:
-            self.review_service.save(self.candidates)
+        if self._configuration_save_thread and self._configuration_save_thread.isRunning():
+            self._configuration_save_pending = True
+            return
+        self._start_configuration_save()
+
+    def _start_configuration_save(self) -> None:
+        if not self.review_service:
+            return
+        self._configuration_save_pending = False
+        thread = QThread(self)
+        worker = _ConfigurationSaveWorker(self.review_service, deepcopy(self.candidates))
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(self._configuration_save_succeeded)
+        worker.failed.connect(self._configuration_save_failed)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(lambda t=thread: self._configuration_save_thread_finished(t))
+        self._configuration_save_thread = thread
+        thread.start()
+
+    @Slot()
+    def _configuration_save_succeeded(self) -> None:
+        if not self._configuration_save_pending:
             self.subtitle_editor.mark_saved()
-        except Exception as exc:
-            ErrorDialog(str(exc), repr(exc), self).exec()
+
+    @Slot(str, str)
+    def _configuration_save_failed(self, message: str, details: str) -> None:
+        ErrorDialog(message, details, self).exec()
+
+    def _configuration_save_thread_finished(self, thread: QThread) -> None:
+        if thread is not self._configuration_save_thread:
+            thread.deleteLater()
+            return
+        self._configuration_save_thread = None
+        thread.deleteLater()
+        if self._configuration_save_pending:
+            self._start_configuration_save()
 
     def _apply_subtitle_defaults(self, candidate) -> None:
         defaults = self.container.settings.get("shorts_subtitle_defaults", {})

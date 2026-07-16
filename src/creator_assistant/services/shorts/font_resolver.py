@@ -65,7 +65,7 @@ def drawtext_font_option(family: str | None, bold: bool = True) -> str:
     return f"font='{_escape_drawtext_value(info.family)}'"
 
 
-def resolved_qfont(family: str | None, *, bold: bool = True, pixel_size: int | None = None):
+def resolved_qfont(family: str | None, *, bold: bool = True, pixel_size: float | None = None):
     """Build a Qt font from the same concrete file used by FFmpeg drawtext."""
     from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
 
@@ -84,7 +84,14 @@ def resolved_qfont(family: str | None, *, bold: bool = True, pixel_size: int | N
     font = QFont(selected_family)
     font.setBold(bool(bold))
     if pixel_size is not None:
-        font.setPixelSize(max(1, int(pixel_size)))
+        logical_pixels = max(1.0, float(pixel_size))
+        if logical_pixels.is_integer():
+            font.setPixelSize(int(logical_pixels))
+        else:
+            # QFont only accepts integral pixel sizes.  A fractional point size
+            # preserves the half-pixel ASS sizes (for example 58 * 0.75 = 43.5)
+            # at Qt's 96-DPI logical composition surface.
+            font.setPointSizeF(logical_pixels * 72.0 / 96.0)
     return font
 
 

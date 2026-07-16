@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QEvent, QPoint, QProcess, QSettings, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QBrush, QFont, QFontDatabase, QFontMetricsF, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QHeaderView, QLabel, QListWidget, QGridLayout, QLineEdit, QMessageBox, QPushButton,
@@ -29,7 +29,12 @@ from creator_assistant.services.shorts.text_alignment import HorizontalTextAlign
 from creator_assistant.services.shorts.title_service import ShortTitleService
 from creator_assistant.services.shorts.semantic_backend import OllamaSemanticScorer
 from creator_assistant.domain.job import CancellationToken
-from creator_assistant.services.shorts.subtitle_layout import SubtitleLayoutCalculator
+from creator_assistant.services.shorts.subtitle_layout import (
+    ASS_FONT_TO_QT_PIXEL_SCALE,
+    SubtitleLayoutCalculator,
+    ass_qt_bearing_offset,
+    ass_qt_font_stretch,
+)
 from creator_assistant.services.shorts.subtitle_service import (
     STYLE_PRESETS, SubtitleService, resolved_style,
 )
@@ -80,6 +85,8 @@ class VerticalFramePreview(QWidget):
         self.branding_settings: dict = {}
         self.video_frame = QImage()
         self.exact_frame = QImage()
+        self._blur_background = QPixmap()
+        self._blur_source_key: object | None = None
         self.sample = "Длинный пример субтитров безопасно помещается в кадре"
 
     def set_preview(self, candidate, settings: dict, layout_settings: dict, sample: str | None = None, branding_settings: dict | None = None) -> None:
@@ -88,13 +95,15 @@ class VerticalFramePreview(QWidget):
         self.layout_settings = dict(layout_settings)
         self.branding_settings = dict(branding_settings or {})
         if sample is not None:
-            self.sample = sample.replace("\n", " ").strip()
+            self.sample = sample.strip()
         self._last_mode = self.layout_settings.get("mode", "center_crop")
         self.update()
 
     def set_video_frame(self, image: QImage, *, preserve_exact: bool = False) -> None:
         if image and not image.isNull():
             self.video_frame = image.copy()
+            self._blur_background = QPixmap()
+            self._blur_source_key = None
             if not preserve_exact:
                 self.exact_frame = QImage()
             self.update()
@@ -106,6 +115,7 @@ class VerticalFramePreview(QWidget):
 
     def invalidate_exact_frame(self) -> None:
         self.exact_frame = QImage()
+        self.update()
 
     def effective_preview_size(self) -> tuple[int, int]:
         scale = min(self.width() / 1080, self.height() / 1920)
@@ -158,16 +168,22 @@ class VerticalFramePreview(QWidget):
         elif self.layout_settings.get("mode", "center_crop") in {"blur_background", "solid_color"}:
             mode = self.layout_settings.get("mode")
             if mode == "blur_background":
-                expanded = pixmap.scaled(270, 480, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-                crop_x = round(max(0, expanded.width() - 270) / 2)
-                crop_y = round(max(0, expanded.height() - 480) / 2)
-                background = expanded.copy(crop_x, crop_y, 270, 480)
-                # A cheap but genuine realtime blur: aggressively reduce the
-                # background before smooth upscaling, matching the optimized
-                # low-resolution background branch of the final FFmpeg graph.
-                background = background.scaled(45, 80, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-                background = background.scaled(270, 480, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-                painter.drawPixmap(frame, background, background.rect())
+                source_key = (
+                    int(self.video_frame.cacheKey()) if not self.video_frame.isNull()
+                    else str(getattr(self.candidate, "thumbnail", ""))
+                )
+                if self._blur_background.isNull() or source_key != self._blur_source_key:
+                    expanded = pixmap.scaled(270, 480, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                    crop_x = round(max(0, expanded.width() - 270) / 2)
+                    crop_y = round(max(0, expanded.height() - 480) / 2)
+                    background = expanded.copy(crop_x, crop_y, 270, 480)
+                    # A cheap but genuine realtime blur: aggressively reduce the
+                    # background before smooth upscaling, matching the optimized
+                    # low-resolution background branch of the final FFmpeg graph.
+                    background = background.scaled(45, 80, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                    self._blur_background = background.scaled(270, 480, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                    self._blur_source_key = source_key
+                painter.drawPixmap(frame, self._blur_background, self._blur_background.rect())
             else:
                 painter.fillRect(frame, QColor(str(self.layout_settings.get("background_color", "black"))))
             factor = int(self.layout_settings.get("foreground_scale", 100)) / 100
@@ -205,38 +221,46 @@ class VerticalFramePreview(QWidget):
         layout = OverlayLayoutCalculator().subtitle_layout(
             self.sample, self.settings, self.branding_settings, banner_size,
         )
-        font = resolved_qfont(layout.font_name, bold=True, pixel_size=max(8, round(layout.font_size * scale)))
-        font.setWeight(QFont.Weight.Bold)
-        painter.setFont(font)
-        if layout.alignment is HorizontalTextAlignment.LEFT:
-            box_left = layout.x
-            text_flag = Qt.AlignLeft
-        elif layout.alignment is HorizontalTextAlignment.RIGHT:
-            box_left = layout.x - layout.width
-            text_flag = Qt.AlignRight
-        else:
-            box_left = layout.x - layout.width / 2
-            text_flag = Qt.AlignCenter
-        box = QRectF(
-            left + box_left * scale,
-            top + (layout.y - layout.height / 2) * scale,
-            layout.width * scale,
-            layout.height * scale,
+        style = resolved_style(self.settings)
+        font = resolved_qfont(
+            layout.font_name,
+            bold=int(style.get("weight", 700)) >= 600,
+            pixel_size=max(1.0, layout.font_size * ASS_FONT_TO_QT_PIXEL_SCALE),
         )
-        flags = text_flag | Qt.AlignVCenter | Qt.TextWordWrap
+        font.setWeight(QFont.Weight(max(100, min(900, int(style.get("weight", 700))))))
+        font.setStretch(ass_qt_font_stretch(layout.font_size))
+        metrics = QFontMetricsF(font)
+        box_left = layout.x if layout.alignment is HorizontalTextAlignment.LEFT else (
+            layout.x - layout.width if layout.alignment is HorizontalTextAlignment.RIGHT else layout.x - layout.width / 2
+        )
+        logical_box = QRectF(box_left, layout.y - layout.height / 2, layout.width, layout.height)
+        painter.save()
+        painter.scale(scale, scale)
         if layout.background:
-            painter.fillRect(box, QColor(0, 0, 0, 130))
+            painter.fillRect(logical_box, QColor(0, 0, 0, 130))
+        text_path = QPainterPath()
+        baselines = (layout.first_line_baseline, layout.second_line_baseline)
+        for index, line in enumerate(layout.lines):
+            line_width = metrics.horizontalAdvance(line)
+            if layout.alignment is HorizontalTextAlignment.LEFT:
+                line_x = layout.x
+            elif layout.alignment is HorizontalTextAlignment.RIGHT:
+                line_x = layout.x - line_width
+            else:
+                line_x = layout.x - line_width / 2
+            line_x += ass_qt_bearing_offset(layout.font_size)
+            text_path.addText(line_x, baselines[min(index, 1)], font, line)
         if layout.shadow:
-            offset = max(1, round(layout.shadow * 2 * scale))
-            painter.setPen(QColor(0, 0, 0, 170))
-            painter.drawText(box.translated(offset, offset), flags, layout.text)
-        radius = max(1, round(layout.outline * scale))
-        painter.setPen(QColor("#000000"))
-        for dx, dy in ((-radius, 0), (radius, 0), (0, -radius), (0, radius), (-radius, -radius), (-radius, radius), (radius, -radius), (radius, radius)):
-            painter.drawText(box.translated(dx, dy), flags, layout.text)
+            shadow = text_path.translated(layout.shadow, layout.shadow)
+            painter.fillPath(shadow, QBrush(QColor(0, 0, 0, 190)))
+        if layout.outline:
+            outline_pen = QPen(QColor("#000000"))
+            outline_pen.setWidthF(layout.outline * 2)
+            outline_pen.setJoinStyle(Qt.RoundJoin)
+            painter.strokePath(text_path, outline_pen)
         color = QColor("#ffd700") if str(self.settings.get("style", "clean")) == "gaming" else QColor("#ffffff")
-        painter.setPen(color)
-        painter.drawText(box, flags, layout.text)
+        painter.fillPath(text_path, QBrush(color))
+        painter.restore()
         painter.setPen(QColor(255, 255, 255, 70))
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(QRectF(left + 90 * scale, top + 120 * scale, 900 * scale, 1560 * scale))
@@ -277,47 +301,56 @@ class VerticalFramePreview(QWidget):
                 font = resolved_qfont(
                     self._title_font_family(),
                     bold=bool(self.branding_settings.get("title_bold", True)),
-                    pixel_size=max(8, round(effective_size * scale)),
-                )
-                painter.setFont(font)
-                offset_x = max(-300, min(300, int(self.branding_settings.get("title_offset_x", 0) or 0)))
-                alignment = HorizontalTextAlignment.parse(self.branding_settings.get("title_alignment", "center"))
-                measure_font = resolved_qfont(
-                    self._title_font_family(),
-                    bold=bool(self.branding_settings.get("title_bold", True)),
                     pixel_size=effective_size,
                 )
-                metrics = QFontMetricsF(measure_font)
+                offset_x = max(-300, min(300, int(self.branding_settings.get("title_offset_x", 0) or 0)))
+                alignment = HorizontalTextAlignment.parse(self.branding_settings.get("title_alignment", "center"))
+                metrics = QFontMetricsF(font)
                 base_y = int(self.branding_settings.get("title_y", 180))
+                painter.save()
+                painter.scale(scale, scale)
                 for line_index, line in enumerate(title.splitlines() or [title]):
                     line_width = min(900.0, metrics.horizontalAdvance(line) + 4)
                     line_left = aligned_left(line_width, alignment, offset_x)
-                    box = QRectF(
-                        left + line_left * scale,
-                        top + (base_y + line_index * (effective_size + 8)) * scale,
-                        line_width * scale,
-                        (effective_size + 8) * scale,
-                    )
-                    flags = Qt.AlignLeft | Qt.AlignTop
+                    line_top = base_y + line_index * (effective_size + 8)
+                    box = QRectF(line_left, line_top, line_width, effective_size + 8)
                     if bool(self.branding_settings.get("title_background", False)):
-                        painter.fillRect(box.adjusted(-18 * scale, -10 * scale, 18 * scale, 10 * scale), QColor(0, 0, 0, 135))
-                    shadow = max(0, round(int(self.branding_settings.get("title_shadow", 2)) * scale))
+                        painter.fillRect(box.adjusted(-18, -10, 18, 10), QColor(0, 0, 0, 135))
+                    raw_path = QPainterPath()
+                    raw_path.addText(0, 0, font, line)
+                    # FFmpeg drawtext's y denotes the top of the visible glyph
+                    # raster.  Position the Qt outline by its real ink bounds,
+                    # not by QFontMetrics.ascent(), which leaves a size-dependent
+                    # 9-15 px gap above Segoe UI capitals.
+                    # DirectWrite's Segoe UI left bearing is two logical pixels
+                    # left of FFmpeg drawtext's FreeType raster at this canvas.
+                    path = raw_path.translated(line_left + 2, line_top - raw_path.boundingRect().top())
+                    shadow = max(0, int(self.branding_settings.get("title_shadow", 2)))
                     if shadow:
-                        painter.setPen(QColor(0, 0, 0, 190))
-                        painter.drawText(box.translated(shadow, shadow), flags, line)
-                    outline = max(0, round(int(self.branding_settings.get("title_outline", 4)) * scale))
-                    for dx, dy in ((-outline, 0), (outline, 0), (0, -outline), (0, outline), (-outline, -outline), (outline, outline)):
-                        if outline:
-                            painter.setPen(QColor("#000000"))
-                            painter.drawText(box.translated(dx, dy), flags, line)
-                    painter.setPen(QColor(str(self.branding_settings.get("title_color", "#ffffff"))))
-                    painter.drawText(box, flags, line)
+                        painter.fillPath(path.translated(shadow, shadow), QBrush(QColor(0, 0, 0, 190)))
+                    outline = max(0, int(self.branding_settings.get("title_outline", 4)))
+                    if outline:
+                        pen = QPen(QColor("#000000"))
+                        pen.setWidthF(outline * 2)
+                        pen.setJoinStyle(Qt.RoundJoin)
+                        painter.strokePath(path, pen)
+                    painter.fillPath(path, QBrush(QColor(str(self.branding_settings.get("title_color", "#ffffff")))))
+                painter.restore()
 
     def _title_font_family(self) -> str:
         if bool(self.branding_settings.get("use_subtitle_font_for_title", True)):
             style = resolved_style(self.settings)
             return str(style.get("font") or DEFAULT_FONT_FAMILY)
         return str(self.branding_settings.get("title_font_family") or DEFAULT_FONT_FAMILY)
+
+
+class RealtimeCompositionRenderer(VerticalFramePreview):
+    """Local interactive compositor that never invokes FFmpeg.
+
+    All overlay geometry is calculated in the final 1080x1920 coordinate
+    system by ``OverlayLayoutCalculator``.  The completed composition is then
+    scaled to the selected preview resolution and viewport.
+    """
 
 
 class PreviewViewport(QScrollArea):
@@ -395,10 +428,6 @@ class SubtitleEditor(QWidget):
         self._exact_process: QProcess | None = None
         self._exact_target: Path | None = None
         self._exact_generation = -1
-        self._exact_timer = QTimer(self)
-        self._exact_timer.setSingleShot(True)
-        self._exact_timer.setInterval(220)
-        self._exact_timer.timeout.connect(self._request_exact_preview)
         self._preview_state = "Быстрый предпросмотр"
         self._resume_after_scrub = False
         layout = QVBoxLayout(self)
@@ -576,7 +605,7 @@ class SubtitleEditor(QWidget):
         style_form.addRow(self.auto_above_banner)
         style_form.addRow("Положение при разном числе строк", self.line_anchor_mode)
         style_form.addRow("Расстояние до баннера", self.banner_gap)
-        self.preview = VerticalFramePreview()
+        self.preview = RealtimeCompositionRenderer()
         self.preview_quality = QComboBox()
         for label, size, hint in (
             ("Быстрое 360×640", (360, 640), "Для плавного воспроизведения"),
@@ -598,7 +627,9 @@ class SubtitleEditor(QWidget):
         self.preview_fit = QPushButton("Вписать в окно")
         self.preview_100 = QPushButton("100%")
         self.preview_detail = QPushButton("Проверить качество")
-        self.preview_detail.setToolTip("Показать реальные пиксели композиции 1:1; область можно перемещать мышью")
+        self.preview_detail.setToolTip("Асинхронно создать точный FFmpeg-кадр через pipeline финального render")
+        self.preview_interactive = QPushButton("Вернуться к интерактивному предпросмотру")
+        self.preview_interactive.setVisible(False)
         self.preview_scroll = PreviewViewport()
         self.preview_scroll.setWidget(self.preview)
         self.preview_scroll.resized.connect(self._apply_preview_zoom)
@@ -607,6 +638,7 @@ class SubtitleEditor(QWidget):
         preview_layout = QVBoxLayout(preview_panel)
         preview_layout.addWidget(self._row(QLabel("Качество композиции"), self.preview_quality))
         preview_layout.addWidget(self._row(QLabel("Масштаб просмотра"), self.preview_zoom, self.preview_fit, self.preview_100, self.preview_detail))
+        preview_layout.addWidget(self.preview_interactive)
         preview_layout.addWidget(self.preview_scroll, 1)
         self.player = None
         self.audio = None
@@ -718,7 +750,8 @@ class SubtitleEditor(QWidget):
         self.preview_zoom.currentIndexChanged.connect(self._preview_zoom_changed)
         self.preview_fit.clicked.connect(lambda: self.preview_zoom.setCurrentIndex(self.preview_zoom.findData("fit")))
         self.preview_100.clicked.connect(lambda: self.preview_zoom.setCurrentIndex(self.preview_zoom.findData(100)))
-        self.preview_detail.clicked.connect(lambda: self.preview_zoom.setCurrentIndex(self.preview_zoom.findData(100)))
+        self.preview_detail.clicked.connect(self._check_quality)
+        self.preview_interactive.clicked.connect(self._return_to_interactive_preview)
         self._restore_preview_zoom()
         self.title_text.textEdited.connect(self._mark_dirty)
         self.background.toggled.connect(self._mark_dirty)
@@ -764,7 +797,7 @@ class SubtitleEditor(QWidget):
         settings.setValue("shorts/vertical_editor/preview_quality", f"{int(size[0])}x{int(size[1])}")
         self._preview_generation_id += 1
         self._sync_preview_time(self._preview_position_ms)
-        self._schedule_exact_preview()
+        self._mark_exact_stale()
 
     def _apply_preview_quality(self) -> None:
         size = self.preview_quality.currentData() if hasattr(self, "preview_quality") else (540, 960)
@@ -852,6 +885,7 @@ class SubtitleEditor(QWidget):
 
     def _refresh_current_preview(self) -> None:
         self._preview_generation_id += 1
+        self._mark_exact_stale()
         if self.player and self.candidate:
             self.player.setPosition(round(self.candidate.start * 1000) + self._preview_position_ms)
         self._sync_preview_time(self._preview_position_ms)
@@ -862,6 +896,7 @@ class SubtitleEditor(QWidget):
             return False
         self._preview_state = "Точный кадр FFmpeg"
         self.preview.set_exact_frame(image)
+        self.preview_interactive.setVisible(True)
         self._update_technical_info()
         return True
 
@@ -957,9 +992,7 @@ class SubtitleEditor(QWidget):
         if not self.player:
             return
         if state == QMediaPlayer.PlayingState:
-            self.preview.invalidate_exact_frame()
-        else:
-            self._schedule_exact_preview()
+            self._return_to_interactive_preview()
 
     def _seek_relative(self, relative_ms: int) -> None:
         if not self.candidate:
@@ -969,7 +1002,7 @@ class SubtitleEditor(QWidget):
         if self.player:
             self.player.setPosition(round(self.candidate.start * 1000) + relative_ms)
         self._sync_preview_time(relative_ms)
-        self._schedule_exact_preview()
+        self._mark_exact_stale()
 
     def _step_preview(self, seconds: float) -> None:
         self._seek_relative(self._preview_position_ms + round(seconds * 1000))
@@ -986,7 +1019,6 @@ class SubtitleEditor(QWidget):
         if self.player and self._resume_after_scrub:
             self.player.play()
         self._resume_after_scrub = False
-        self._schedule_exact_preview()
 
     @Slot(object)
     def _video_frame_changed(self, frame) -> None:
@@ -1001,11 +1033,29 @@ class SubtitleEditor(QWidget):
             self._update_technical_info()
 
     def _schedule_exact_preview(self) -> None:
-        if not self.candidate or not self._ffmpeg_path or not self._source_info or not self.paths:
-            return
+        # Kept as a compatibility hook: exact FFmpeg preview is explicit-only.
+        return
+
+    def _check_quality(self) -> None:
         if self.player and self.player.playbackState() == QMediaPlayer.PlayingState:
-            return
-        self._exact_timer.start()
+            self.player.pause()
+        self._request_exact_preview()
+
+    def _return_to_interactive_preview(self) -> None:
+        self.preview.invalidate_exact_frame()
+        self.preview_interactive.setVisible(False)
+        self._preview_state = "Интерактивный предпросмотр"
+        self._update_preview()
+        self._update_technical_info()
+
+    def _mark_exact_stale(self) -> None:
+        had_exact = not self.preview.exact_frame.isNull()
+        self.preview.invalidate_exact_frame()
+        self.preview_interactive.setVisible(False)
+        self._preview_state = (
+            "Композиция изменена — точный кадр требует обновления"
+            if had_exact else "Интерактивный предпросмотр"
+        )
 
     def _request_exact_preview(self) -> None:
         if not self.candidate or not self.paths or not self._source_info or not self._ffmpeg_path:
@@ -1050,6 +1100,7 @@ class SubtitleEditor(QWidget):
         self._exact_target = target
         self._exact_generation = generation
         self._preview_state = f"Точный кадр FFmpeg: создание {quality[0]}×{quality[1]}"
+        self.preview_detail.setEnabled(False)
         self._update_technical_info()
         process.start(self._ffmpeg_path, args)
 
@@ -1058,6 +1109,7 @@ class SubtitleEditor(QWidget):
             process.deleteLater()
             return
         self._exact_process = None
+        self.preview_detail.setEnabled(True)
         if exit_code == 0 and target.is_file():
             self.apply_exact_preview_frame(QImage(str(target)), generation)
         else:
@@ -1425,7 +1477,7 @@ class SubtitleEditor(QWidget):
         self._loading = False
         self._dirty = False
         self._update_preview()
-        self._schedule_exact_preview()
+        self._mark_exact_stale()
         self._update_technical_info()
         self._set_saved_state()
 
@@ -1584,10 +1636,10 @@ class SubtitleEditor(QWidget):
         self._clamp_offset_to_safe_area()
         self._dirty = True
         self._preview_generation_id += 1
+        self._mark_exact_stale()
         self.dirty_label.setText("Изменено · автосохранение…")
         self.dirty_label.setStyleSheet("color: #e6b450;")
         self._update_preview()
-        self._schedule_exact_preview()
         self._save_timer.start()
 
     def _clamp_offset_to_safe_area(self) -> None:

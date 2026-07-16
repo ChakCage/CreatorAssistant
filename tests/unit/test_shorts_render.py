@@ -149,7 +149,7 @@ def test_two_line_subtitle_is_automatically_kept_above_banner():
     assert layout.y + layout.height // 2 + 32 <= banner.y
 
 
-def test_manual_overlap_keeps_subtitles_above_banner_by_layer_only():
+def test_manual_overlap_keeps_subtitles_no_higher_than_automatic_layout():
     calculator = OverlayLayoutCalculator()
     branding = {"show_channel_card": True, "banner_scale": 100, "safe_margin": 80}
     automatic = calculator.subtitle_layout(
@@ -160,7 +160,37 @@ def test_manual_overlap_keeps_subtitles_above_banner_by_layer_only():
         "Я сделал платформу из\nкамня, а",
         {"position": "lower", "auto_above_banner": False}, branding, (2048, 682),
     )
-    assert automatic.y < manual.y
+    assert automatic.y <= manual.y
+
+
+@pytest.mark.parametrize("style", ["clean", "large"])
+@pytest.mark.parametrize("size", [58, 65, 80, 100])
+def test_ass_and_interactive_layout_keep_identical_explicit_wrapping(tmp_path, style, size):
+    text = "Теперь я буду целый час\nубивать"
+    settings = {
+        "style": style,
+        "font_family": "Segoe UI",
+        "size": size,
+        "lines": 2,
+        "position": "lower",
+        "line_anchor_mode": "first_line_fixed",
+    }
+    layout = SubtitleLayoutCalculator().calculate(text, settings)
+    ass = tmp_path / f"{style}_{size}.ass"
+    SubtitleService().write([SubtitleCue(0, 1, text)], tmp_path / "out.srt", ass, settings)
+    payload = ass.read_text(encoding="utf-8-sig")
+    assert len(layout.lines) == 2
+    assert r"\N".join(layout.lines) in payload
+    assert "PlayResX: 1080" in payload and "PlayResY: 1920" in payload
+    assert f"Style: Shorts,Segoe UI,{size}," in payload
+
+
+def test_segoe_ui_resolves_to_concrete_bold_file_without_fallback():
+    font = resolve_font("Segoe UI")
+    assert font.ass_font_name == "Segoe UI"
+    assert not font.fallback
+    assert font.file_for_weight(True) is not None
+    assert font.file_for_weight(True).is_file()
 
 
 def test_first_line_fixed_keeps_same_baseline_for_one_and_two_lines():

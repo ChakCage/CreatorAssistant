@@ -419,7 +419,7 @@ def test_realtime_blur_uses_reduced_background_branch():
     assert "background.scaled(270, 480" in text
 
 
-def test_dirty_overlay_change_keeps_last_exact_frame_visible(tmp_path):
+def test_dirty_overlay_change_returns_immediately_to_interactive_preview(tmp_path):
     qt_app = app()
     candidate = Candidate("short_001", 10, 20, 90, "one")
     editor = SubtitleEditor()
@@ -429,7 +429,8 @@ def test_dirty_overlay_change_keeps_last_exact_frame_visible(tmp_path):
     editor.apply_exact_preview_frame(exact, editor._preview_generation_id)
     editor.offset.setValue(10)
     qt_app.processEvents()
-    assert not editor.preview.exact_frame.isNull()
+    assert editor.preview.exact_frame.isNull()
+    assert "требует обновления" in editor._preview_state
     assert editor._preview_generation_id > 0
 
 
@@ -445,6 +446,22 @@ def test_paused_proxy_frame_does_not_replace_exact_double_buffer():
     assert not editor.preview.exact_frame.isNull()
     assert editor.preview.exact_frame.pixelColor(1, 1) == QColor("green")
     assert qt_app is QApplication.instance()
+
+
+def test_ordinary_editing_never_requests_ffmpeg_but_quality_button_does(tmp_path, monkeypatch):
+    qt_app = app()
+    candidate = Candidate("short_001", 10, 20, 90, "one", layout_settings={"mode": "blur_background"})
+    editor = SubtitleEditor()
+    editor.set_context(candidate, transcript(), SimpleNamespace(subtitles=tmp_path, cache=tmp_path))
+    calls = []
+    monkeypatch.setattr(editor, "_request_exact_preview", lambda: calls.append("ffmpeg"))
+    editor.offset.setValue(20)
+    editor.size.setValue(65)
+    editor.vertical.foreground.setValue(150)
+    qt_app.processEvents()
+    assert calls == []
+    QTest.mouseClick(editor.preview_detail, Qt.LeftButton)
+    assert calls == ["ffmpeg"]
 
 
 def test_line_anchor_and_banner_gap_persist_in_candidate(tmp_path):
