@@ -77,30 +77,36 @@ class ChannelAssetStore:
         aliases: list[str] | None = None,
     ) -> ChannelProfile | None:
         profiles = [item for item in self.profiles() if item.enabled]
+        if channel_id:
+            key = channel_id.casefold()
+            matches = [item for item in profiles if key in {cid.casefold() for cid in item.channel_ids} and self.banner_path(item)]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                return None
         if saved_profile_id:
             saved = next((item for item in profiles if item.id.casefold() == saved_profile_id.casefold()), None)
             if saved and self.banner_path(saved):
                 return saved
-        if channel_id:
-            key = channel_id.casefold()
-            exact = next((item for item in profiles if key in {cid.casefold() for cid in item.channel_ids}), None)
-            if exact and self.banner_path(exact):
-                return exact
         if source_author:
             key = source_author.casefold()
-            exact_author = next((item for item in profiles if item.source_author.casefold() == key), None)
-            if exact_author and self.banner_path(exact_author):
-                return exact_author
+            exact_authors = [item for item in profiles if item.source_author.casefold() == key and self.banner_path(item)]
+            if len(exact_authors) == 1:
+                return exact_authors[0]
+            if len(exact_authors) > 1:
+                return None
         for value in aliases or []:
             key = str(value).casefold()
-            match = next((item for item in profiles if key in item.searchable), None)
-            if match and self.banner_path(match):
-                return match
+            matches = [item for item in profiles if key in item.searchable and self.banner_path(item)]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                return None
         if source_author:
             key = source_author.casefold()
-            match = next((item for item in profiles if key in item.searchable), None)
-            if match and self.banner_path(match):
-                return match
+            matches = [item for item in profiles if key in item.searchable and self.banner_path(item)]
+            if len(matches) == 1:
+                return matches[0]
         return None
 
     def import_banner(self, profile_id: str, source: Path, metadata: dict[str, Any] | None = None) -> ChannelProfile:
