@@ -16,6 +16,7 @@ from creator_assistant.services.shorts.subtitle_layout import (
     pixel_pages,
     resolved_style,
 )
+from creator_assistant.services.shorts.text_alignment import HorizontalTextAlignment, ass_anchor
 from creator_assistant.services.shorts.transcription_service import srt_timestamp
 
 
@@ -98,8 +99,8 @@ class SubtitleService:
             srt_lines.extend([str(index), f"{srt_timestamp(cue.start)} --> {srt_timestamp(cue.end)}", cue.text, ""])
         srt_path.write_text("\n".join(srt_lines), encoding="utf-8")
 
-        layout = SubtitleLayoutCalculator().calculate(cues[0].text if cues else "", {**settings, "size": style["size"]})
-        y = layout.y
+        alignment = HorizontalTextAlignment.parse(settings.get("alignment", "center"))
+        anchor = ass_anchor(str(settings.get("position", "lower")), alignment)
         back = "&H80000000" if settings.get("background", False) else "&H00000000"
         border_style = 3 if settings.get("background", False) else 1
         side_margin = max(80, int(settings.get("safe_margin", 90)), round((FRAME_WIDTH - MAX_TEXT_WIDTH) / 2) + style["outline"])
@@ -108,15 +109,22 @@ class SubtitleService:
             "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
             "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
             f"Style: Shorts,{style['font']},{style['size']},{style['primary']},{style['secondary']},&H00000000,{back},"
-            f"-1,0,0,0,100,100,{style['spacing']},0,{border_style},{style['outline']},{style['shadow']},5,{side_margin},{side_margin},0,1\n\n"
+            f"-1,0,0,0,100,100,{style['spacing']},0,{border_style},{style['outline']},{style['shadow']},{anchor},{side_margin},{side_margin},0,1\n\n"
             "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
         )
         events = []
         for cue in cues:
             text = cue.text.replace("{", "(").replace("}", ")").replace("\n", r"\N")
+            cue_layout = SubtitleLayoutCalculator().calculate(cue.text, {**settings, "size": style["size"]})
+            y = cue_layout.y
+            position = str(settings.get("position", "lower"))
+            if position == "lower":
+                y += cue_layout.height // 2
+            elif position == "upper":
+                y -= cue_layout.height // 2
             events.append(
                 f"Dialogue: 0,{ass_timestamp(cue.start)},{ass_timestamp(cue.end)},Shorts,,0,0,0,,"
-                f"{{\\an5\\pos(540,{y})}}{text}"
+                f"{{\\an{anchor}\\pos({cue_layout.x},{y})}}{text}"
             )
         ass_path.write_text(header + "\n".join(events) + "\n", encoding="utf-8-sig")
 

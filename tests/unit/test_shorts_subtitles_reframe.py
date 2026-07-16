@@ -71,7 +71,7 @@ def test_ass_presets_are_visibly_different_and_lower_third_is_safe(tmp_path):
     assert "Shorts,Segoe UI,58" in outputs["clean"]
     assert "Shorts,Segoe UI,80" in outputs["large"]
     assert "Shorts,Arial Black,70" in outputs["gaming"]
-    assert r"\pos(540,1485)" in outputs["clean"]
+    assert r"\an2\pos(540," in outputs["clean"]
 
 
 def test_long_russian_text_is_pixel_wrapped_to_two_lines_and_split_into_events():

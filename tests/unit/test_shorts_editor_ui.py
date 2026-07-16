@@ -127,8 +127,7 @@ def test_solid_color_preview_has_black_canvas_and_scaled_foreground(tmp_path):
     editor.preview.show()
     qt_app.processEvents()
     preview = editor.preview.grab().toImage()
-    assert preview.width() >= 360
-    assert preview.height() >= 640
+    assert abs(preview.width() / preview.height() - 9 / 16) < 0.01
     assert preview.pixelColor(preview.width() // 2, preview.height() // 2).red() > 180
     assert qt_app is QApplication.instance()
 
@@ -177,7 +176,7 @@ def test_subtitle_offset_autosaves_and_preview_uses_scaled_geometry(tmp_path):
     editor.preview.resize(216, 384)
     editor.preview.set_preview(candidate, candidate.subtitle_settings, candidate.layout_settings, "Крупный пример")
     image = editor.preview.grab().toImage()
-    assert image.width() >= 360
+    assert abs(image.width() / image.height() - 9 / 16) < 0.01
     assert qt_app is QApplication.instance()
 
 
@@ -263,13 +262,69 @@ def test_vertical_editor_shows_actual_preview_render_and_font_technical_info(tmp
     )
     text = editor.preview_technical.text()
     tooltip = editor.preview_technical.toolTip()
-    assert "540×960" in text
+    composition = editor.preview.composition_size
+    assert f"{composition[0]}×{composition[1]}" in text
     assert "59,94 FPS" in text
     assert "Proxy" in text
     assert "1080×1920" in text
     assert "H.264 NVENC" in text
     assert "analysis_proxy.mp4" in tooltip
     assert "ASS FontName=Segoe UI" in tooltip
+    assert "segoeuib.ttf" in tooltip.casefold()
+    assert "fallback=False" in tooltip
+    assert qt_app is QApplication.instance()
+
+
+def test_full_hd_quality_does_not_resize_fit_viewport_or_splitter():
+    qt_app = app()
+    editor = SubtitleEditor()
+    editor.resize(1200, 900)
+    editor.show()
+    qt_app.processEvents()
+    editor.preview_zoom.blockSignals(True)
+    editor.preview_zoom.setCurrentIndex(editor.preview_zoom.findData("fit"))
+    editor.preview_zoom.blockSignals(False)
+    editor._apply_preview_zoom()
+    qt_app.processEvents()
+    before_widget = editor.preview.size()
+    before_splitter = editor.top_splitter.sizes()
+    editor.preview_quality.blockSignals(True)
+    editor.preview_quality.setCurrentIndex(editor.preview_quality.count() - 1)
+    editor.preview_quality.blockSignals(False)
+    editor._apply_preview_quality()
+    qt_app.processEvents()
+    assert editor.preview.composition_size == (1080, 1920)
+    assert editor.preview.size() == before_widget
+    assert editor.top_splitter.sizes() == before_splitter
+    editor.preview_zoom.blockSignals(True)
+    editor.preview_zoom.setCurrentIndex(editor.preview_zoom.findData(100))
+    editor.preview_zoom.blockSignals(False)
+    editor._apply_preview_zoom()
+    qt_app.processEvents()
+    assert editor.preview.size().width() == 1080
+    assert max(
+        editor.preview_scroll.horizontalScrollBar().maximum(),
+        editor.preview_scroll.verticalScrollBar().maximum(),
+    ) > 0
+    assert editor.top_splitter.sizes() == before_splitter
+
+
+def test_editor_persists_separate_title_and_subtitle_alignment(tmp_path):
+    qt_app = app()
+    candidate = Candidate("short_001", 10, 20, 90, "one")
+    editor = SubtitleEditor()
+    paths = SimpleNamespace(subtitles=tmp_path)
+    editor.set_context(candidate, transcript(), paths)
+    editor.title_alignment.setCurrentIndex(editor.title_alignment.findData("center"))
+    editor.subtitle_alignment.setCurrentIndex(editor.subtitle_alignment.findData("left"))
+    editor.subtitle_offset_x.setValue(120)
+    editor._apply_configuration()
+    assert candidate.branding_settings["title_alignment"] == "center"
+    assert candidate.subtitle_settings["alignment"] == "left"
+    assert candidate.subtitle_settings["horizontal_offset"] >= 0
+    editor.set_context(candidate, transcript(), paths)
+    assert editor.title_alignment.currentData() == "center"
+    assert editor.subtitle_alignment.currentData() == "left"
     assert qt_app is QApplication.instance()
 
 

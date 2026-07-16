@@ -13,6 +13,9 @@ from creator_assistant.services.shorts.render_service import ShortsRenderService
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
 from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator, layout_title_text
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
+from creator_assistant.services.shorts.subtitle_layout import SubtitleLayoutCalculator
+from creator_assistant.services.shorts.text_alignment import HorizontalTextAlignment
+from creator_assistant.services.shorts.font_resolver import resolve_font
 from creator_assistant.domain.shorts.models import SubtitleCue
 
 
@@ -87,7 +90,7 @@ def test_render_command_adds_title_and_channel_banner_overlay(tmp_path):
     command = service.build_command(source(video), candidate, subtitle, target, True)
     graph = command[command.index("-filter_complex") + 1]
     assert str(banner) in command
-    assert graph.count("drawtext=") == 1
+    assert graph.count("drawtext=") >= 1
     assert "fontfile=" in graph
     assert "w-text_w-90+-120" in graph
     assert "overlay=x='max(80,min(W-w-80,(W-w)/2+40))'" in graph
@@ -114,6 +117,79 @@ def test_long_title_is_pixel_wrapped_to_two_safe_lines():
     assert wrapped.count("\n") == 1
     assert wrapped.replace("\n", " ") == "100 ЧЕРЕПОВ ЗА 30 МИНУТ!"
     assert effective_size <= 88
+
+
+def test_title_alignment_builds_three_distinct_multiline_geometries():
+    graphs = {}
+    for alignment in ("left", "center", "right"):
+        candidate = Candidate(
+            "short_001", 0, 10, 1, "",
+            branding_settings={
+                "show_title": True,
+                "final_title_text": "Я добыл 48 235 обсидиана — Хардкор",
+                "title_size": 88,
+                "title_alignment": alignment,
+                "title_offset_x": 40,
+            },
+        )
+        graphs[alignment] = ShortsFilterGraphBuilder().build(candidate, source(Path("x.mp4")), "", input_clipped=True)
+        assert graphs[alignment].count("drawtext=") == 2
+    assert "90+40" in graphs["left"]
+    assert "(w-text_w)/2+40" in graphs["center"]
+    assert "w-text_w-90+40" in graphs["right"]
+    assert len(set(graphs.values())) == 3
+
+
+def test_subtitle_alignment_and_offset_are_safe_and_written_to_ass(tmp_path):
+    service = SubtitleService()
+    cue = SubtitleCue(0, 3, "Очень длинные русские субтитры для проверки безопасных границ")
+    anchors = {"left": r"\an1", "center": r"\an2", "right": r"\an3"}
+    positions = {}
+    for name in anchors:
+        settings = {
+            "style": "clean", "position": "lower", "alignment": name,
+            "horizontal_offset": 300 if name != "right" else -300,
+            "safe_margin": 120, "lines": 2,
+        }
+        ass = tmp_path / f"{name}.ass"
+        service.write([cue], tmp_path / f"{name}.srt", ass, settings)
+        text = ass.read_text(encoding="utf-8-sig")
+        assert anchors[name] in text
+        layout = SubtitleLayoutCalculator().calculate(cue.text, settings)
+        positions[name] = layout.x
+        if name == "left":
+            assert layout.x >= layout.safe_margin
+        elif name == "right":
+            assert layout.x <= 1080 - layout.safe_margin
+        else:
+            assert layout.safe_margin <= layout.x <= 1080 - layout.safe_margin
+    assert len(set(positions.values())) == 3
+    assert HorizontalTextAlignment.parse("CENTER") is HorizontalTextAlignment.CENTER
+
+
+@pytest.mark.parametrize(
+    ("position", "alignment", "anchor"),
+    [
+        ("lower", "left", 1), ("lower", "center", 2), ("lower", "right", 3),
+        ("center", "left", 4), ("center", "center", 5), ("center", "right", 6),
+        ("upper", "left", 7), ("upper", "center", 8), ("upper", "right", 9),
+    ],
+)
+def test_ass_anchor_maps_vertical_zone_and_horizontal_alignment(tmp_path, position, alignment, anchor):
+    ass = tmp_path / f"{position}_{alignment}.ass"
+    SubtitleService().write(
+        [SubtitleCue(0, 1, "Проверка")], tmp_path / "out.srt", ass,
+        {"position": position, "alignment": alignment, "font_family": "Segoe UI"},
+    )
+    assert f"\\an{anchor}\\pos(" in ass.read_text(encoding="utf-8-sig")
+
+
+def test_segoe_ui_resolves_to_concrete_windows_files_without_fallback():
+    info = resolve_font("Segoe UI")
+    assert info.ass_font_name == "Segoe UI"
+    assert info.fallback is False
+    assert info.regular_file and info.regular_file.name.casefold() == "segoeui.ttf"
+    assert info.bold_file and info.bold_file.name.casefold() == "segoeuib.ttf"
 
 
 def test_channel_assets_resolve_exact_profile_and_never_random(tmp_path):
@@ -216,7 +292,7 @@ def test_subtitle_vertical_offset_is_written_to_ass_and_clamped(tmp_path):
         {"style": "clean", "position": "lower", "vertical_offset": 100, "safe_margin": 120, "lines": 2},
     )
     text = ass.read_text(encoding="utf-8-sig")
-    assert r"\pos(540,1585)" in text
+    assert r"\an2\pos(540," in text
     service.write(
         [SubtitleCue(0, 3, "Очень длинная русская строка для проверки позиции")],
         tmp_path / "clamped.srt",

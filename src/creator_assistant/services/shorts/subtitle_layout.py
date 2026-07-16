@@ -4,6 +4,9 @@ from dataclasses import dataclass
 
 from PySide6.QtGui import QFont, QFontMetricsF, QGuiApplication
 
+from creator_assistant.services.shorts.font_resolver import resolved_qfont
+from creator_assistant.services.shorts.text_alignment import HorizontalTextAlignment, aligned_left
+
 
 FRAME_WIDTH = 1080
 FRAME_HEIGHT = 1920
@@ -47,6 +50,9 @@ class SubtitleLayout:
     clamped_vertical_offset: int
     primary: str
     background: bool
+    alignment: HorizontalTextAlignment
+    horizontal_offset: int
+    clamped_horizontal_offset: int
 
 
 class _ApproximateFontMetrics:
@@ -75,8 +81,7 @@ def resolved_style(settings: dict) -> dict:
 def font_metrics(font_name: str, size: int, weight: int = 700):
     if QGuiApplication.instance() is None:
         return _ApproximateFontMetrics(size)
-    font = QFont(font_name)
-    font.setPixelSize(size)
+    font = resolved_qfont(font_name, bold=weight >= 600, pixel_size=size)
     font.setWeight(QFont.Weight(max(100, min(900, int(weight)))))
     return QFontMetricsF(font)
 
@@ -150,6 +155,20 @@ class SubtitleLayoutCalculator:
         metrics = font_metrics(style["font"], size, int(style.get("weight", 700)))
         line_height = max(1, round(metrics.height()))
         height = round(line_height * len(lines) + 2 * int(style["outline"]) + 2 * int(style["shadow"]) + 10)
+        text_width = max((metrics.horizontalAdvance(line) for line in lines), default=0)
+        width = min(max_width, max(1, round(text_width + 2 * (int(style["outline"]) + int(style["shadow"]) + 6))))
+        alignment = HorizontalTextAlignment.parse(settings.get("alignment", "center"))
+        requested_horizontal_offset = max(-300, min(300, int(settings.get("horizontal_offset", 0))))
+        left = aligned_left(width, alignment, requested_horizontal_offset, safe_margin=safe_margin)
+        if alignment is HorizontalTextAlignment.LEFT:
+            x = left
+            base_x = safe_margin
+        elif alignment is HorizontalTextAlignment.RIGHT:
+            x = left + width
+            base_x = FRAME_WIDTH - safe_margin
+        else:
+            x = left + width / 2
+            base_x = FRAME_WIDTH / 2
         requested_offset = int(settings.get("vertical_offset", 0))
         base_y = POSITION_Y.get(str(settings.get("position", "lower")), POSITION_Y["lower"])
         min_y = safe_margin + height // 2
@@ -162,9 +181,9 @@ class SubtitleLayoutCalculator:
             font_size=size,
             outline=int(style["outline"]),
             shadow=int(style["shadow"]),
-            x=FRAME_WIDTH // 2,
+            x=round(x),
             y=round(y),
-            width=max_width,
+            width=width,
             height=height,
             safe_margin=safe_margin,
             max_width=max_width,
@@ -172,4 +191,7 @@ class SubtitleLayoutCalculator:
             clamped_vertical_offset=round(y - base_y),
             primary=str(style.get("primary", "&H00FFFFFF")),
             background=bool(settings.get("background", False)),
+            alignment=alignment,
+            horizontal_offset=requested_horizontal_offset,
+            clamped_horizontal_offset=round(x - base_x),
         )

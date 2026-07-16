@@ -9,6 +9,7 @@ from creator_assistant.services.shorts.reframe.solid_color import SolidColorRefr
 from creator_assistant.services.shorts.overlay_layout import layout_title_text
 from creator_assistant.services.shorts.font_resolver import drawtext_font_option, fonts_dir_option
 from creator_assistant.services.shorts.subtitle_layout import resolved_style
+from creator_assistant.services.shorts.text_alignment import HorizontalTextAlignment
 
 
 class ShortsFilterGraphBuilder:
@@ -59,28 +60,31 @@ class ShortsFilterGraphBuilder:
             wrapped_title, size = layout_title_text(
                 raw_title, requested_size, title_bold, 900, 2, font_family=title_font_family,
             )
-            text = _escape_drawtext(wrapped_title)
             y = max(0, min(1800, int(branding.get("title_y", 180) or 180)))
             border = max(0, min(20, int(branding.get("title_outline", 4) or 4)))
             shadow = max(0, min(20, int(branding.get("title_shadow", 2) or 0)))
             fontcolor = str(branding.get("title_color", "#ffffff") or "#ffffff").replace("#", "0x")
             font_option = drawtext_font_option(title_font_family, title_bold)
-            alignment = str(branding.get("title_alignment", "center") or "center")
+            alignment = HorizontalTextAlignment.parse(branding.get("title_alignment", "center"))
             offset_x = max(-300, min(300, int(branding.get("title_offset_x", 0) or 0)))
-            if alignment == "left":
+            if alignment is HorizontalTextAlignment.LEFT:
                 x_expr = f"max(90,min(w-text_w-90,90+{offset_x}))"
-            elif alignment == "right":
+            elif alignment is HorizontalTextAlignment.RIGHT:
                 x_expr = f"max(90,min(w-text_w-90,w-text_w-90+{offset_x}))"
             else:
                 x_expr = f"max(90,min(w-text_w-90,(w-text_w)/2+{offset_x}))"
-            next_label = "title"
-            filters.append(
-                f"[{current}]drawtext=text='{text}':fontcolor={fontcolor}:fontsize={size}:"
-                f"{font_option}:borderw={border}:bordercolor=black:shadowx={shadow}:shadowy={shadow}:"
-                f"shadowcolor=black@0.75:x='{x_expr}':y={y}:"
-                f"line_spacing=8[{next_label}]"
-            )
-            current = next_label
+            # Render every wrapped line separately. A single multiline drawtext centers
+            # the text box but left-aligns shorter lines inside it.
+            for line_index, line in enumerate(wrapped_title.splitlines() or [wrapped_title]):
+                text = _escape_drawtext(line)
+                next_label = f"title{line_index}"
+                line_y = y + line_index * (size + 8)
+                filters.append(
+                    f"[{current}]drawtext=text='{text}':fontcolor={fontcolor}:fontsize={size}:"
+                    f"{font_option}:borderw={border}:bordercolor=black:shadowx={shadow}:shadowy={shadow}:"
+                    f"shadowcolor=black@0.75:x='{x_expr}':y={line_y}[{next_label}]"
+                )
+                current = next_label
         if show_banner:
             scale = max(0.1, min(2.0, float(branding.get("banner_scale", 100) or 100) / 100))
             opacity = max(0.0, min(1.0, float(branding.get("banner_opacity", 100) or 100) / 100))

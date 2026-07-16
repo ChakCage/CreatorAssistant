@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtGui import QFont, QFontMetrics, QGuiApplication
+from PySide6.QtGui import QFontMetrics, QGuiApplication
+
+from creator_assistant.services.shorts.font_resolver import resolved_qfont
 
 
 @dataclass(frozen=True)
@@ -64,9 +66,7 @@ def layout_title_text(
 
 def _title_measurer(size: int, bold: bool, font_family: str):
     if QGuiApplication.instance() is not None:
-        font = QFont(font_family or "Segoe UI")
-        font.setPixelSize(size)
-        font.setBold(bool(bold))
+        font = resolved_qfont(font_family or "Segoe UI", bold=bold, pixel_size=size)
         metrics = QFontMetrics(font)
         return metrics.horizontalAdvance
 

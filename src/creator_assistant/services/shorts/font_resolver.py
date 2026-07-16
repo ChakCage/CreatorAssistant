@@ -7,6 +7,7 @@ from pathlib import Path
 
 DEFAULT_FONT_FAMILY = "Segoe UI"
 FALLBACK_FONT_FAMILY = "Arial"
+_QT_LOADED_FILES: dict[str, str] = {}
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,29 @@ def drawtext_font_option(family: str | None, bold: bool = True) -> str:
     if font_file:
         return f"fontfile='{escape_filter_path(font_file)}'"
     return f"font='{_escape_drawtext_value(info.family)}'"
+
+
+def resolved_qfont(family: str | None, *, bold: bool = True, pixel_size: int | None = None):
+    """Build a Qt font from the same concrete file used by FFmpeg drawtext."""
+    from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
+
+    info = resolve_font(family)
+    selected_family = info.family
+    font_file = info.file_for_weight(bold)
+    if QGuiApplication.instance() is not None and font_file and font_file.is_file():
+        key = str(font_file.resolve()).casefold()
+        loaded_family = _QT_LOADED_FILES.get(key)
+        if loaded_family is None:
+            font_id = QFontDatabase.addApplicationFont(str(font_file))
+            families = QFontDatabase.applicationFontFamilies(font_id) if font_id >= 0 else []
+            loaded_family = str(families[0]) if families else info.family
+            _QT_LOADED_FILES[key] = loaded_family
+        selected_family = loaded_family
+    font = QFont(selected_family)
+    font.setBold(bool(bold))
+    if pixel_size is not None:
+        font.setPixelSize(max(1, int(pixel_size)))
+    return font
 
 
 def fonts_dir_option() -> str:

@@ -4,12 +4,12 @@ from copy import deepcopy
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSettings, QRect, QRectF, Qt, QThread, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter, QPixmap
+from PySide6.QtCore import QObject, QEvent, QPoint, QSettings, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QHeaderView, QLabel, QListWidget, QGridLayout, QLineEdit, QMessageBox, QPushButton,
-    QScrollArea, QSlider, QSplitter, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QSlider, QSplitter, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 try:
@@ -21,8 +21,9 @@ except ImportError:
 
 from creator_assistant.domain.shorts.models import SubtitleCue
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
-from creator_assistant.services.shorts.font_resolver import DEFAULT_FONT_FAMILY, resolve_font
+from creator_assistant.services.shorts.font_resolver import DEFAULT_FONT_FAMILY, resolve_font, resolved_qfont
 from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator, layout_title_text
+from creator_assistant.services.shorts.text_alignment import HorizontalTextAlignment, aligned_left
 from creator_assistant.services.shorts.title_service import ShortTitleService
 from creator_assistant.services.shorts.semantic_backend import OllamaSemanticScorer
 from creator_assistant.domain.job import CancellationToken
@@ -69,6 +70,8 @@ class VerticalFramePreview(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setMinimumSize(216, 384)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.composition_size = (540, 960)
         self.candidate = None
         self.settings: dict = {}
         self.layout_settings: dict = {}
@@ -96,13 +99,12 @@ class VerticalFramePreview(QWidget):
         return max(1, round(1080 * scale)), max(1, round(1920 * scale))
 
     def set_target_preview_size(self, width: int, height: int) -> None:
-        width = max(216, int(width))
-        height = max(384, int(height))
-        self.setMinimumSize(width, height)
-        self.setMaximumWidth(width)
-        self.setMaximumHeight(height)
-        self.updateGeometry()
+        # Composition quality is independent from physical UI pixels.
+        self.composition_size = (max(1, int(width)), max(1, int(height)))
         self.resized.emit()
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        return QSize(360, 640)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)
@@ -164,17 +166,25 @@ class VerticalFramePreview(QWidget):
             return
 
         layout = SubtitleLayoutCalculator().calculate(self.sample, self.settings)
-        font = QFont(layout.font_name)
-        font.setPixelSize(max(8, round(layout.font_size * scale)))
+        font = resolved_qfont(layout.font_name, bold=True, pixel_size=max(8, round(layout.font_size * scale)))
         font.setWeight(QFont.Weight.Bold)
         painter.setFont(font)
+        if layout.alignment is HorizontalTextAlignment.LEFT:
+            box_left = layout.x
+            text_flag = Qt.AlignLeft
+        elif layout.alignment is HorizontalTextAlignment.RIGHT:
+            box_left = layout.x - layout.width
+            text_flag = Qt.AlignRight
+        else:
+            box_left = layout.x - layout.width / 2
+            text_flag = Qt.AlignCenter
         box = QRectF(
-            left + (layout.x - layout.width / 2) * scale,
+            left + box_left * scale,
             top + (layout.y - layout.height / 2) * scale,
             layout.width * scale,
             layout.height * scale,
         )
-        flags = Qt.AlignCenter | Qt.TextWordWrap
+        flags = text_flag | Qt.AlignVCenter | Qt.TextWordWrap
         if layout.background:
             painter.fillRect(box, QColor(0, 0, 0, 130))
         if layout.shadow:
@@ -203,33 +213,44 @@ class VerticalFramePreview(QWidget):
                     bool(self.branding_settings.get("title_bold", True)),
                     font_family=self._title_font_family(),
                 )
-                font = QFont(self._title_font_family())
-                font.setPixelSize(max(8, round(effective_size * scale)))
-                font.setBold(bool(self.branding_settings.get("title_bold", True)))
+                font = resolved_qfont(
+                    self._title_font_family(),
+                    bold=bool(self.branding_settings.get("title_bold", True)),
+                    pixel_size=max(8, round(effective_size * scale)),
+                )
                 painter.setFont(font)
                 offset_x = max(-300, min(300, int(self.branding_settings.get("title_offset_x", 0) or 0)))
-                box = QRectF(
-                    left + (90 + offset_x) * scale,
-                    top + int(self.branding_settings.get("title_y", 180)) * scale,
-                    900 * scale,
-                    260 * scale,
+                alignment = HorizontalTextAlignment.parse(self.branding_settings.get("title_alignment", "center"))
+                measure_font = resolved_qfont(
+                    self._title_font_family(),
+                    bold=bool(self.branding_settings.get("title_bold", True)),
+                    pixel_size=effective_size,
                 )
-                align_name = str(self.branding_settings.get("title_alignment", "center") or "center")
-                align_flag = {"left": Qt.AlignLeft, "right": Qt.AlignRight}.get(align_name, Qt.AlignCenter)
-                flags = align_flag | Qt.AlignVCenter | Qt.TextWordWrap
-                if bool(self.branding_settings.get("title_background", False)):
-                    painter.fillRect(box.adjusted(-18 * scale, -10 * scale, 18 * scale, 10 * scale), QColor(0, 0, 0, 135))
-                shadow = max(0, round(int(self.branding_settings.get("title_shadow", 2)) * scale))
-                if shadow:
-                    painter.setPen(QColor(0, 0, 0, 190))
-                    painter.drawText(box.translated(shadow, shadow), flags, title)
-                outline = max(0, round(int(self.branding_settings.get("title_outline", 4)) * scale))
-                for dx, dy in ((-outline, 0), (outline, 0), (0, -outline), (0, outline), (-outline, -outline), (outline, outline)):
-                    if outline:
-                        painter.setPen(QColor("#000000"))
-                        painter.drawText(box.translated(dx, dy), flags, title)
-                painter.setPen(QColor(str(self.branding_settings.get("title_color", "#ffffff"))))
-                painter.drawText(box, flags, title)
+                metrics = QFontMetricsF(measure_font)
+                base_y = int(self.branding_settings.get("title_y", 180))
+                for line_index, line in enumerate(title.splitlines() or [title]):
+                    line_width = min(900.0, metrics.horizontalAdvance(line) + 4)
+                    line_left = aligned_left(line_width, alignment, offset_x)
+                    box = QRectF(
+                        left + line_left * scale,
+                        top + (base_y + line_index * (effective_size + 8)) * scale,
+                        line_width * scale,
+                        (effective_size + 8) * scale,
+                    )
+                    flags = Qt.AlignLeft | Qt.AlignTop
+                    if bool(self.branding_settings.get("title_background", False)):
+                        painter.fillRect(box.adjusted(-18 * scale, -10 * scale, 18 * scale, 10 * scale), QColor(0, 0, 0, 135))
+                    shadow = max(0, round(int(self.branding_settings.get("title_shadow", 2)) * scale))
+                    if shadow:
+                        painter.setPen(QColor(0, 0, 0, 190))
+                        painter.drawText(box.translated(shadow, shadow), flags, line)
+                    outline = max(0, round(int(self.branding_settings.get("title_outline", 4)) * scale))
+                    for dx, dy in ((-outline, 0), (outline, 0), (0, -outline), (0, outline), (-outline, -outline), (outline, outline)):
+                        if outline:
+                            painter.setPen(QColor("#000000"))
+                            painter.drawText(box.translated(dx, dy), flags, line)
+                    painter.setPen(QColor(str(self.branding_settings.get("title_color", "#ffffff"))))
+                    painter.drawText(box, flags, line)
         if bool(self.branding_settings.get("show_channel_card", False)):
             banner = Path(str(self.branding_settings.get("channel_banner_path") or ""))
             pixmap = QPixmap(str(banner)) if banner.is_file() else QPixmap()
@@ -245,6 +266,49 @@ class VerticalFramePreview(QWidget):
             style = resolved_style(self.settings)
             return str(style.get("font") or DEFAULT_FONT_FAMILY)
         return str(self.branding_settings.get("title_font_family") or DEFAULT_FONT_FAMILY)
+
+
+class PreviewViewport(QScrollArea):
+    resized = Signal()
+    zoom_requested = Signal(int)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWidgetResizable(False)
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumSize(240, 426)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizeAdjustPolicy(QScrollArea.SizeAdjustPolicy.AdjustIgnored)
+        self.viewport().installEventFilter(self)
+        self._drag_origin: QPoint | None = None
+        self._scroll_origin = (0, 0)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self.resized.emit()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt API
+        if watched is self.viewport():
+            if event.type() == QEvent.Type.Wheel and event.modifiers() & Qt.ControlModifier:
+                self.zoom_requested.emit(10 if event.angleDelta().y() > 0 else -10)
+                event.accept()
+                return True
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.LeftButton:
+                if self.horizontalScrollBar().maximum() or self.verticalScrollBar().maximum():
+                    self._drag_origin = event.position().toPoint()
+                    self._scroll_origin = (self.horizontalScrollBar().value(), self.verticalScrollBar().value())
+                    self.viewport().setCursor(Qt.ClosedHandCursor)
+                    return True
+            if event.type() == QEvent.Type.MouseMove and self._drag_origin is not None:
+                delta = event.position().toPoint() - self._drag_origin
+                self.horizontalScrollBar().setValue(self._scroll_origin[0] - delta.x())
+                self.verticalScrollBar().setValue(self._scroll_origin[1] - delta.y())
+                return True
+            if event.type() == QEvent.Type.MouseButtonRelease and self._drag_origin is not None:
+                self._drag_origin = None
+                self.viewport().unsetCursor()
+                return True
+        return super().eventFilter(watched, event)
 
 
 class SubtitleEditor(QWidget):
@@ -400,6 +464,11 @@ class SubtitleEditor(QWidget):
         self.position = QComboBox()
         for label, value in (("Верхняя треть", "upper"), ("Центр", "center"), ("Нижняя треть", "lower")):
             self.position.addItem(label, value)
+        self.subtitle_alignment = QComboBox()
+        for label, value in (("По левому краю", "left"), ("По центру", "center"), ("По правому краю", "right")):
+            self.subtitle_alignment.addItem(label, value)
+        self.subtitle_alignment.setCurrentIndex(self.subtitle_alignment.findData("center"))
+        self.subtitle_offset_x = QSpinBox(); self.subtitle_offset_x.setRange(-300, 300); self.subtitle_offset_x.setSuffix(" px"); self.subtitle_offset_x.setValue(0)
         self.size = QSpinBox(); self.size.setRange(44, 120); self.size.setValue(58)
         self.maximum = QSpinBox(); self.maximum.setRange(12, 80); self.maximum.setValue(36)
         self.maximum.setToolTip("Предварительный ориентир переноса. Финальная ширина рассчитывается по фактическому размеру текста в пикселях")
@@ -421,7 +490,7 @@ class SubtitleEditor(QWidget):
         offset_layout.addWidget(self.offset, 1)
         offset_layout.addWidget(self.offset_value)
         offset_layout.addWidget(self.offset_reset)
-        for label, control in (("Стиль", self.style), ("Шрифт", self.subtitle_font), ("Положение", self.position), ("Размер", self.size), ("Примерная длина строки", self.maximum), ("Строк", self.lines), ("Обводка", self.outline), ("Тень", self.shadow), ("Безопасный отступ", self.margin)):
+        for label, control in (("Стиль", self.style), ("Шрифт", self.subtitle_font), ("Положение", self.position), ("Выравнивание субтитров", self.subtitle_alignment), ("X субтитров", self.subtitle_offset_x), ("Размер", self.size), ("Примерная длина строки", self.maximum), ("Строк", self.lines), ("Обводка", self.outline), ("Тень", self.shadow), ("Безопасный отступ", self.margin)):
             style_form.addRow(label, control)
         style_form.addRow("Смещение по вертикали", offset_row)
         style_form.addRow(self.background)
@@ -436,10 +505,20 @@ class SubtitleEditor(QWidget):
             self.preview_quality.addItem(label, size)
         self._restore_preview_quality()
         self.preview.resized.connect(self._update_technical_info)
+        self.preview_zoom = QComboBox()
+        for label, value in (("Вписать", "fit"), ("50%", 50), ("75%", 75), ("100%", 100)):
+            self.preview_zoom.addItem(label, value)
+        self.preview_fit = QPushButton("Вписать в окно")
+        self.preview_100 = QPushButton("100%")
+        self.preview_scroll = PreviewViewport()
+        self.preview_scroll.setWidget(self.preview)
+        self.preview_scroll.resized.connect(self._apply_preview_zoom)
+        self.preview_scroll.zoom_requested.connect(self._zoom_preview_by)
         preview_panel = QWidget()
         preview_layout = QVBoxLayout(preview_panel)
         preview_layout.addWidget(self._row(QLabel("Качество preview"), self.preview_quality))
-        preview_layout.addWidget(self.preview, 1, Qt.AlignCenter)
+        preview_layout.addWidget(self._row(QLabel("Масштаб просмотра"), self.preview_zoom, self.preview_fit, self.preview_100))
+        preview_layout.addWidget(self.preview_scroll, 1)
         self.player = None
         self.audio = None
         self.video_sink = None
@@ -535,7 +614,7 @@ class SubtitleEditor(QWidget):
         self.banner_reset_position.clicked.connect(self._reset_banner_position)
         self.banner_save_profile.clicked.connect(self._save_banner_profile_defaults)
         self.channel_profile.currentIndexChanged.connect(self._profile_selected)
-        for control in (self.position, self.subtitle_font, self.size, self.maximum, self.lines, self.outline, self.shadow, self.margin, self.offset):
+        for control in (self.position, self.subtitle_alignment, self.subtitle_offset_x, self.subtitle_font, self.size, self.maximum, self.lines, self.outline, self.shadow, self.margin, self.offset):
             signal = control.currentIndexChanged if isinstance(control, QComboBox) else control.valueChanged
             signal.connect(self._mark_dirty)
         for control in (self.branding_preset, self.title_font, self.title_alignment, self.title_offset_x, self.title_size, self.title_outline, self.title_shadow, self.title_y, self.channel_profile, self.banner_scale, self.banner_x, self.banner_y, self.banner_opacity):
@@ -546,6 +625,10 @@ class SubtitleEditor(QWidget):
         self.use_subtitle_font_for_title.toggled.connect(self.title_font.setDisabled)
         self.title_font.setDisabled(self.use_subtitle_font_for_title.isChecked())
         self.preview_quality.currentIndexChanged.connect(self._preview_quality_changed)
+        self.preview_zoom.currentIndexChanged.connect(self._preview_zoom_changed)
+        self.preview_fit.clicked.connect(lambda: self.preview_zoom.setCurrentIndex(self.preview_zoom.findData("fit")))
+        self.preview_100.clicked.connect(lambda: self.preview_zoom.setCurrentIndex(self.preview_zoom.findData(100)))
+        self._restore_preview_zoom()
         self.title_text.textEdited.connect(self._mark_dirty)
         self.background.toggled.connect(self._mark_dirty)
         self.vertical.changed.connect(self._mark_dirty)
@@ -593,14 +676,54 @@ class SubtitleEditor(QWidget):
 
     def _apply_preview_quality(self) -> None:
         size = self.preview_quality.currentData() if hasattr(self, "preview_quality") else (540, 960)
-        width, height = size if isinstance(size, tuple) else (540, 960)
+        width, height = size if isinstance(size, (tuple, list)) and len(size) == 2 else (540, 960)
         if hasattr(self, "preview"):
             self.preview.set_target_preview_size(int(width), int(height))
-            if int(width) >= 1080 and hasattr(self, "preview_technical"):
-                self.preview_technical.setToolTip(
-                    self.preview_technical.toolTip()
-                    + "\nFull HD preview может быть тяжелее, но финальный render не меняется."
-                )
+        if hasattr(self, "preview_scroll"):
+            self._apply_preview_zoom()
+
+    def _restore_preview_zoom(self) -> None:
+        settings = QSettings("CreatorAssistant", "CreatorAssistant")
+        stored = str(settings.value("shorts/vertical_editor/preview_zoom", "fit") or "fit")
+        value = "fit" if stored == "fit" else int(stored) if stored.isdigit() else "fit"
+        index = self.preview_zoom.findData(value)
+        self.preview_zoom.blockSignals(True)
+        self.preview_zoom.setCurrentIndex(max(0, index))
+        self.preview_zoom.blockSignals(False)
+        QTimer.singleShot(0, self._apply_preview_zoom)
+
+    def _preview_zoom_changed(self) -> None:
+        value = self.preview_zoom.currentData() or "fit"
+        QSettings("CreatorAssistant", "CreatorAssistant").setValue("shorts/vertical_editor/preview_zoom", value)
+        self._apply_preview_zoom()
+
+    def _zoom_preview_by(self, delta: int) -> None:
+        current = self.preview_zoom.currentData()
+        current_value = 50 if current == "fit" else int(current or 50)
+        choices = [50, 75, 100]
+        target = min(choices, key=lambda item: abs(item - max(50, min(100, current_value + delta))))
+        self.preview_zoom.setCurrentIndex(self.preview_zoom.findData(target))
+
+    def _apply_preview_zoom(self) -> None:
+        if not hasattr(self, "preview_scroll"):
+            return
+        quality = self.preview_quality.currentData() or (540, 960)
+        if not isinstance(quality, (tuple, list)) or len(quality) != 2:
+            quality = (540, 960)
+        composition_width, composition_height = (int(quality[0]), int(quality[1]))
+        zoom = self.preview_zoom.currentData() or "fit"
+        if zoom == "fit":
+            available_width = max(1, self.preview_scroll.viewport().width() - 4)
+            available_height = max(1, self.preview_scroll.viewport().height() - 4)
+            scale = min(available_width / 9, available_height / 16)
+            display_width = max(216, round(9 * scale))
+            display_height = max(384, round(16 * scale))
+        else:
+            factor = int(zoom) / 100
+            display_width = max(216, round(composition_width * factor))
+            display_height = max(384, round(composition_height * factor))
+        self.preview.setFixedSize(display_width, display_height)
+        self._update_technical_info()
 
     def _restore_splitters(self) -> None:
         settings = QSettings("CreatorAssistant", "CreatorAssistant")
@@ -660,16 +783,19 @@ class SubtitleEditor(QWidget):
     def _update_technical_info(self) -> None:
         if not hasattr(self, "preview_technical"):
             return
-        preview_w, preview_h = self.preview.effective_preview_size() if hasattr(self, "preview") else (0, 0)
+        display_w, display_h = self.preview.effective_preview_size()
+        composition_w, composition_h = self.preview.composition_size
         preview_info = self._proxy_info or self._source_info
         preview_fps = _format_fps(float(getattr(preview_info, "fps", 0.0) or 0.0))
         source_label = "Proxy" if self._proxy_info else ("Источник" if self._source_info else "—")
         render_fps = _format_fps(float(getattr(self._source_info, "fps", 0.0) or 0.0))
         encoder = self._render_encoder or "H.264 NVENC"
-        font_info = self._font_diagnostics()
+        zoom = self.preview_zoom.currentData() if hasattr(self, "preview_zoom") else "fit"
+        zoom_label = "Вписано в окно" if zoom == "fit" else f"{int(zoom or 100)}%"
         self.preview_technical.setText(
-            f"Предпросмотр: {preview_w}×{preview_h} · {preview_fps} FPS · {source_label} · {self._preview_state}\n"
-            f"Рендер: 1080×1920 · {render_fps} FPS · {encoder}"
+            f"Качество композиции: {composition_w}×{composition_h}\n"
+            f"Отображение: {zoom_label} · {display_w}×{display_h} · {preview_fps} FPS · {source_label} · {self._preview_state}\n"
+            f"Итоговый рендер: 1080×1920 · {render_fps} FPS · {encoder}"
         )
         proxy_resolution = (
             f"{getattr(self._proxy_info, 'width', 0)}×{getattr(self._proxy_info, 'height', 0)} · "
@@ -680,13 +806,12 @@ class SubtitleEditor(QWidget):
             "Диагностика preview/render\n"
             f"Proxy-файл: {self._proxy_path or '—'}\n"
             f"Proxy: {proxy_resolution}\n"
-            f"Realtime preview: {preview_w}×{preview_h} · {preview_fps} FPS · {source_label}\n"
-            "Точный single-frame preview: 1080×1920\n"
-            f"Итоговый render: 1080×1920 · {render_fps} FPS · {encoder}"
+            f"Внутренняя композиция: {composition_w}×{composition_h}\n"
+            f"Realtime viewport: {display_w}×{display_h} · {preview_fps} FPS · {source_label}\n"
+            f"Точный single-frame preview: {composition_w}×{composition_h}\n"
+            f"Итоговый render: 1080×1920 · {render_fps} FPS · {encoder}\n"
+            f"{self._font_diagnostics()}"
         )
-        tooltip = self.preview_technical.toolTip()
-        if font_info not in tooltip:
-            self.preview_technical.setToolTip(f"{tooltip}\n{font_info}")
 
     def _font_diagnostics(self) -> str:
         if not hasattr(self, "subtitle_font"):
@@ -1080,6 +1205,8 @@ class SubtitleEditor(QWidget):
         self.original = deepcopy(self.service.generate(transcript, candidate, self.maximum.value(), self.lines.value()))
         self.style.setCurrentIndex(max(0, self.style.findData(settings.get("style", "clean"))))
         self.position.setCurrentIndex(max(0, self.position.findData(settings.get("position", "lower"))))
+        self.subtitle_alignment.setCurrentIndex(max(0, self.subtitle_alignment.findData(settings.get("alignment", "center"))))
+        self.subtitle_offset_x.setValue(int(settings.get("horizontal_offset", 0)))
         preset = STYLE_PRESETS.get(str(settings.get("style", "clean")), STYLE_PRESETS["clean"])
         font_family = str(settings.get("font_family") or preset.get("font") or DEFAULT_FONT_FAMILY)
         self.subtitle_font.setCurrentIndex(max(0, self.subtitle_font.findData(font_family)))
@@ -1165,6 +1292,8 @@ class SubtitleEditor(QWidget):
     def current_settings(self) -> dict:
         return {
             "style": self.style.currentData(), "position": self.position.currentData(),
+            "alignment": HorizontalTextAlignment.parse(self.subtitle_alignment.currentData()).value,
+            "horizontal_offset": self.subtitle_offset_x.value(),
             "font_family": self.subtitle_font.currentData() or DEFAULT_FONT_FAMILY,
             "size": self.size.value(), "maximum": self.maximum.value(), "lines": self.lines.value(),
             "outline": self.outline.value(), "shadow": self.shadow.value(),
@@ -1277,6 +1406,11 @@ class SubtitleEditor(QWidget):
             self.offset.blockSignals(False)
             self.offset_value.blockSignals(False)
             self.dirty_label.setText("Достигнут безопасный предел позиции")
+
+        if layout.clamped_horizontal_offset != self.subtitle_offset_x.value():
+            self.subtitle_offset_x.blockSignals(True)
+            self.subtitle_offset_x.setValue(layout.clamped_horizontal_offset)
+            self.subtitle_offset_x.blockSignals(False)
 
     def _apply_configuration(self) -> None:
         if not self.candidate:

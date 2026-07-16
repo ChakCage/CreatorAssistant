@@ -775,6 +775,9 @@ class ShortsTab(QWidget):
             candidate.subtitle_settings = {
                 "style": defaults.get("style", "clean"),
                 "position": defaults.get("position", "lower"),
+                "alignment": defaults.get("alignment", "center"),
+                "horizontal_offset": int(defaults.get("horizontal_offset", 0)),
+                "font_family": defaults.get("font_family", "Segoe UI"),
                 "vertical_offset": int(defaults.get("vertical_offset", 0)),
                 "size": int(defaults.get("size", 58)),
                 "maximum": int(defaults.get("maximum", 36)),
@@ -803,6 +806,9 @@ class ShortsTab(QWidget):
         settings["shorts_subtitle_defaults"] = {
             "style": subtitle.get("style", "clean"),
             "position": subtitle.get("position", "lower"),
+            "alignment": subtitle.get("alignment", "center"),
+            "horizontal_offset": int(subtitle.get("horizontal_offset", 0)),
+            "font_family": subtitle.get("font_family", "Segoe UI"),
             "vertical_offset": int(subtitle.get("vertical_offset", 0)),
             "size": int(subtitle.get("size", 58)),
             "maximum": int(subtitle.get("maximum", 36)),
@@ -823,6 +829,7 @@ class ShortsTab(QWidget):
                 for key in (
                     "preset", "show_subtitles", "show_title", "final_title_text", "title_style", "title_size", "title_bold",
                     "title_color", "title_outline", "title_shadow", "title_background", "title_y", "title_max_lines",
+                    "title_alignment", "title_offset_x", "title_font_family", "use_subtitle_font_for_title",
                     "show_channel_card", "channel_profile_id", "banner_scale", "banner_anchor",
                     "banner_fit_mode", "banner_offset_x", "banner_offset_y", "banner_opacity", "safe_margin",
                 )
