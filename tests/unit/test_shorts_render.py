@@ -163,6 +163,45 @@ def test_manual_overlap_keeps_subtitles_above_banner_by_layer_only():
     assert automatic.y < manual.y
 
 
+def test_first_line_fixed_keeps_same_baseline_for_one_and_two_lines():
+    calculator = SubtitleLayoutCalculator()
+    settings = {"position": "lower", "lines": 2, "line_anchor_mode": "first_line_fixed"}
+    one = calculator.calculate("Ааа, ну и где они?", settings)
+    two = calculator.calculate("Окей, похожая проблема\nв том, что...", settings)
+    assert len(one.lines) == 1
+    assert len(two.lines) == 2
+    assert one.first_line_baseline == two.first_line_baseline
+    assert two.second_line_baseline > two.first_line_baseline
+
+
+def test_banner_bottom_and_block_center_are_distinct_line_anchor_modes():
+    calculator = OverlayLayoutCalculator()
+    branding = {"show_channel_card": True, "banner_scale": 100, "safe_margin": 80}
+    one = "Ааа, ну и где они?"
+    two = "Окей, похожая проблема\nв том, что..."
+    common = {"lines": 2, "auto_above_banner": True, "banner_gap": 15, "vertical_offset": 300}
+    bottom_one = calculator.subtitle_layout(one, {**common, "line_anchor_mode": "banner_bottom"}, branding, (2048, 682))
+    bottom_two = calculator.subtitle_layout(two, {**common, "line_anchor_mode": "banner_bottom"}, branding, (2048, 682))
+    center_one = calculator.subtitle_layout(one, {**common, "line_anchor_mode": "block_center"}, branding, (2048, 682))
+    center_two = calculator.subtitle_layout(two, {**common, "line_anchor_mode": "block_center"}, branding, (2048, 682))
+    assert bottom_one.y + bottom_one.height // 2 == bottom_two.y + bottom_two.height // 2
+    assert center_one.y == center_two.y
+    assert bottom_one.first_line_baseline != bottom_two.first_line_baseline
+
+
+@pytest.mark.parametrize("gap", [0, 15, 50])
+def test_configurable_banner_gap_is_applied_exactly(gap):
+    calculator = OverlayLayoutCalculator()
+    branding = {"show_channel_card": True, "banner_scale": 100, "safe_margin": 80}
+    banner = calculator.banner_rect(2048, 682, branding)
+    layout = calculator.subtitle_layout(
+        "Окей, похожая проблема\nв том, что...",
+        {"position": "lower", "lines": 2, "auto_above_banner": True, "banner_gap": gap, "vertical_offset": 300},
+        branding, (2048, 682),
+    )
+    assert banner.y - (layout.y + layout.height // 2) == gap
+
+
 def test_legacy_absolute_banner_x_is_not_reinterpreted_as_offset():
     centered = OverlayLayoutCalculator().banner_rect(2048, 682, {"banner_scale": 100, "safe_margin": 80})
     migrated = OverlayLayoutCalculator().banner_rect(2048, 682, {"banner_scale": 100, "safe_margin": 80, "banner_x": 50})

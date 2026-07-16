@@ -61,7 +61,7 @@ class OverlayLayoutCalculator:
             and banner_size
         ):
             banner = self.banner_rect(banner_size[0], banner_size[1], branding)
-            settings["maximum_bottom"] = banner.y - max(20, int(settings.get("banner_gap", 32) or 32))
+            settings["maximum_bottom"] = banner.y - max(0, min(150, int(settings.get("banner_gap", 15) or 0)))
         return SubtitleLayoutCalculator().calculate(text, settings)
 
 

@@ -787,6 +787,9 @@ class ShortsTab(QWidget):
                 "shadow": int(defaults.get("shadow", 1)),
                 "background": bool(defaults.get("background", False)),
                 "safe_margin": int(defaults.get("safe_margin", 120)),
+                "auto_above_banner": bool(defaults.get("auto_above_banner", True)),
+                "line_anchor_mode": str(defaults.get("line_anchor_mode", "first_line_fixed")),
+                "banner_gap": int(defaults.get("banner_gap", 15)),
             }
         if not candidate.layout_settings and defaults:
             candidate.layout_settings = {
@@ -818,6 +821,9 @@ class ShortsTab(QWidget):
             "shadow": int(subtitle.get("shadow", 1)),
             "background": bool(subtitle.get("background", False)),
             "safe_margin": int(subtitle.get("safe_margin", 120)),
+            "auto_above_banner": bool(subtitle.get("auto_above_banner", True)),
+            "line_anchor_mode": str(subtitle.get("line_anchor_mode", "first_line_fixed")),
+            "banner_gap": int(subtitle.get("banner_gap", 15)),
             "layout_mode": layout.get("mode", "center_crop"),
             "foreground_scale": int(layout.get("foreground_scale", 100)),
             "crop_center": int(layout.get("crop_center", 50)),

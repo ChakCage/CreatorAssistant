@@ -53,6 +53,12 @@ class SubtitleLayout:
     alignment: HorizontalTextAlignment
     horizontal_offset: int
     clamped_horizontal_offset: int
+    line_anchor_mode: str
+    first_line_baseline: int
+    second_line_baseline: int
+    reserved_y: int
+    reserved_height: int
+    applied_gap: int
 
 
 class _ApproximateFontMetrics:
@@ -64,6 +70,9 @@ class _ApproximateFontMetrics:
 
     def height(self) -> float:
         return self.size * 1.18
+
+    def ascent(self) -> float:
+        return self.size * 0.93
 
 
 def resolved_style(settings: dict) -> dict:
@@ -151,10 +160,24 @@ class SubtitleLayoutCalculator:
         pages = pixel_pages(
             text, style["font"], size, int(style["outline"]), max_lines, max_width, int(style.get("weight", 700))
         )
-        lines = pages[0].splitlines() if pages else [text.strip()]
         metrics = font_metrics(style["font"], size, int(style.get("weight", 700)))
+        explicit_lines = [line.strip() for line in text.splitlines() if line.strip()]
+        available = max_width - 2 * (int(style["outline"]) + 4)
+        if (
+            1 < len(explicit_lines) <= max_lines
+            and all(metrics.horizontalAdvance(line) <= available for line in explicit_lines)
+        ):
+            lines = explicit_lines
+        else:
+            lines = pages[0].splitlines() if pages else [text.strip()]
         line_height = max(1, round(metrics.height()))
-        height = round(line_height * len(lines) + 2 * int(style["outline"]) + 2 * int(style["shadow"]) + 10)
+        decoration_height = 2 * int(style["outline"]) + 2 * int(style["shadow"]) + 10
+        height = round(line_height * len(lines) + decoration_height)
+        max_lines = max(1, min(2, int(settings.get("lines", 2))))
+        anchor_mode = str(settings.get("line_anchor_mode", "first_line_fixed") or "first_line_fixed")
+        if anchor_mode not in {"first_line_fixed", "banner_bottom", "block_center"}:
+            anchor_mode = "first_line_fixed"
+        reserved_height = round(line_height * max_lines + decoration_height)
         text_width = max((metrics.horizontalAdvance(line) for line in lines), default=0)
         width = min(max_width, max(1, round(text_width + 2 * (int(style["outline"]) + int(style["shadow"]) + 6))))
         alignment = HorizontalTextAlignment.parse(settings.get("alignment", "center"))
@@ -171,13 +194,29 @@ class SubtitleLayoutCalculator:
             base_x = FRAME_WIDTH / 2
         requested_offset = int(settings.get("vertical_offset", 0))
         base_y = POSITION_Y.get(str(settings.get("position", "lower")), POSITION_Y["lower"])
-        min_y = safe_margin + height // 2
+        constraint_height = height if anchor_mode == "banner_bottom" else reserved_height
+        min_constraint_y = safe_margin + constraint_height // 2
         max_bottom = min(
             FRAME_HEIGHT - safe_margin,
             int(settings.get("maximum_bottom", FRAME_HEIGHT - safe_margin) or FRAME_HEIGHT - safe_margin),
         )
-        max_y = max(min_y, max_bottom - height // 2)
-        y = max(min_y, min(max_y, base_y + requested_offset))
+        max_constraint_y = max(min_constraint_y, max_bottom - constraint_height // 2)
+        constraint_y = max(min_constraint_y, min(max_constraint_y, base_y + requested_offset))
+        if anchor_mode == "first_line_fixed":
+            reserved_top = constraint_y - reserved_height // 2
+            y = reserved_top + height // 2
+            reserved_y = constraint_y
+        elif anchor_mode == "block_center":
+            y = constraint_y
+            reserved_y = constraint_y
+        else:
+            y = constraint_y
+            reserved_y = y - height // 2 + reserved_height // 2
+        top = y - height // 2
+        ascent = round(metrics.ascent()) if hasattr(metrics, "ascent") else round(size * 0.93)
+        first_line_baseline = top + int(style["outline"]) + int(style["shadow"]) + 5 + ascent
+        second_line_baseline = first_line_baseline + line_height
+        applied_gap = max(0, max_bottom - (top + height)) if "maximum_bottom" in settings else 0
         return SubtitleLayout(
             text="\n".join(lines),
             lines=lines,
@@ -192,10 +231,16 @@ class SubtitleLayoutCalculator:
             safe_margin=safe_margin,
             max_width=max_width,
             vertical_offset=requested_offset,
-            clamped_vertical_offset=round(y - base_y),
+            clamped_vertical_offset=round(constraint_y - base_y),
             primary=str(style.get("primary", "&H00FFFFFF")),
             background=bool(settings.get("background", False)),
             alignment=alignment,
             horizontal_offset=requested_horizontal_offset,
             clamped_horizontal_offset=round(x - base_x),
+            line_anchor_mode=anchor_mode,
+            first_line_baseline=first_line_baseline,
+            second_line_baseline=second_line_baseline,
+            reserved_y=reserved_y,
+            reserved_height=reserved_height,
+            applied_gap=applied_gap,
         )

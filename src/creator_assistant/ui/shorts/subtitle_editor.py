@@ -92,10 +92,11 @@ class VerticalFramePreview(QWidget):
         self._last_mode = self.layout_settings.get("mode", "center_crop")
         self.update()
 
-    def set_video_frame(self, image: QImage) -> None:
+    def set_video_frame(self, image: QImage, *, preserve_exact: bool = False) -> None:
         if image and not image.isNull():
             self.video_frame = image.copy()
-            self.exact_frame = QImage()
+            if not preserve_exact:
+                self.exact_frame = QImage()
             self.update()
 
     def set_exact_frame(self, image: QImage) -> None:
@@ -539,7 +540,23 @@ class SubtitleEditor(QWidget):
         self.margin = QSpinBox(); self.margin.setRange(80, 500); self.margin.setValue(120)
         self.auto_above_banner = QCheckBox("Автоматически размещать субтитры над баннером")
         self.auto_above_banner.setChecked(True)
-        self.auto_above_banner.setToolTip("Сохраняет зазор 32 px между нижней границей текста и карточкой канала")
+        self.auto_above_banner.setToolTip("Не допускает пересечения области субтитров с карточкой канала")
+        self.line_anchor_mode = QComboBox()
+        for label, value in (
+            ("Фиксировать первую строку", "first_line_fixed"),
+            ("Прижимать к баннеру", "banner_bottom"),
+            ("Центрировать блок", "block_center"),
+        ):
+            self.line_anchor_mode.addItem(label, value)
+        self.line_anchor_mode.setToolTip(
+            "Определяет поведение текста при переходе между одной и двумя строками"
+        )
+        self.banner_gap = QSpinBox()
+        self.banner_gap.setRange(0, 150)
+        self.banner_gap.setSingleStep(5)
+        self.banner_gap.setSuffix(" px")
+        self.banner_gap.setValue(15)
+        self.banner_gap.setToolTip("Минимальное расстояние между областью субтитров и карточкой канала")
         self.offset = QSlider(Qt.Horizontal); self.offset.setRange(-300, 300); self.offset.setSingleStep(10); self.offset.setPageStep(10); self.offset.setValue(0)
         self.offset_value = QSpinBox(); self.offset_value.setRange(-300, 300); self.offset_value.setSingleStep(10); self.offset_value.setSuffix(" px")
         self.offset_reset = QPushButton("Сбросить")
@@ -557,6 +574,8 @@ class SubtitleEditor(QWidget):
         style_form.addRow("Смещение по вертикали", offset_row)
         style_form.addRow(self.background)
         style_form.addRow(self.auto_above_banner)
+        style_form.addRow("Положение при разном числе строк", self.line_anchor_mode)
+        style_form.addRow("Расстояние до баннера", self.banner_gap)
         self.preview = VerticalFramePreview()
         self.preview_quality = QComboBox()
         for label, size, hint in (
@@ -685,7 +704,7 @@ class SubtitleEditor(QWidget):
         self.banner_reset_position.clicked.connect(self._reset_banner_position)
         self.banner_save_profile.clicked.connect(self._save_banner_profile_defaults)
         self.channel_profile.currentIndexChanged.connect(self._profile_selected)
-        for control in (self.position, self.subtitle_alignment, self.subtitle_offset_x, self.subtitle_font, self.size, self.maximum, self.lines, self.outline, self.shadow, self.margin, self.offset):
+        for control in (self.position, self.subtitle_alignment, self.subtitle_offset_x, self.subtitle_font, self.size, self.maximum, self.lines, self.outline, self.shadow, self.margin, self.offset, self.line_anchor_mode, self.banner_gap):
             signal = control.currentIndexChanged if isinstance(control, QComboBox) else control.valueChanged
             signal.connect(self._mark_dirty)
         for control in (self.branding_preset, self.title_font, self.title_alignment, self.title_offset_x, self.title_size, self.title_outline, self.title_shadow, self.title_y, self.channel_profile, self.banner_scale, self.banner_x, self.banner_y, self.banner_opacity):
@@ -935,7 +954,11 @@ class SubtitleEditor(QWidget):
 
     @Slot(object)
     def _playback_state_changed(self, state) -> None:
-        if self.player and state != QMediaPlayer.PlayingState:
+        if not self.player:
+            return
+        if state == QMediaPlayer.PlayingState:
+            self.preview.invalidate_exact_frame()
+        else:
             self._schedule_exact_preview()
 
     def _seek_relative(self, relative_ms: int) -> None:
@@ -971,8 +994,10 @@ class SubtitleEditor(QWidget):
             return
         image = frame.toImage()
         if not image.isNull():
-            self._preview_state = "Быстрый предпросмотр"
-            self.preview.set_video_frame(image)
+            playing = bool(self.player and self.player.playbackState() == QMediaPlayer.PlayingState)
+            if playing or self.preview.exact_frame.isNull():
+                self._preview_state = "Быстрый предпросмотр"
+            self.preview.set_video_frame(image, preserve_exact=not playing)
             self._update_technical_info()
 
     def _schedule_exact_preview(self) -> None:
@@ -1150,6 +1175,8 @@ class SubtitleEditor(QWidget):
             self.show_channel_card.setChecked(True)
             self.show_title.setChecked(True)
             self.show_subtitles.setChecked(True)
+            self.auto_above_banner.setChecked(True)
+            self.line_anchor_mode.setCurrentIndex(self.line_anchor_mode.findData("first_line_fixed"))
         else:
             self.show_title.setChecked(False)
             self.show_channel_card.setChecked(False)
@@ -1377,6 +1404,8 @@ class SubtitleEditor(QWidget):
         self.shadow.setValue(int(settings.get("shadow", preset["shadow"])))
         self.background.setChecked(bool(settings.get("background", False)))
         self.auto_above_banner.setChecked(bool(settings.get("auto_above_banner", True)))
+        self.line_anchor_mode.setCurrentIndex(max(0, self.line_anchor_mode.findData(settings.get("line_anchor_mode", "first_line_fixed"))))
+        self.banner_gap.setValue(max(0, min(150, int(settings.get("banner_gap", 15) or 0))))
         self.margin.setValue(int(settings.get("safe_margin", 120)))
         self.offset.setValue(int(settings.get("vertical_offset", 0)))
         self.vertical.set_value(candidate.layout_settings or {})
@@ -1462,7 +1491,8 @@ class SubtitleEditor(QWidget):
             "background": self.background.isChecked(), "safe_margin": self.margin.value(),
             "vertical_offset": self.offset.value(),
             "auto_above_banner": self.auto_above_banner.isChecked(),
-            "banner_gap": 32,
+            "line_anchor_mode": self.line_anchor_mode.currentData() or "first_line_fixed",
+            "banner_gap": self.banner_gap.value(),
             "minimum_size": 44,
             "cues": [{"start": cue.start, "end": cue.end, "text": cue.text} for cue in self._cues()],
         }
@@ -1554,7 +1584,6 @@ class SubtitleEditor(QWidget):
         self._clamp_offset_to_safe_area()
         self._dirty = True
         self._preview_generation_id += 1
-        self.preview.invalidate_exact_frame()
         self.dirty_label.setText("Изменено · автосохранение…")
         self.dirty_label.setStyleSheet("color: #e6b450;")
         self._update_preview()

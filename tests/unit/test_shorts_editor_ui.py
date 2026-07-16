@@ -417,3 +417,47 @@ def test_realtime_blur_uses_reduced_background_branch():
     text = source.read_text(encoding="utf-8")
     assert "background.scaled(45, 80" in text
     assert "background.scaled(270, 480" in text
+
+
+def test_dirty_overlay_change_keeps_last_exact_frame_visible(tmp_path):
+    qt_app = app()
+    candidate = Candidate("short_001", 10, 20, 90, "one")
+    editor = SubtitleEditor()
+    editor.set_context(candidate, transcript(), SimpleNamespace(subtitles=tmp_path, cache=tmp_path))
+    exact = QImage(540, 960, QImage.Format_RGB32)
+    exact.fill(QColor("green"))
+    editor.apply_exact_preview_frame(exact, editor._preview_generation_id)
+    editor.offset.setValue(10)
+    qt_app.processEvents()
+    assert not editor.preview.exact_frame.isNull()
+    assert editor._preview_generation_id > 0
+
+
+def test_paused_proxy_frame_does_not_replace_exact_double_buffer():
+    qt_app = app()
+    editor = SubtitleEditor()
+    exact = QImage(540, 960, QImage.Format_RGB32)
+    exact.fill(QColor("green"))
+    proxy = QImage(1280, 720, QImage.Format_RGB32)
+    proxy.fill(QColor("red"))
+    editor.preview.set_exact_frame(exact)
+    editor.preview.set_video_frame(proxy, preserve_exact=True)
+    assert not editor.preview.exact_frame.isNull()
+    assert editor.preview.exact_frame.pixelColor(1, 1) == QColor("green")
+    assert qt_app is QApplication.instance()
+
+
+def test_line_anchor_and_banner_gap_persist_in_candidate(tmp_path):
+    qt_app = app()
+    candidate = Candidate("short_001", 10, 20, 90, "one")
+    editor = SubtitleEditor()
+    editor.set_context(candidate, transcript(), SimpleNamespace(subtitles=tmp_path))
+    editor.line_anchor_mode.setCurrentIndex(editor.line_anchor_mode.findData("block_center"))
+    editor.banner_gap.setValue(50)
+    editor._apply_configuration()
+    assert candidate.subtitle_settings["line_anchor_mode"] == "block_center"
+    assert candidate.subtitle_settings["banner_gap"] == 50
+    editor.set_context(candidate, transcript(), SimpleNamespace(subtitles=tmp_path))
+    assert editor.line_anchor_mode.currentData() == "block_center"
+    assert editor.banner_gap.value() == 50
+    assert qt_app is QApplication.instance()
