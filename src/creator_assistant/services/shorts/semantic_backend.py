@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from creator_assistant.domain.job import CancellationToken
 from creator_assistant.services.shorts.semantic_models import (
@@ -22,6 +22,20 @@ from creator_assistant.services.shorts.semantic_models import (
 
 PROMPT_VERSION = "shorts-semantic-v1"
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+class TitleTranslationResponse(BaseModel):
+    translation: str = Field(min_length=2, max_length=160)
+
+
+class HookSuggestion(BaseModel):
+    text: str = Field(min_length=2, max_length=80)
+    score: int = Field(ge=1, le=100)
+    reason: str = Field(min_length=2, max_length=240)
+
+
+class HookSuggestionsResponse(BaseModel):
+    suggestions: List[HookSuggestion] = Field(min_length=3, max_length=3)
 
 
 class SemanticBackendError(RuntimeError):
@@ -288,6 +302,58 @@ class OllamaSemanticScorer(SemanticScorerBackend):
             "gpu_percent": round(100 * size_vram / size, 1) if size else None,
             "context_length": int(runtime.get("context_length", 0) or 0),
         }
+
+    def translate_video_title(self, original_title: str, cancellation: CancellationToken) -> str:
+        """Translate a verified original title with the currently selected local model."""
+        cancellation.raise_if_cancelled()
+        prompt = (
+            "Переведи исходное английское название YouTube-видео на естественный русский язык. "
+            "Сохрани смысл, числа, имена и игровой контекст. Не добавляй пояснений, кавычек, хэштегов "
+            "или новых фактов. Верни только JSON по схеме.\n"
+            f"Исходное название: {original_title}"
+        )
+        response = self._structured_chat(prompt, TitleTranslationResponse, cancellation, think=False)
+        return " ".join(response.translation.strip().strip('"«»').split())
+
+    def suggest_short_hooks(self, context: Dict[str, Any], cancellation: CancellationToken) -> HookSuggestionsResponse:
+        """Create three independent hooks from the complete selected-candidate story."""
+        prompt = (
+            "Создай три разных коротких русских hook-заголовка для выбранного YouTube Short. "
+            "Проанализируй ВЕСЬ transcript: завязку, проблему, развитие и развязку. Заголовок должен "
+            "отражать проблему, необычное событие, цель, ошибку, результат или интригу, а не копировать "
+            "случайную первую реплику. Каждый вариант: 3–7 слов, желательно до 45 символов, без точки в "
+            "конце; вопросительный или восклицательный знак допустим. Для каждого варианта поставь осмысленную "
+            "оценку score от 1 до 100 и кратко объясни reason. Не используй технические названия "
+            "вроде «Видос», «Видео», «Minecraft» или «Шортс про игру». Верни ровно три варианта JSON.\n"
+            + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+        )
+        response = self._structured_chat(prompt, HookSuggestionsResponse, cancellation, think=False)
+        if self._hooks_are_weak(response, str(context.get("transcript", ""))):
+            repair = (
+                prompt
+                + "\nПредыдущий ответ был слабым или копировал первую реплику. Перескажи смысл ВСЕГО сюжета, "
+                  "учти финал и верни три новых самостоятельных hook-варианта."
+            )
+            response = self._structured_chat(repair, HookSuggestionsResponse, cancellation, think=False)
+        if self._hooks_are_weak(response, str(context.get("transcript", ""))):
+            raise SemanticResponseError("Локальная модель не смогла создать три качественных hook-варианта.")
+        return response
+
+    @staticmethod
+    def _hooks_are_weak(response: HookSuggestionsResponse, transcript: str) -> bool:
+        suggestions = response.suggestions
+        normalized = [" ".join(item.text.strip().split()).casefold().rstrip(".") for item in suggestions]
+        if len(set(normalized)) != 3:
+            return True
+        bad = {"видос", "видео", "minecraft", "шортс про игру", "shorts"}
+        first_phrase = " ".join(transcript.strip().split()[:10]).casefold().rstrip(".!?")
+        for text in normalized:
+            words = text.split()
+            if text in bad or not 3 <= len(words) <= 7 or len(text) > 60 or text.endswith("."):
+                return True
+            if first_phrase and (text == first_phrase or first_phrase.startswith(text)):
+                return True
+        return False
 
     def evaluate(self, candidates, cancellation, *, think=False):
         cancellation.raise_if_cancelled()

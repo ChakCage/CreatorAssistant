@@ -53,6 +53,37 @@ class ShortTitleService:
         words = text.split()
         return 2 <= len(words) <= 7 and not text.endswith(".")
 
+    def is_good_title(self, value: str) -> bool:
+        return self._is_good_title(value)
+
+    def hook_context(self, candidate: Candidate, transcript: Transcript | None) -> dict:
+        full_text = self._transcript_for_candidate(candidate, transcript)
+        segments = []
+        if transcript:
+            segments = [
+                {
+                    "start": round(max(0.0, segment.start - candidate.start), 3),
+                    "end": round(min(candidate.duration, segment.end - candidate.start), 3),
+                    "text": segment.text.strip(),
+                }
+                for segment in transcript.segments
+                if segment.end > candidate.start and segment.start < candidate.end and segment.text.strip()
+            ]
+        return {
+            "candidate_id": candidate.id,
+            "active_start": candidate.start,
+            "active_end": candidate.end,
+            "duration": candidate.duration,
+            "content_type": "gaming",
+            "moment_type": candidate.ai_moment_type,
+            "ai_reason": candidate.ai_reason,
+            "candidate_summary": candidate.text,
+            "transcript": full_text,
+            "transcript_segments": segments,
+            "story_beginning": " ".join(full_text.split()[:35]),
+            "story_ending": " ".join(full_text.split()[-35:]),
+        }
+
     def heuristic_hook(self, candidate: Candidate, transcript: Transcript | None, original_title: str) -> str:
         text = candidate.text or self._transcript_for_candidate(candidate, transcript)
         title = self._cleanup(text or original_title).upper()

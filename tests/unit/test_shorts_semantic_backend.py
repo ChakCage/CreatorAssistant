@@ -170,6 +170,46 @@ def test_cancellation_is_checked_after_api_response():
         OllamaSemanticScorer(opener=opener).evaluate([candidate()], token)
 
 
+def test_title_translation_sends_verified_original_title_to_selected_ollama_model():
+    requests = []
+
+    def opener(request, **_kwargs):
+        requests.append(json.loads(request.data))
+        return Response({"message": {"content": json.dumps({"translation": "Я добыл 48 235 блоков обсидиана — хардкор"}, ensure_ascii=False)}})
+
+    backend = OllamaSemanticScorer(model="qwen3.6:35b-a3b", opener=opener)
+    translated = backend.translate_video_title("I Mined 48,235 Obsidian - Hardcore", CancellationToken())
+    assert translated.startswith("Я добыл")
+    assert requests[0]["model"] == "qwen3.6:35b-a3b"
+    assert "I Mined 48,235 Obsidian - Hardcore" in requests[0]["messages"][1]["content"]
+
+
+def test_hook_generation_uses_full_transcript_returns_three_and_repairs_weak_first_reply():
+    requests = []
+    weak = {"suggestions": [
+        {"text": "А ну и где они?", "score": 70, "reason": "Первая реплика"},
+        {"text": "Minecraft", "score": 60, "reason": "Игра"},
+        {"text": "Шортс про игру", "score": 50, "reason": "Тема"},
+    ]}
+    strong = {"suggestions": [
+        {"text": "КУДА ПРОПАЛИ ВСЕ СКЕЛЕТЫ?", "score": 92, "reason": "Передаёт проблему"},
+        {"text": "ПОЧЕМУ ФЕРМА ПЕРЕСТАЛА РАБОТАТЬ?", "score": 86, "reason": "Создаёт интригу"},
+        {"text": "Я НАКОНЕЦ ПОЧИНИЛ ЭТУ ФЕРМУ", "score": 79, "reason": "Показывает развязку"},
+    ]}
+
+    def opener(request, **_kwargs):
+        requests.append(json.loads(request.data))
+        content = weak if len(requests) == 1 else strong
+        return Response({"message": {"content": json.dumps(content, ensure_ascii=False)}})
+
+    transcript = "А ну и где они? Затем я проверил спавнер и всю ферму. В финале нашёл поломку и починил механизм."
+    response = OllamaSemanticScorer(opener=opener).suggest_short_hooks({"transcript": transcript}, CancellationToken())
+    assert len(requests) == 2
+    assert transcript in requests[0]["messages"][1]["content"]
+    assert len(response.suggestions) == 3
+    assert response.suggestions[0].text == "КУДА ПРОПАЛИ ВСЕ СКЕЛЕТЫ?"
+
+
 def test_semantic_cache_is_atomic_and_ignores_render_settings(tmp_path):
     cache = SemanticCache(tmp_path / "semantic.json")
     payload = semantic_cache_payload([candidate()], model="qwen3:14b", content_type="gaming")
