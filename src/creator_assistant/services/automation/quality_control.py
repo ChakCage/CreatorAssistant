@@ -7,6 +7,7 @@ from PySide6.QtGui import QImageReader
 
 from creator_assistant.domain.automation.models import AutomationIssue, AutomationShort, RenderArtifact
 from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator
+from creator_assistant.services.shorts.text_alignment import HorizontalTextAlignment
 
 
 class AutomationQualityControl:
@@ -44,12 +45,18 @@ class AutomationQualityControl:
                 str(cue.get("text", "")), short.subtitle_settings,
                 short.branding_settings, banner_size,
             )
-            if layout.x < layout.safe_margin or layout.x + layout.width > 1080 - layout.safe_margin:
+            if layout.alignment is HorizontalTextAlignment.LEFT:
+                left = layout.x
+            elif layout.alignment is HorizontalTextAlignment.RIGHT:
+                left = layout.x - layout.width
+            else:
+                left = layout.x - layout.width / 2
+            if left < layout.safe_margin or left + layout.width > 1080 - layout.safe_margin:
                 issues.append(AutomationIssue("subtitle_outside_safe_area", "Субтитры выходят за безопасную область", True, "pre_render", short.short_id))
                 break
             if banner_size and short.branding_settings.get("show_channel_card"):
                 banner_rect = calculator.banner_rect(*banner_size, short.branding_settings)
-                if layout.y + layout.height > banner_rect.y:
+                if layout.y + layout.height / 2 > banner_rect.y:
                     issues.append(AutomationIssue("subtitle_banner_overlap", "Субтитры перекрывают баннер", True, "pre_render", short.short_id))
                     break
         if not 0 < short.duration <= 75.5:

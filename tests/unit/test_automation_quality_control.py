@@ -24,6 +24,16 @@ def test_pre_render_critical_validation():
     assert all(issue.critical for issue in issues)
 
 
+def test_normal_centered_subtitle_is_inside_safe_area():
+    item = AutomationShort(
+        "one", "source", "candidate", 1, 0, 40, 90, title="Заголовок",
+        candidate_data={"text": "Полная фраза!"},
+        subtitle_settings={"alignment": "center", "cues": [{"start": 0, "end": 2, "text": "Нормальный текст"}]},
+    )
+    issues = AutomationQualityControl().pre_render(item, transcript_exists=True)
+    assert not any(issue.code == "subtitle_outside_safe_area" for issue in issues)
+
+
 def test_ffprobe_validation_accepts_expected_mp4_and_three_frames(tmp_path):
     item = short(tmp_path)
 
