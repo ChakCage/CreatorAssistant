@@ -109,6 +109,9 @@ class AutomationShort:
     profile_id: str = ""
     issues: List[AutomationIssue] = field(default_factory=list)
     artifact: Optional[RenderArtifact] = None
+    composition_snapshot_hash: str = ""
+    render_key: str = ""
+    subtitle_status: str = "pending"
 
     @property
     def duration(self) -> float:
@@ -152,6 +155,8 @@ class AutomationJob:
         "minimum_duration": 25.0, "desired_duration": 45.0, "maximum_duration": 75.0,
     })
     composition_preset: Dict[str, Any] = field(default_factory=dict)
+    composition_snapshot: Dict[str, Any] = field(default_factory=dict)
+    composition_snapshot_hash: str = ""
     schedule_settings: Dict[str, Any] = field(default_factory=dict)
     platforms: List[str] = field(default_factory=lambda: ["youtube"])
     shorts: List[AutomationShort] = field(default_factory=list)

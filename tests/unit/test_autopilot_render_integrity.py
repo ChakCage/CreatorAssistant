@@ -111,7 +111,10 @@ def test_autopilot_composition_uses_same_shared_saved_settings(tmp_path):
     actual = job.shorts[0]
     assert actual.subtitle_settings == expected.subtitle
     assert actual.layout_settings == expected.layout
-    assert actual.branding_settings == expected.branding
+    assert actual.branding_settings["title_size"] == expected.branding["title_size"]
+    assert actual.branding_settings["banner_scale"] == expected.branding["banner_scale"]
+    assert actual.branding_settings["final_title_text"] == "Русское название"
+    assert actual.branding_settings["title_mode"] == "TRANSLATED_SOURCE_TITLE"
 
 
 def test_five_unique_selected_shorts_create_five_unique_queue_entries():

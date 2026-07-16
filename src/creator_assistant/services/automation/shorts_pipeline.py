@@ -22,6 +22,10 @@ from creator_assistant.services.shorts.source_service import ShortsSourceService
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
 from creator_assistant.services.shorts.title_assets import ShortTitleAssetService
 from creator_assistant.services.shorts.render_settings import VerticalRenderSettingsResolver
+from creator_assistant.services.shorts.project_template import (
+    ProjectShortsTemplate, TRANSLATED_SOURCE_TITLE, composition_snapshot_hash, render_identity,
+)
+from creator_assistant.services.shorts.transcription_service import TranscriptionService
 
 
 class ExistingShortsAutomationPipeline:
@@ -159,16 +163,18 @@ class ExistingShortsAutomationPipeline:
             assets = manifest.title_assets if manifest else {}
             candidate = Candidate(**short.candidate_data)
             translated = str(candidate.branding_settings.get("translated_video_title") or assets.get("translated_title") or "").strip()
-            hook = str(candidate.branding_settings.get("short_hook_title") or candidate.title or "").strip()
-            short.title = hook or translated
-            candidate.branding_settings["final_title_text"] = translated or short.title
-            candidate.branding_settings["show_title"] = bool(translated or short.title)
+            original = str(candidate.branding_settings.get("original_video_title") or assets.get("original_title") or "").strip()
+            short.title = translated or original
+            candidate.branding_settings["final_title_text"] = short.title
+            candidate.branding_settings["title_mode"] = TRANSLATED_SOURCE_TITLE
+            candidate.branding_settings["show_title"] = bool(short.title)
             short.candidate_data = asdict(candidate)
             short.status = AutomationShortStatus.PREPARING.value
 
     def prepare_composition(self, job: AutomationJob) -> None:
         job.shorts = unique_automation_shorts(job.shorts)
         resolver = VerticalRenderSettingsResolver(self.container.settings, self.assets)
+        template = self._job_template(job, resolver)
         for short in job.shorts:
             source = self._source(job, short.source_id)
             candidate = Candidate(**short.candidate_data)
@@ -182,13 +188,31 @@ class ExistingShortsAutomationPipeline:
                 selected_subtitle_preset=job.profile.subtitle_preset,
                 profile_layout=job.profile.composition_preset,
                 job_layout=job.composition_preset,
+                project_template=template,
             )
             short.subtitle_settings = resolved.subtitle
             short.layout_settings = resolved.layout
             short.branding_settings = resolved.branding
             short.profile_id = resolved.profile_id
+            short.composition_snapshot_hash = job.composition_snapshot_hash
+            if candidate.settings_override:
+                short.composition_snapshot_hash = composition_snapshot_hash({
+                    "job_snapshot": job.composition_snapshot_hash,
+                    "subtitle": {key: value for key, value in resolved.subtitle.items() if key != "cues"},
+                    "layout": resolved.layout,
+                    "branding": {
+                        key: value for key, value in resolved.branding.items()
+                        if key not in {"final_title_text", "channel_banner_path"}
+                    },
+                })
+            short.render_key = render_identity(
+                self._source_fingerprint(source), short.candidate_id, short.start, short.end,
+                job.composition_snapshot_hash,
+            )
+            self._rebuild_subtitles(source, candidate, short)
             short.candidate_data = asdict(candidate)
-            short.status = AutomationShortStatus.READY.value
+            if short.status != AutomationShortStatus.NEEDS_REVIEW.value:
+                short.status = AutomationShortStatus.READY.value
         job.resume_data["render_queue"] = self._render_queue_details(job.shorts)
 
     def quality_check(self, job: AutomationJob) -> None:
@@ -212,6 +236,7 @@ class ExistingShortsAutomationPipeline:
         job.shorts = unique_automation_shorts(job.shorts)
         job.resume_data["render_queue"] = self._render_queue_details(job.shorts)
         save()
+        rendered_keys: set[str] = set()
         for short in job.shorts:
             if short.status not in {
                 AutomationShortStatus.READY.value,
@@ -221,6 +246,10 @@ class ExistingShortsAutomationPipeline:
                 AutomationShortStatus.SCHEDULED.value,
             }:
                 continue
+            if short.render_key and short.render_key in rendered_keys:
+                continue
+            if short.render_key:
+                rendered_keys.add(short.render_key)
             if short.artifact and short.artifact.validated and short.status in {
                 AutomationShortStatus.RENDERED.value, AutomationShortStatus.APPROVED.value,
                 AutomationShortStatus.SCHEDULED.value,
@@ -239,15 +268,41 @@ class ExistingShortsAutomationPipeline:
             ass = paths.cache / f"{candidate.id}.autopilot.ass"
             SubtitleService().write(cues, paths.cache / f"{candidate.id}.autopilot.srt", ass, candidate.subtitle_settings, candidate.branding_settings)
             rank = short.candidate_rank or len(job.shorts)
-            target = paths.renders / f"[{rank:02d}] {candidate.id} [autopilot].mp4"
+            interval = f"{short.start:.3f}-{short.end:.3f}"
+            target = paths.renders / f"[{rank:02d}] {candidate.id} [{interval}] [autopilot].mp4"
             if target.exists():
-                target = paths.renders / f"[{rank:02d}] {candidate.id} [autopilot {job.job_id[-6:]}].mp4"
+                metadata = target.with_suffix(".render.json")
+                if metadata.is_file():
+                    try:
+                        previous = json.loads(metadata.read_text(encoding="utf-8"))
+                    except (OSError, ValueError, TypeError):
+                        previous = {}
+                    if previous.get("render_key") == short.render_key:
+                        short.artifact = RenderArtifact(candidate.id, candidate.candidate_rank, str(target))
+                        artifact, issues = self.qc.probe_render(
+                            self.container.runner, self.container.paths.get("ffprobe", "ffprobe.exe"),
+                            short, source.fps,
+                        )
+                        short.artifact = artifact
+                        short.issues.extend(issues)
+                        short.status = AutomationShortStatus.RENDERED.value if artifact.validated else AutomationShortStatus.NEEDS_REVIEW.value
+                        save()
+                        continue
+                target = paths.renders / f"[{rank:02d}] {candidate.id} [{interval}] [autopilot {job.job_id[-6:]}].mp4"
             short.status = AutomationShortStatus.RENDERING.value
             save()
             self.container.shorts_render.render(source, candidate, ass, target, _NeverCancelled())
             short.artifact = RenderArtifact(candidate.id, candidate.candidate_rank, str(target))
             artifact, issues = self.qc.probe_render(self.container.runner, self.container.paths.get("ffprobe", "ffprobe.exe"), short, source.fps)
             short.artifact = artifact
+            render_metadata = target.with_suffix(".render.json")
+            render_metadata.write_text(json.dumps({
+                "render_key": short.render_key,
+                "composition_snapshot_hash": short.composition_snapshot_hash,
+                "candidate_id": short.candidate_id,
+                "start": short.start,
+                "end": short.end,
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
             if artifact.validated:
                 issues.extend(self.qc.inspect_frames(
                     self.container.runner, self.container.paths.get("ffmpeg", "ffmpeg.exe"), short,
@@ -270,11 +325,102 @@ class ExistingShortsAutomationPipeline:
                 "end": item.end,
                 "output_filename": (
                     Path(item.artifact.output_path).name
-                    if item.artifact else f"[{(item.candidate_rank or index):02d}] {item.candidate_id} [autopilot].mp4"
+                    if item.artifact else f"[{(item.candidate_rank or index):02d}] {item.candidate_id} [{item.start:.3f}-{item.end:.3f}] [autopilot].mp4"
                 ),
+                "composition_snapshot_hash": item.composition_snapshot_hash,
+                "render_key": item.render_key,
+                "subtitle_status": item.subtitle_status,
             }
             for index, item in enumerate(shorts, 1)
         ]
+
+    def _job_template(self, job: AutomationJob, resolver: VerticalRenderSettingsResolver) -> ProjectShortsTemplate:
+        if job.composition_snapshot:
+            stored = ProjectShortsTemplate.from_dict(job.composition_snapshot.get("template"))
+            if stored:
+                if not job.composition_snapshot_hash:
+                    job.composition_snapshot_hash = composition_snapshot_hash(job.composition_snapshot)
+                return stored
+        if not job.shorts:
+            template = ProjectShortsTemplate()
+            job.composition_snapshot = {"schema_version": 1, "template": template.to_dict(), "selected_profile_id": job.profile.channel_profile_id}
+            job.composition_snapshot_hash = composition_snapshot_hash(job.composition_snapshot)
+            return template
+        first_short = job.shorts[0]
+        first_source = self._source(job, first_short.source_id)
+        manifest = ShortsManifestStore(Path(first_source.shorts_project_path) / "shorts_manifest.json").load()
+        stored = ProjectShortsTemplate.from_dict(manifest.shorts_template if manifest else None)
+        if stored:
+            template = stored
+        else:
+            candidate = Candidate(**first_short.candidate_data)
+            resolved = resolver.resolve(
+                candidate,
+                channel_id=first_source.channel_id,
+                source_author=first_source.source_author,
+                aliases=[first_source.source_author, first_source.folder_author],
+                selected_profile_id=job.profile.channel_profile_id,
+                selected_subtitle_preset=job.profile.subtitle_preset,
+                profile_layout=job.profile.composition_preset,
+                job_layout=job.composition_preset,
+                use_candidate_override=False,
+            )
+            candidate.subtitle_settings = resolved.subtitle
+            candidate.layout_settings = resolved.layout
+            candidate.branding_settings = resolved.branding
+            template = ProjectShortsTemplate.from_candidate(candidate)
+        snapshot = {
+            "schema_version": 1,
+            "template": template.to_dict(),
+            "selected_profile_id": job.profile.channel_profile_id,
+        }
+        job.composition_snapshot = snapshot
+        job.composition_snapshot_hash = composition_snapshot_hash(snapshot)
+        return template
+
+    def _rebuild_subtitles(self, source, candidate: Candidate, short: AutomationShort) -> None:
+        transcript_path = Path(source.shorts_project_path) / "Analysis" / "transcript.json"
+        if not transcript_path.is_file():
+            short.subtitle_status = "missing"
+            return
+        try:
+            transcript = TranscriptionService.load(transcript_path)
+        except (OSError, ValueError, TypeError, KeyError):
+            short.subtitle_status = "missing"
+            return
+        service = SubtitleService()
+        cues = service.generate(
+            transcript, candidate,
+            int(short.subtitle_settings.get("maximum", 36)),
+            int(short.subtitle_settings.get("lines", 2)),
+        )
+        problems = service.validate(cues, candidate.duration, short.subtitle_settings)
+        if problems:
+            cues = service.generate(
+                transcript, candidate,
+                int(short.subtitle_settings.get("maximum", 36)),
+                int(short.subtitle_settings.get("lines", 2)),
+            )
+            problems = service.validate(cues, candidate.duration, short.subtitle_settings)
+        short.subtitle_settings["cues"] = [asdict(cue) for cue in cues]
+        if problems:
+            short.subtitle_status = "invalid"
+            short.status = AutomationShortStatus.NEEDS_REVIEW.value
+            short.issues.append(AutomationIssue(
+                "invalid_subtitles", "; ".join(problems), True, "prepare_composition", short.short_id,
+            ))
+        else:
+            short.subtitle_status = "ready"
+
+    @staticmethod
+    def _source_fingerprint(source) -> str:
+        path = Path(source.shorts_project_path) / "Analysis" / "source_info.json"
+        if path.is_file():
+            try:
+                return str(json.loads(path.read_text(encoding="utf-8")).get("fingerprint") or source.source_id)
+            except (OSError, ValueError, TypeError):
+                pass
+        return source.source_id
 
     @staticmethod
     def _source(job: AutomationJob, source_id: str):
