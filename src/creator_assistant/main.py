@@ -4,6 +4,7 @@ import multiprocessing
 import sys
 import json
 import time
+import os
 from copy import deepcopy
 from pathlib import Path
 
@@ -55,6 +56,21 @@ QHeaderView::section { background: #202833; color: #bfc9d6; border: 0; padding: 
 QScrollBar:vertical { background: #11161d; width: 11px; }
 QScrollBar::handle:vertical { background: #344152; border-radius: 5px; min-height: 25px; }
 """
+
+
+def _prepare_headless_console() -> None:
+    """Attach the windowed PyInstaller build to its caller for CLI output."""
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        return
+    try:
+        import ctypes
+        attached = bool(ctypes.windll.kernel32.AttachConsole(-1))
+        if not attached:
+            ctypes.windll.kernel32.AllocConsole()
+        sys.stdout = open("CONOUT$", "w", encoding="utf-8", buffering=1)
+        sys.stderr = open("CONOUT$", "w", encoding="utf-8", buffering=1)
+    except (OSError, AttributeError):
+        pass
 
 
 def _proxy_ui_verification(window: MainWindow, container: ServiceContainer, report_path: Path) -> None:
@@ -137,12 +153,15 @@ def main() -> int:
     install_qt_message_handler()
     automation_args = {"--run-job", "--resume-job", "--list-jobs", "--show-job"}
     if any(value in automation_args for value in sys.argv[1:]):
+        _prepare_headless_console()
         try:
             from creator_assistant.services.automation.cli import run_automation_cli
-            return run_automation_cli(sys.argv[1:], ServiceContainer())
+            output = (lambda value: print(value)) if sys.stdout is not None else (lambda _value: None)
+            return run_automation_cli(sys.argv[1:], ServiceContainer(), output)
         except Exception as exc:
             log_exception("Automation CLI failed", exc)
-            print(f"Automation CLI error: {exc}", file=sys.stderr)
+            if sys.stderr is not None:
+                print(f"Automation CLI error: {exc}", file=sys.stderr)
             return 1
     app = QApplication(sys.argv)
     app.setApplicationName("Creator Assistant")
