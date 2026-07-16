@@ -157,7 +157,8 @@ def main() -> int:
         try:
             from creator_assistant.services.automation.cli import run_automation_cli
             output = (lambda value: print(value)) if sys.stdout is not None else (lambda _value: None)
-            return run_automation_cli(sys.argv[1:], ServiceContainer(), output)
+            container = ServiceContainer()
+            return run_automation_cli(sys.argv[1:], container.automation_engine, output)
         except Exception as exc:
             log_exception("Automation CLI failed", exc)
             if sys.stderr is not None:
