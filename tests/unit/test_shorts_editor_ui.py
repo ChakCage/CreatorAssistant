@@ -267,6 +267,46 @@ def test_title_presets_are_distinct_and_legacy_banner_x_is_centered(tmp_path):
     assert len(set(values)) == 3
 
 
+def test_title_buttons_use_cached_values_without_ollama_calls(tmp_path, monkeypatch):
+    qt_app = app()
+    paths = SimpleNamespace(subtitles=tmp_path)
+    candidate = Candidate(
+        "short_001", 10, 20, 90, "one",
+        branding_settings={
+            "original_video_title": "I Mined 48,235 Obsidian - Hardcore",
+            "translated_video_title": "Я добыл 48 235 обсидиана — хардкор",
+            "title_suggestions": {"suggestions": []},
+        },
+    )
+    editor = SubtitleEditor(semantic_backend=object())
+    calls = []
+    monkeypatch.setattr(editor, "_run_ai_title_task", lambda *_args, **_kwargs: calls.append("ollama"))
+    monkeypatch.setattr("creator_assistant.ui.shorts.subtitle_editor.QMessageBox.information", lambda *_args, **_kwargs: None)
+    editor.set_context(candidate, transcript(), paths)
+    editor._title_translate_clicked()
+    assert editor.title_text.text().startswith("Я добыл")
+    editor._title_hook_clicked()
+    assert calls == []
+    assert qt_app is QApplication.instance()
+
+
+def test_boundary_change_marks_title_suggestions_stale(tmp_path):
+    from creator_assistant.services.shorts.title_assets import ShortTitleAssetService
+
+    candidate = Candidate(
+        "short_001", 10, 20, 90, "one",
+        branding_settings={
+            "title_suggestions": {
+                "status": "ready",
+                "suggestions": [{"id": "hook_1", "text": "ГОТОВЫЙ ХУК", "score": 90, "reason": "ok"}],
+            }
+        },
+    )
+    candidate.start, candidate.end = 5, 15
+    ShortTitleAssetService().mark_stale(candidate, transcript())
+    assert candidate.branding_settings["title_suggestions"]["status"] == "stale"
+
+
 def test_stale_exact_preview_generation_cannot_replace_current_frame():
     qt_app = app()
     editor = SubtitleEditor()
