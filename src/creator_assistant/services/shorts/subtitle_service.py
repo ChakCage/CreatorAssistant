@@ -93,14 +93,123 @@ def fit_cues(cues: Iterable[SubtitleCue], settings: dict) -> tuple[list[Subtitle
 
 class SubtitleService:
     def generate(self, transcript: Transcript, candidate: Candidate, maximum: int = 36, lines: int = 2) -> list[SubtitleCue]:
-        cues = []
+        timed_words: list[tuple[float, float, str]] = []
+        fallback_segments: list[tuple[float, float, str]] = []
         for segment in transcript.segments:
             start = max(segment.start, candidate.start)
             end = min(segment.end, candidate.end)
             if end <= start or not segment.text.strip():
                 continue
-            cues.append(SubtitleCue(round(start - candidate.start, 3), round(end - candidate.start, 3), wrap_subtitle(segment.text, maximum, lines)))
-        return cues
+            words = [
+                (max(word.start, candidate.start), min(word.end, candidate.end), word.word.strip())
+                for word in segment.words
+                if word.end > candidate.start and word.start < candidate.end and word.word.strip()
+            ]
+            if words:
+                timed_words.extend(item for item in words if item[1] > item[0])
+            else:
+                fallback_segments.append((start, end, segment.text.strip()))
+        cues = self._word_cues(timed_words, candidate, maximum, lines)
+        cues.extend(self._segment_cues(fallback_segments, candidate, maximum, lines))
+        cues.sort(key=lambda item: (item.start, item.end))
+        result: list[SubtitleCue] = []
+        for cue in cues:
+            cue = SubtitleCue(max(0.0, cue.start), min(candidate.duration, cue.end), cue.text.strip())
+            if cue.end <= cue.start or not cue.text:
+                continue
+            if result and cue.text.casefold() == result[-1].text.casefold() and cue.start <= result[-1].end + 0.05:
+                result[-1].end = max(result[-1].end, cue.end)
+                continue
+            if result and cue.start < result[-1].end:
+                cue.start = result[-1].end
+            if cue.end > cue.start:
+                result.append(cue)
+        return result
+
+    @staticmethod
+    def _word_cues(words, candidate: Candidate, maximum: int, lines: int) -> list[SubtitleCue]:
+        if not words:
+            return []
+        limit = max(16, int(maximum) * max(1, min(2, int(lines))))
+        result, group = [], []
+
+        def flush() -> None:
+            if not group:
+                return
+            text = " ".join(item[2] for item in group).strip()
+            result.append(SubtitleCue(
+                round(group[0][0] - candidate.start, 3),
+                round(group[-1][1] - candidate.start, 3),
+                wrap_subtitle(text, maximum, min(2, lines)),
+            ))
+            group.clear()
+
+        for item in sorted(words, key=lambda value: (value[0], value[1])):
+            proposed = " ".join([*(value[2] for value in group), item[2]])
+            pause = item[0] - group[-1][1] if group else 0
+            duration = item[1] - group[0][0] if group else item[1] - item[0]
+            if group and (pause >= 0.65 or duration > 4.5 or len(proposed) > limit):
+                flush()
+            group.append(item)
+            current_duration = group[-1][1] - group[0][0]
+            if item[2].rstrip().endswith((".", "!", "?", "…", ":", ";")) and current_duration >= 1.0:
+                flush()
+        flush()
+        return result
+
+    @staticmethod
+    def _segment_cues(segments, candidate: Candidate, maximum: int, lines: int) -> list[SubtitleCue]:
+        result: list[SubtitleCue] = []
+        limit = max(16, int(maximum) * max(1, min(2, int(lines))))
+        for start, end, text in segments:
+            words = text.split()
+            chunks: list[list[str]] = [words]
+            duration = end - start
+            count = int(duration / 6.0 + 0.999) if duration > 8.0 else 1
+            if len(text) > limit * 3:
+                count = max(count, int(len(text) / (limit * 2) + 0.999))
+            if count > 1 and words:
+                per_chunk = max(1, int(len(words) / count + 0.999))
+                chunks = [words[index:index + per_chunk] for index in range(0, len(words), per_chunk)]
+            weights = [max(1, len(chunk)) for chunk in chunks]
+            total = sum(weights) or 1
+            cursor = start
+            for index, (chunk, weight) in enumerate(zip(chunks, weights)):
+                cue_end = end if index == len(chunks) - 1 else cursor + duration * weight / total
+                result.append(SubtitleCue(
+                    round(cursor - candidate.start, 3), round(cue_end - candidate.start, 3),
+                    wrap_subtitle(" ".join(chunk), maximum, min(2, lines)),
+                ))
+                cursor = cue_end
+        return result
+
+    @staticmethod
+    def validate(cues: Iterable[SubtitleCue], duration: float, settings: dict) -> list[str]:
+        values = list(cues)
+        if not values:
+            return ["События субтитров отсутствуют"]
+        problems: list[str] = []
+        previous_end = -1.0
+        seen: set[tuple[int, int, str]] = set()
+        for cue in values:
+            if cue.start < 0 or cue.end > duration + 0.001 or cue.end <= cue.start:
+                problems.append("Событие выходит за границы кандидата")
+            if cue.start < previous_end - 0.001:
+                problems.append("События субтитров пересекаются")
+            if cue.end - cue.start > 8.01:
+                problems.append("Событие субтитров длится более 8 секунд")
+            if len(cue.text.replace("\n", " ")) > max(30, int(settings.get("maximum", 36)) * 3):
+                problems.append("Событие содержит слишком большой абзац")
+            if len(cue.text.splitlines()) > min(2, int(settings.get("lines", 2))):
+                problems.append("Событие содержит слишком много строк")
+            if cue.text.rstrip().endswith(("-", "‑", "�")):
+                problems.append("Последнее слово события оборвано")
+            identity = (round(cue.start * 1000), round(cue.end * 1000), cue.text.casefold())
+            if identity in seen:
+                problems.append("Обнаружено дублирующее событие")
+            seen.add(identity)
+            previous_end = max(previous_end, cue.end)
+        return list(dict.fromkeys(problems))
 
     def write(
         self,

@@ -8,6 +8,8 @@ from PySide6.QtGui import QImageReader
 from creator_assistant.domain.automation.models import AutomationIssue, AutomationShort, RenderArtifact
 from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator
 from creator_assistant.services.shorts.text_alignment import HorizontalTextAlignment
+from creator_assistant.services.shorts.subtitle_service import SubtitleService
+from creator_assistant.domain.shorts.models import SubtitleCue
 
 
 class AutomationQualityControl:
@@ -20,6 +22,16 @@ class AutomationQualityControl:
         cues = short.subtitle_settings.get("cues", [])
         if not cues:
             issues.append(AutomationIssue("missing_subtitles", "События субтитров отсутствуют", True, "pre_render", short.short_id))
+        else:
+            subtitle_problems = SubtitleService.validate(
+                [SubtitleCue(float(item["start"]), float(item["end"]), str(item["text"])) for item in cues],
+                short.duration,
+                short.subtitle_settings,
+            )
+            issues.extend(
+                AutomationIssue("invalid_subtitles", problem, True, "pre_render", short.short_id)
+                for problem in subtitle_problems
+            )
         if not str(short.candidate_data.get("text", "")).strip():
             issues.append(AutomationIssue("empty_candidate_text", "У кандидата отсутствует связный transcript", True, "pre_render", short.short_id))
         candidate_text = str(short.candidate_data.get("text", "")).strip()
