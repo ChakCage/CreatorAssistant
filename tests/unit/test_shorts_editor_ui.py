@@ -228,3 +228,51 @@ def test_render_queue_checkbox_is_independent_from_approved_status(tmp_path):
     assert first.selected_for_render is True
     assert second.selected_for_render is False
     assert qt_app is QApplication.instance()
+
+
+def test_vertical_editor_timeline_drags_and_subtitle_row_seeks(tmp_path):
+    qt_app = app()
+    paths = SimpleNamespace(subtitles=tmp_path, cache=tmp_path)
+    candidate = Candidate("short_001", 10, 20, 90, "one")
+    editor = SubtitleEditor()
+    editor.set_context(candidate, transcript(), paths)
+    assert editor.timeline.maximum() == 10_000
+    editor.resize(1100, 900)
+    editor.show()
+    qt_app.processEvents()
+    y = max(1, editor.timeline.height() // 2)
+    QTest.mousePress(editor.timeline, Qt.LeftButton, pos=QPoint(15, y))
+    QTest.mouseMove(editor.timeline, QPoint(max(30, editor.timeline.width() - 15), y))
+    QTest.mouseRelease(editor.timeline, Qt.LeftButton, pos=QPoint(max(30, editor.timeline.width() - 15), y))
+    assert editor._preview_position_ms > 8_000
+    editor._subtitle_row_clicked(0, 2)
+    assert editor._preview_position_ms == 0
+    assert editor.table.currentRow() == 0
+
+
+def test_title_presets_are_distinct_and_legacy_banner_x_is_centered(tmp_path):
+    qt_app = app()
+    paths = SimpleNamespace(subtitles=tmp_path)
+    candidate = Candidate(
+        "short_001", 10, 20, 90, "one",
+        branding_settings={"original_video_title": "Good title", "banner_x": 50},
+    )
+    editor = SubtitleEditor()
+    editor.set_context(candidate, transcript(), paths)
+    assert editor.banner_x.value() == 0
+    values = []
+    for name in ("clean", "large", "gaming"):
+        editor.title_style.setCurrentIndex(editor.title_style.findData(name))
+        values.append((editor.title_size.value(), editor.title_outline.value(), editor.title_shadow.value()))
+    assert len(set(values)) == 3
+
+
+def test_stale_exact_preview_generation_cannot_replace_current_frame():
+    qt_app = app()
+    editor = SubtitleEditor()
+    old_generation = editor._preview_generation_id
+    editor._preview_generation_id += 1
+    image = QImage(32, 32, QImage.Format_RGB32)
+    image.fill(QColor("green"))
+    assert not editor.apply_exact_preview_frame(image, old_generation)
+    assert editor.apply_exact_preview_frame(image, editor._preview_generation_id)

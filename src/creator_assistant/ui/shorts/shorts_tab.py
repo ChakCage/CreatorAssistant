@@ -405,7 +405,7 @@ class ShortsTab(QWidget):
         self.workspace = QTabWidget()
         self.candidate_list = CandidateList()
         self.candidate_editor = CandidateEditor()
-        self.subtitle_editor = SubtitleEditor()
+        self.subtitle_editor = SubtitleEditor(self.container.shorts_semantic_backend)
         self.render_queue = RenderQueue()
         self.workspace.addTab(self.candidate_list, "Кандидаты")
         self.workspace.addTab(self.candidate_editor, "Редактор")
@@ -621,7 +621,21 @@ class ShortsTab(QWidget):
 
     def _apply_branding_defaults(self, candidate) -> None:
         defaults = dict(self.container.settings.get("shorts_branding_defaults", {}))
+        original = self.title_service.resolve_original_title(self.source, self.paths) if self.source else None
         if candidate.branding_settings:
+            branding = dict(candidate.branding_settings)
+            if original and not self.title_service.is_good_title(str(branding.get("original_video_title", ""))):
+                branding["original_video_title"] = original.title
+                branding["original_video_title_source"] = original.source
+            elif original and not str(branding.get("original_video_title_source", "")).strip():
+                branding["original_video_title_source"] = original.source
+            if "banner_offset_x" not in branding:
+                # Pre-offset banner_x was absolute; do not reinterpret legacy X=50 as +50.
+                branding["banner_offset_x"] = 0
+            branding.setdefault("banner_offset_y", 0)
+            branding.setdefault("title_style", "clean")
+            branding.setdefault("title_shadow", 2)
+            candidate.branding_settings = branding
             return
         source_author = self._source_author_hint()
         linked_profiles = self.container.settings.get("shorts_channel_profile_links", {})
@@ -631,7 +645,6 @@ class ShortsTab(QWidget):
             source_author=source_author,
             aliases=[source_author, Path(self.source.name).stem if self.source else ""],
         )
-        original = self.title_service.resolve_original_title(self.source, self.paths) if self.source else None
         candidate.branding_settings = {
             **defaults,
             "source_author": source_author,
@@ -766,8 +779,8 @@ class ShortsTab(QWidget):
             for key, value in {
                 key: branding.get(key)
                 for key in (
-                    "preset", "show_subtitles", "show_title", "final_title_text", "title_size", "title_bold",
-                    "title_color", "title_outline", "title_background", "title_y", "title_max_lines",
+                    "preset", "show_subtitles", "show_title", "final_title_text", "title_style", "title_size", "title_bold",
+                    "title_color", "title_outline", "title_shadow", "title_background", "title_y", "title_max_lines",
                     "show_channel_card", "channel_profile_id", "banner_scale", "banner_anchor",
                     "banner_fit_mode", "banner_offset_x", "banner_offset_y", "banner_opacity", "safe_margin",
                 )
