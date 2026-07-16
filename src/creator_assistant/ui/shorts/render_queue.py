@@ -16,16 +16,19 @@ class RenderQueue(QWidget):
     render_requested = Signal(object)
     cancel_requested = Signal()
     retry_requested = Signal(object)
+    selection_changed = Signal(object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.candidates: list[Candidate] = []
         self.jobs: dict[str, RenderJob] = {}
         self.renders_folder: Path | None = None
+        self._refreshing = False
         layout = QVBoxLayout(self)
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(("Выбрать", "Кандидат", "Длина", "Статус", "Прогресс", "Скорость", "Файл / ошибка"))
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
+        self.table.itemChanged.connect(self._selection_changed)
         layout.addWidget(self.table, 1)
         actions = QHBoxLayout()
         render = QPushButton("Отрендерить выбранные")
@@ -49,17 +52,19 @@ class RenderQueue(QWidget):
 
     def refresh(self) -> None:
         approved = [item for item in self.candidates if item.status == "approved"]
+        self._refreshing = True
         self.table.setRowCount(len(approved))
         for row, candidate in enumerate(approved):
             choose = QTableWidgetItem()
             choose.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
-            choose.setCheckState(Qt.Checked)
+            choose.setCheckState(Qt.Checked if candidate.selected_for_render else Qt.Unchecked)
             choose.setData(Qt.UserRole, candidate)
             job = self.jobs.get(candidate.id)
             values = (candidate.id, f"{candidate.duration:.1f} с", STATUS.get(job.status, job.status) if job else "Не добавлен", f"{job.progress:.1f}%" if job and job.progress is not None else "—", job.speed if job else "", (job.error or job.output_path) if job else "")
             self.table.setItem(row, 0, choose)
             for column, value in enumerate(values, 1):
                 self.table.setItem(row, column, QTableWidgetItem(str(value)))
+        self._refreshing = False
 
     def update_job(self, job: RenderJob) -> None:
         self.jobs[job.candidate_id] = job
@@ -70,9 +75,19 @@ class RenderQueue(QWidget):
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)
             if item and item.checkState() == Qt.Checked:
-                selected.append(item.data(Qt.UserRole))
+                candidate = item.data(Qt.UserRole)
+                candidate.selected_for_render = True
+                selected.append(candidate)
         if selected:
             self.render_requested.emit(selected)
+
+    def _selection_changed(self, item: QTableWidgetItem) -> None:
+        if self._refreshing or item.column() != 0:
+            return
+        candidate = item.data(Qt.UserRole)
+        if candidate:
+            candidate.selected_for_render = item.checkState() == Qt.Checked
+            self.selection_changed.emit(candidate)
 
     def _retry(self) -> None:
         failed_ids = {job.candidate_id for job in self.jobs.values() if job.status in {"error", "cancelled"}}

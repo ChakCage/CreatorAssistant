@@ -81,6 +81,7 @@ class Candidate:
     reasons: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     status: str = "review"
+    selected_for_render: bool = False
     alternatives: List[List[float]] = field(default_factory=list)
     thumbnail: str = ""
     title: str = ""
