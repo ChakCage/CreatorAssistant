@@ -34,6 +34,9 @@ from creator_assistant.services.shorts.subtitle_layout import (
     SubtitleLayoutCalculator,
     ass_qt_bearing_offset,
     ass_qt_font_stretch,
+    default_subtitle_preset,
+    subtitle_preset_from_settings,
+    subtitle_preset_value,
 )
 from creator_assistant.services.shorts.subtitle_service import (
     STYLE_PRESETS, SubtitleService, resolved_style,
@@ -401,14 +404,19 @@ class SubtitleEditor(QWidget):
     configuration_changed = Signal(object)
     test_render_requested = Signal(object)
     defaults_requested = Signal(object)
+    subtitle_preset_changed = Signal(str, object)
 
-    def __init__(self, semantic_backend=None, parent=None) -> None:
+    def __init__(self, semantic_backend=None, parent=None, subtitle_presets=None) -> None:
         super().__init__(parent)
         self.service = SubtitleService()
         self.candidate = self.transcript = self.paths = None
         self.original: list[SubtitleCue] = []
         self._loading = False
         self._dirty = False
+        self._subtitle_presets = {
+            name: subtitle_preset_value(subtitle_presets, name)
+            for name in STYLE_PRESETS
+        }
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(250)
@@ -605,6 +613,12 @@ class SubtitleEditor(QWidget):
         style_form.addRow(self.auto_above_banner)
         style_form.addRow("Положение при разном числе строк", self.line_anchor_mode)
         style_form.addRow("Расстояние до баннера", self.banner_gap)
+        self.subtitle_preset_save = QPushButton("Сохранить изменения в пресете")
+        self.subtitle_preset_reset = QPushButton("Сбросить пресет к стандартному")
+        self.subtitle_preset_status = QLabel("")
+        self.subtitle_preset_status.setProperty("class", "muted")
+        style_form.addRow(self._row(self.subtitle_preset_save, self.subtitle_preset_reset))
+        style_form.addRow(self.subtitle_preset_status)
         self.preview = RealtimeCompositionRenderer()
         self.preview_quality = QComboBox()
         for label, size, hint in (
@@ -724,6 +738,8 @@ class SubtitleEditor(QWidget):
         self.top_splitter.splitterMoved.connect(self._save_splitters)
 
         self.style.currentIndexChanged.connect(self._style_selected)
+        self.subtitle_preset_save.clicked.connect(self._save_subtitle_preset)
+        self.subtitle_preset_reset.clicked.connect(self._reset_subtitle_preset)
         self.title_style.currentIndexChanged.connect(self._title_style_selected)
         self.branding_preset.currentIndexChanged.connect(self._branding_preset_selected)
         self.title_from_video.clicked.connect(self._title_from_video_clicked)
@@ -1613,12 +1629,49 @@ class SubtitleEditor(QWidget):
     def _style_selected(self) -> None:
         if self._loading:
             return
-        preset = STYLE_PRESETS.get(str(self.style.currentData()), STYLE_PRESETS["clean"])
-        self.size.setValue(preset["size"])
-        self.outline.setValue(preset["outline"])
-        self.shadow.setValue(preset["shadow"])
-        self.maximum.setValue({"clean": 36, "large": 24, "gaming": 28}.get(str(self.style.currentData()), 36))
-        self._mark_dirty()
+        name = str(self.style.currentData() or "clean")
+        self._apply_subtitle_preset(subtitle_preset_value(self._subtitle_presets, name))
+        self.subtitle_preset_status.setText("Загружены сохранённые настройки пресета")
+
+    def _apply_subtitle_preset(self, preset: dict, *, mark_dirty: bool = True) -> None:
+        was_loading = self._loading
+        self._loading = True
+        try:
+            font_name = str(preset.get("font_family") or DEFAULT_FONT_FAMILY)
+            font_index = self.subtitle_font.findData(font_name)
+            if font_index < 0:
+                self.subtitle_font.addItem(font_name, font_name)
+                font_index = self.subtitle_font.count() - 1
+            self.subtitle_font.setCurrentIndex(font_index)
+            self.size.setValue(int(preset.get("size", 58)))
+            self.position.setCurrentIndex(max(0, self.position.findData(preset.get("position", "lower"))))
+            self.subtitle_alignment.setCurrentIndex(max(0, self.subtitle_alignment.findData(preset.get("alignment", "center"))))
+            self.subtitle_offset_x.setValue(int(preset.get("horizontal_offset", 0)))
+            self.offset.setValue(int(preset.get("vertical_offset", 0)))
+            self.outline.setValue(int(preset.get("outline", 3)))
+            self.shadow.setValue(int(preset.get("shadow", 1)))
+            self.maximum.setValue(int(preset.get("maximum", 36)))
+            self.lines.setValue(int(preset.get("lines", 2)))
+            self.banner_gap.setValue(int(preset.get("banner_gap", 15)))
+        finally:
+            self._loading = was_loading
+        if mark_dirty and not was_loading:
+            self._mark_dirty()
+
+    def _save_subtitle_preset(self) -> None:
+        name = str(self.style.currentData() or "clean")
+        preset = subtitle_preset_from_settings(self.current_settings(), name)
+        self._subtitle_presets[name] = deepcopy(preset)
+        self.subtitle_preset_changed.emit(name, deepcopy(preset))
+        self.subtitle_preset_status.setText("Изменения пресета сохранены")
+
+    def _reset_subtitle_preset(self) -> None:
+        name = str(self.style.currentData() or "clean")
+        preset = default_subtitle_preset(name)
+        self._subtitle_presets[name] = deepcopy(preset)
+        self._apply_subtitle_preset(preset)
+        self.subtitle_preset_changed.emit(name, deepcopy(preset))
+        self.subtitle_preset_status.setText("Пресет сброшен к стандартному")
 
     def _title_style_selected(self) -> None:
         if self._loading:

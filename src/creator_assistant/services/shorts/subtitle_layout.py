@@ -45,6 +45,63 @@ STYLE_PRESETS = {
     },
 }
 
+SUBTITLE_PRESET_FIELDS = (
+    "font_family",
+    "size",
+    "position",
+    "horizontal_offset",
+    "vertical_offset",
+    "alignment",
+    "outline",
+    "shadow",
+    "maximum",
+    "lines",
+    "banner_gap",
+)
+
+
+def default_subtitle_preset(name: str) -> dict:
+    """Return an independent factory preset containing user-editable fields."""
+    name = name if name in STYLE_PRESETS else "clean"
+    style = STYLE_PRESETS[name]
+    return {
+        "style": name,
+        "font_family": str(style["font"]),
+        "size": int(style["size"]),
+        "position": "lower",
+        "horizontal_offset": 0,
+        "vertical_offset": 0,
+        "alignment": "center",
+        "outline": int(style["outline"]),
+        "shadow": int(style["shadow"]),
+        "maximum": {"clean": 36, "large": 24, "gaming": 28}[name],
+        "lines": 2,
+        "banner_gap": 15,
+    }
+
+
+def subtitle_preset_value(presets: object, name: str) -> dict:
+    """Merge a stored (possibly old/partial) preset over factory values."""
+    name = name if name in STYLE_PRESETS else "clean"
+    result = default_subtitle_preset(name)
+    raw = presets.get(name, {}) if isinstance(presets, dict) else {}
+    if isinstance(raw, dict):
+        for key in SUBTITLE_PRESET_FIELDS:
+            if key in raw:
+                result[key] = raw[key]
+    result["style"] = name
+    return result
+
+
+def subtitle_preset_from_settings(settings: dict, name: str | None = None) -> dict:
+    """Extract only explicitly persistable fields from one Short's settings."""
+    preset_name = str(name or settings.get("style") or "clean")
+    result = default_subtitle_preset(preset_name)
+    for key in SUBTITLE_PRESET_FIELDS:
+        if key in settings:
+            result[key] = settings[key]
+    return result
+
 
 @dataclass(frozen=True)
 class SubtitleLayout:

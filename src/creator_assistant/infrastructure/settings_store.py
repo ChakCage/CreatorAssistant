@@ -95,6 +95,26 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "foreground_scale": 100,
         "crop_center": 50,
     },
+    "shorts_subtitle_presets": {
+        "clean": {
+            "style": "clean", "font_family": "Segoe UI", "size": 58,
+            "position": "lower", "horizontal_offset": 0, "vertical_offset": 0,
+            "alignment": "center", "outline": 3, "shadow": 1,
+            "maximum": 36, "lines": 2, "banner_gap": 15,
+        },
+        "large": {
+            "style": "large", "font_family": "Segoe UI", "size": 80,
+            "position": "lower", "horizontal_offset": 0, "vertical_offset": 0,
+            "alignment": "center", "outline": 5, "shadow": 2,
+            "maximum": 24, "lines": 2, "banner_gap": 15,
+        },
+        "gaming": {
+            "style": "gaming", "font_family": "Arial Black", "size": 70,
+            "position": "lower", "horizontal_offset": 0, "vertical_offset": 0,
+            "alignment": "center", "outline": 5, "shadow": 3,
+            "maximum": 28, "lines": 2, "banner_gap": 15,
+        },
+    },
     "window_geometry": "",
     "shorts_ai": {
         "enabled": True,

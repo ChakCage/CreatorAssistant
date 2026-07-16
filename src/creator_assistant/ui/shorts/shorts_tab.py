@@ -33,6 +33,7 @@ from creator_assistant.services.shorts.render_service import unique_output_path
 from creator_assistant.services.shorts.semantic_cache import SemanticCache
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
+from creator_assistant.services.shorts.subtitle_layout import subtitle_preset_value
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectPaths, ShortsProjectStore
 from creator_assistant.services.shorts.source_service import ShortsSourceService
 from creator_assistant.services.shorts.title_assets import ShortTitleAssetService
@@ -450,7 +451,10 @@ class ShortsTab(QWidget):
         self.workspace = QTabWidget()
         self.candidate_list = CandidateList()
         self.candidate_editor = CandidateEditor()
-        self.subtitle_editor = SubtitleEditor(self.container.shorts_semantic_backend)
+        self.subtitle_editor = SubtitleEditor(
+            self.container.shorts_semantic_backend,
+            subtitle_presets=self.container.settings.get("shorts_subtitle_presets", {}),
+        )
         self.render_queue = RenderQueue()
         self.workspace.addTab(self.candidate_list, "Кандидаты")
         self.workspace.addTab(self.candidate_editor, "Редактор")
@@ -475,6 +479,7 @@ class ShortsTab(QWidget):
         self.subtitle_editor.configuration_changed.connect(self._subtitle_configuration_changed)
         self.subtitle_editor.test_render_requested.connect(self._start_test_render)
         self.subtitle_editor.defaults_requested.connect(self._save_subtitle_defaults)
+        self.subtitle_editor.subtitle_preset_changed.connect(self._subtitle_preset_changed)
         self.render_queue.render_requested.connect(self._start_render)
         self.render_queue.retry_requested.connect(self._start_render)
         self.render_queue.cancel_requested.connect(self.cancel_analysis)
@@ -742,6 +747,9 @@ class ShortsTab(QWidget):
     def _start_render(self, candidates) -> None:
         if not self.source or not self.paths or not self.transcript or (self._thread and self._thread.isRunning()):
             return
+        for candidate in candidates:
+            self._apply_subtitle_defaults(candidate)
+            self._apply_branding_defaults(candidate)
         self._token = CancellationToken()
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
@@ -827,7 +835,9 @@ class ShortsTab(QWidget):
             self._start_configuration_save()
 
     def _apply_subtitle_defaults(self, candidate) -> None:
-        defaults = self.container.settings.get("shorts_subtitle_defaults", {})
+        defaults = dict(self.container.settings.get("shorts_subtitle_defaults", {}))
+        style = str(defaults.get("style") or "clean")
+        defaults.update(subtitle_preset_value(self.container.settings.get("shorts_subtitle_presets", {}), style))
         if not candidate.subtitle_settings and defaults:
             candidate.subtitle_settings = {
                 "style": defaults.get("style", "clean"),
@@ -854,6 +864,23 @@ class ShortsTab(QWidget):
                 "foreground_scale": int(defaults.get("foreground_scale", 100)),
                 "background_color": defaults.get("background_color", "black"),
             }
+
+    @Slot(str, object)
+    def _subtitle_preset_changed(self, name: str, preset) -> None:
+        presets = self.container.settings.setdefault("shorts_subtitle_presets", {})
+        presets[str(name)] = dict(preset or {})
+        defaults = self.container.settings.setdefault("shorts_subtitle_defaults", {})
+        if str(defaults.get("style") or "clean") == str(name):
+            defaults.update(dict(preset or {}))
+        # SettingsStore.save uses a sibling temporary file and os.replace, so
+        # the explicit preset action is persistent and atomic without rebuilding
+        # the FFmpeg/Ollama service graph.
+        self.container.settings_store.save(self.container.settings)
+        self.progress_panel.update_state(
+            "Пресет субтитров сохранён",
+            f"Пользовательские настройки пресета «{name}» будут использоваться новыми Shorts и автопилотом.",
+            94,
+        )
 
     @Slot(object)
     def _save_subtitle_defaults(self, candidate) -> None:
