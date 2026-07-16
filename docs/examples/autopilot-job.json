@@ -1,0 +1,37 @@
+{
+  "sources": [
+    {
+      "path": "E:\\YouTube\\Author\\Project\\Video.mp4",
+      "shorts_project_path": "E:\\YouTube\\Author\\Project\\Shorts",
+      "source_author": "Author"
+    }
+  ],
+  "mode": "APPROVAL_REQUIRED",
+  "profile": {
+    "auto_detect": true,
+    "channel_profile_id": "",
+    "banner_required": false,
+    "subtitle_preset": "clean"
+  },
+  "selection_settings": {
+    "candidate_count_mode": "AUTO",
+    "minimum_score": 80,
+    "maximum_per_source": 10,
+    "minimum_temporal_distance": 30,
+    "minimum_duration": 25,
+    "desired_duration": 45,
+    "maximum_duration": 75
+  },
+  "composition_preset": {
+    "mode": "blur_background"
+  },
+  "schedule_settings": {
+    "start_date": "2026-07-20",
+    "timezone": "Europe/Moscow",
+    "publications_per_day": 2,
+    "preferred_time_slots": ["13:00", "19:00"],
+    "active_weekdays": [0, 1, 2, 3, 4, 5, 6],
+    "minimum_interval_hours": 1
+  },
+  "platforms": ["youtube", "tiktok"]
+}

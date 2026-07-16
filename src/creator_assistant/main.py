@@ -135,6 +135,15 @@ def _proxy_ui_verification(window: MainWindow, container: ServiceContainer, repo
 def main() -> int:
     multiprocessing.freeze_support()
     install_qt_message_handler()
+    automation_args = {"--run-job", "--resume-job", "--list-jobs", "--show-job"}
+    if any(value in automation_args for value in sys.argv[1:]):
+        try:
+            from creator_assistant.services.automation.cli import run_automation_cli
+            return run_automation_cli(sys.argv[1:], ServiceContainer())
+        except Exception as exc:
+            log_exception("Automation CLI failed", exc)
+            print(f"Automation CLI error: {exc}", file=sys.stderr)
+            return 1
     app = QApplication(sys.argv)
     app.setApplicationName("Creator Assistant")
     app.setOrganizationName("CreatorAssistant")

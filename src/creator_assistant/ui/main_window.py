@@ -8,6 +8,7 @@ from creator_assistant.app import ServiceContainer
 from creator_assistant.ui.diagnostics_dialog import DiagnosticsDialog
 from creator_assistant.ui.project_prep_tab import ProjectPrepTab
 from creator_assistant.ui.shorts.shorts_tab import ShortsTab
+from creator_assistant.ui.autopilot_tab import AutopilotTab
 from creator_assistant.ui.settings_dialog import SettingsDialog
 from creator_assistant.infrastructure.crash_logging import event as crash_event, safe_call
 
@@ -40,6 +41,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.prep_tab, "Подготовка проекта")
         self.shorts_tab = ShortsTab(container)
         self.tabs.addTab(self.shorts_tab, "Shorts")
+        self.autopilot_tab = AutopilotTab(container)
+        self.tabs.addTab(self.autopilot_tab, "Автопилот")
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage("Готов к работе")
         self._restore_or_size_window()
@@ -55,7 +58,7 @@ class MainWindow(QMainWindow):
             self.prep_tab.reload_authors()
 
     def closeEvent(self, event) -> None:
-        if self.prep_tab.shutdown_workers() and self.shorts_tab.shutdown_workers():
+        if self.prep_tab.shutdown_workers() and self.shorts_tab.shutdown_workers() and self.autopilot_tab.shutdown_workers():
             self.container.settings["window_geometry"] = bytes(self.saveGeometry().toBase64()).decode("ascii")
             self.container.settings_store.save(self.container.settings)
             crash_event("Main window closed after all QThreads finished")

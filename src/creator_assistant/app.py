@@ -48,6 +48,10 @@ from creator_assistant.services.shorts.transcription.faster_whisper import Faste
 from creator_assistant.services.shorts.transcription.managed_whisper import ManagedWhisperBackend
 from creator_assistant.services.shorts.transcription.runtime_manager import WhisperRuntimeManager
 from creator_assistant.services.shorts.transcription_service import TranscriptionService
+from creator_assistant.infrastructure.automation_job_store import AutomationJobStore
+from creator_assistant.services.automation.engine import AutomationEngine
+from creator_assistant.services.automation.shorts_pipeline import ExistingShortsAutomationPipeline
+from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
 
 
 class ServiceContainer:
@@ -179,6 +183,10 @@ class ServiceContainer:
             self.runner, ffmpeg_path, ffprobe_path,
             bool(self.settings.get("prefer_nvenc", True)) and self.detector.nvenc_available(ffmpeg_path),
             int(float(self.settings.get("disk_reserve_gb", 5)) * 1024**3),
+        )
+        self.channel_assets = ChannelAssetStore()
+        self.automation_engine = AutomationEngine(
+            ExistingShortsAutomationPipeline(self), AutomationJobStore()
         )
 
     def save_settings(self, settings: Dict[str, Any], started_at: float | None = None) -> None:
