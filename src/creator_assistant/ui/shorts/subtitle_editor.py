@@ -21,7 +21,7 @@ except ImportError:
 
 from creator_assistant.domain.shorts.models import SubtitleCue
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
-from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator
+from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator, layout_title_text
 from creator_assistant.services.shorts.title_service import ShortTitleService
 from creator_assistant.services.shorts.semantic_backend import OllamaSemanticScorer
 from creator_assistant.domain.job import CancellationToken
@@ -171,8 +171,13 @@ class VerticalFramePreview(QWidget):
         if bool(self.branding_settings.get("show_title", False)):
             title = str(self.branding_settings.get("final_title_text") or "").strip()
             if title:
+                title, effective_size = layout_title_text(
+                    title,
+                    int(self.branding_settings.get("title_size", 78)),
+                    bool(self.branding_settings.get("title_bold", True)),
+                )
                 font = QFont("Arial")
-                font.setPixelSize(max(8, round(int(self.branding_settings.get("title_size", 78)) * scale)))
+                font.setPixelSize(max(8, round(effective_size * scale)))
                 font.setBold(bool(self.branding_settings.get("title_bold", True)))
                 painter.setFont(font)
                 box = QRectF(left + 90 * scale, top + int(self.branding_settings.get("title_y", 180)) * scale, 900 * scale, 260 * scale)

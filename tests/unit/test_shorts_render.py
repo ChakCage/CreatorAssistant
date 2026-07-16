@@ -11,7 +11,7 @@ from creator_assistant.infrastructure.process_runner import ProcessResult
 from creator_assistant.services.shorts.filter_graph_builder import ShortsFilterGraphBuilder
 from creator_assistant.services.shorts.render_service import ShortsRenderService, safe_filename, unique_output_path
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
-from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator
+from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator, layout_title_text
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
 from creator_assistant.domain.shorts.models import SubtitleCue
 
@@ -95,6 +95,19 @@ def test_banner_geometry_contains_whole_wide_card_inside_safe_bounds():
     assert rect.x >= 80
     assert rect.x + rect.width <= 1000
     assert rect.y + rect.height <= 1840
+
+
+def test_legacy_absolute_banner_x_is_not_reinterpreted_as_offset():
+    centered = OverlayLayoutCalculator().banner_rect(2048, 682, {"banner_scale": 100, "safe_margin": 80})
+    migrated = OverlayLayoutCalculator().banner_rect(2048, 682, {"banner_scale": 100, "safe_margin": 80, "banner_x": 50})
+    assert migrated.x == centered.x
+
+
+def test_long_title_is_pixel_wrapped_to_two_safe_lines():
+    wrapped, effective_size = layout_title_text("100 ЧЕРЕПОВ ЗА 30 МИНУТ!", 88, True)
+    assert wrapped.count("\n") == 1
+    assert wrapped.replace("\n", " ") == "100 ЧЕРЕПОВ ЗА 30 МИНУТ!"
+    assert effective_size <= 88
 
 
 def test_channel_assets_resolve_exact_profile_and_never_random(tmp_path):

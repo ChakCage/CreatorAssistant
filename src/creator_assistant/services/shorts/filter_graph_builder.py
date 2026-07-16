@@ -6,6 +6,7 @@ from creator_assistant.domain.shorts.models import Candidate, SourceInfo
 from creator_assistant.services.shorts.reframe.blur_background import BlurBackgroundReframe
 from creator_assistant.services.shorts.reframe.center_crop import CenterCropReframe
 from creator_assistant.services.shorts.reframe.solid_color import SolidColorReframe
+from creator_assistant.services.shorts.overlay_layout import layout_title_text
 
 
 class ShortsFilterGraphBuilder:
@@ -44,15 +45,22 @@ class ShortsFilterGraphBuilder:
         filters = [f"{video_prefix}{video}{tone_map}{subtitle}[base]"]
         current = "base"
         if show_title:
-            text = _escape_drawtext(str(branding.get("final_title_text", "")).strip())
-            size = max(24, min(180, int(branding.get("title_size", 78) or 78)))
+            raw_title = str(branding.get("final_title_text", "")).strip()
+            requested_size = max(24, min(180, int(branding.get("title_size", 78) or 78)))
+            wrapped_title, size = layout_title_text(
+                raw_title, requested_size, bool(branding.get("title_bold", True)), 900, 2,
+            )
+            text = _escape_drawtext(wrapped_title)
             y = max(0, min(1800, int(branding.get("title_y", 180) or 180)))
             border = max(0, min(20, int(branding.get("title_outline", 4) or 4)))
+            shadow = max(0, min(20, int(branding.get("title_shadow", 2) or 0)))
             fontcolor = str(branding.get("title_color", "#ffffff") or "#ffffff").replace("#", "0x")
+            font = "Arial Bold" if bool(branding.get("title_bold", True)) else "Arial"
             next_label = "title"
             filters.append(
                 f"[{current}]drawtext=text='{text}':fontcolor={fontcolor}:fontsize={size}:"
-                f"font='Arial':borderw={border}:bordercolor=black:x=(w-text_w)/2:y={y}:"
+                f"font='{font}':borderw={border}:bordercolor=black:shadowx={shadow}:shadowy={shadow}:"
+                f"shadowcolor=black@0.75:x=(w-text_w)/2:y={y}:"
                 f"line_spacing=8[{next_label}]"
             )
             current = next_label
@@ -60,7 +68,7 @@ class ShortsFilterGraphBuilder:
             scale = max(0.1, min(2.0, float(branding.get("banner_scale", 100) or 100) / 100))
             opacity = max(0.0, min(1.0, float(branding.get("banner_opacity", 100) or 100) / 100))
             safe = max(0, int(branding.get("safe_margin", 80) or 80))
-            offset_x = int(branding.get("banner_offset_x", branding.get("banner_x", 0)) or 0)
+            offset_x = int(branding.get("banner_offset_x", 0) or 0)
             offset_y = int(branding.get("banner_offset_y", 0) or 0)
             if "banner_y" in branding and "banner_offset_y" not in branding:
                 offset_y = int(branding.get("banner_y", 1600) or 1600) - 1600
