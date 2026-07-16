@@ -23,6 +23,11 @@ class ChannelProfile:
     default_cta: str = "Подписаться"
     default_banner_scale: int = 100
     default_banner_position: dict[str, int] | None = None
+    default_banner_offset_x: int = 0
+    default_banner_offset_y: int = 0
+    default_banner_opacity: int = 100
+    default_banner_anchor: str = "bottom_center"
+    default_banner_fit_mode: str = "contain"
 
     @property
     def searchable(self) -> set[str]:
@@ -136,8 +141,28 @@ class ChannelAssetStore:
             "enabled": profile.enabled,
             "default_cta": profile.default_cta,
             "default_banner_scale": profile.default_banner_scale,
+            "default_banner_offset_x": profile.default_banner_offset_x,
+            "default_banner_offset_y": profile.default_banner_offset_y,
+            "default_banner_opacity": profile.default_banner_opacity,
+            "default_banner_anchor": profile.default_banner_anchor,
+            "default_banner_fit_mode": profile.default_banner_fit_mode,
             "default_banner_position": profile.default_banner_position or {"x": 50, "y": 1600},
         })
+
+    def save_banner_defaults(self, profile_id: str, settings: dict[str, Any]) -> None:
+        profile = self.get(profile_id)
+        if not profile:
+            return
+        raw = json.loads((self.root / profile.id / "profile.json").read_text(encoding="utf-8-sig"))
+        raw.update({
+            "default_banner_scale": int(settings.get("banner_scale", 100) or 100),
+            "default_banner_offset_x": int(settings.get("banner_offset_x", 0) or 0),
+            "default_banner_offset_y": int(settings.get("banner_offset_y", 0) or 0),
+            "default_banner_opacity": int(settings.get("banner_opacity", 100) or 100),
+            "default_banner_anchor": str(settings.get("banner_anchor", "bottom_center") or "bottom_center"),
+            "default_banner_fit_mode": str(settings.get("banner_fit_mode", "contain") or "contain"),
+        })
+        self._write_profile(self.root / profile.id / "profile.json", raw)
 
     @staticmethod
     def _write_profile(path: Path, raw: dict[str, Any]) -> None:
@@ -160,6 +185,11 @@ class ChannelAssetStore:
             enabled=bool(raw.get("enabled", True)),
             default_cta=str(raw.get("default_cta") or "Подписаться"),
             default_banner_scale=int(raw.get("default_banner_scale", 100) or 100),
+            default_banner_offset_x=int(raw.get("default_banner_offset_x", 0) or 0),
+            default_banner_offset_y=int(raw.get("default_banner_offset_y", 0) or 0),
+            default_banner_opacity=int(raw.get("default_banner_opacity", 100) or 100),
+            default_banner_anchor=str(raw.get("default_banner_anchor") or "bottom_center"),
+            default_banner_fit_mode=str(raw.get("default_banner_fit_mode") or "contain"),
             default_banner_position=raw.get("default_banner_position") if isinstance(raw.get("default_banner_position"), dict) else {"x": 50, "y": 1600},
         )
 

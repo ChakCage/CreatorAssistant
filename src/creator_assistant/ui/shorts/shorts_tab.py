@@ -34,6 +34,7 @@ from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectPaths, ShortsProjectStore
 from creator_assistant.services.shorts.source_service import ShortsSourceService
+from creator_assistant.services.shorts.title_service import ShortTitleService
 from creator_assistant.ui.shorts.analysis_progress_panel import AnalysisProgressPanel
 from creator_assistant.ui.shorts.analysis_settings_panel import AnalysisSettingsPanel
 from creator_assistant.ui.shorts.candidate_editor import CandidateEditor
@@ -367,6 +368,7 @@ class ShortsTab(QWidget):
         self.container = container
         self.source_service = ShortsSourceService(container.runner, container.paths.get("ffprobe", ""))
         self.project_store = ShortsProjectStore()
+        self.title_service = ShortTitleService()
         self.source: Optional[SourceInfo] = None
         self.paths: Optional[ShortsProjectPaths] = None
         self.candidates = []
@@ -407,7 +409,7 @@ class ShortsTab(QWidget):
         self.render_queue = RenderQueue()
         self.workspace.addTab(self.candidate_list, "Кандидаты")
         self.workspace.addTab(self.candidate_editor, "Редактор")
-        self.workspace.addTab(self.subtitle_editor, "Субтитры и кадр")
+        self.workspace.addTab(self.subtitle_editor, "Вертикальный редактор")
         self.workspace.addTab(self.render_queue, "Рендер")
         splitter.addWidget(left)
         splitter.addWidget(self.workspace)
@@ -431,6 +433,7 @@ class ShortsTab(QWidget):
         self.render_queue.render_requested.connect(self._start_render)
         self.render_queue.retry_requested.connect(self._start_render)
         self.render_queue.cancel_requested.connect(self.cancel_analysis)
+        self.render_queue.selection_changed.connect(self._subtitle_configuration_changed)
 
     @staticmethod
     def _placeholder(text: str) -> QWidget:
@@ -628,13 +631,21 @@ class ShortsTab(QWidget):
             source_author=source_author,
             aliases=[source_author, Path(self.source.name).stem if self.source else ""],
         )
+        original = self.title_service.resolve_original_title(self.source, self.paths) if self.source else None
         candidate.branding_settings = {
             **defaults,
             "source_author": source_author,
             "channel_profile_id": profile.id if profile else str(defaults.get("channel_profile_id", "")),
             "channel_banner_path": str(ChannelAssetStore().banner_path(profile) or ""),
             "show_channel_card": bool(profile and defaults.get("preset") == "promotion"),
-            "original_video_title": Path(self.source.name).stem if self.source else "",
+            "banner_scale": profile.default_banner_scale if profile else int(defaults.get("banner_scale", 100) or 100),
+            "banner_offset_x": profile.default_banner_offset_x if profile else int(defaults.get("banner_offset_x", 0) or 0),
+            "banner_offset_y": profile.default_banner_offset_y if profile else int(defaults.get("banner_offset_y", 0) or 0),
+            "banner_opacity": profile.default_banner_opacity if profile else int(defaults.get("banner_opacity", 100) or 100),
+            "banner_anchor": profile.default_banner_anchor if profile else str(defaults.get("banner_anchor", "bottom_center")),
+            "banner_fit_mode": profile.default_banner_fit_mode if profile else str(defaults.get("banner_fit_mode", "contain")),
+            "original_video_title": original.title if original else "",
+            "original_video_title_source": original.source if original else "",
             "translated_video_title": "",
             "short_hook_title": "",
             "final_title_text": str(defaults.get("final_title_text") or candidate.title or ""),
@@ -757,8 +768,8 @@ class ShortsTab(QWidget):
                 for key in (
                     "preset", "show_subtitles", "show_title", "final_title_text", "title_size", "title_bold",
                     "title_color", "title_outline", "title_background", "title_y", "title_max_lines",
-                    "show_channel_card", "channel_profile_id", "banner_scale", "banner_x", "banner_y",
-                    "banner_opacity", "safe_margin",
+                    "show_channel_card", "channel_profile_id", "banner_scale", "banner_anchor",
+                    "banner_fit_mode", "banner_offset_x", "banner_offset_y", "banner_opacity", "safe_margin",
                 )
             }.items()
             if value is not None

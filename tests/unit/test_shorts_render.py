@@ -11,6 +11,7 @@ from creator_assistant.infrastructure.process_runner import ProcessResult
 from creator_assistant.services.shorts.filter_graph_builder import ShortsFilterGraphBuilder
 from creator_assistant.services.shorts.render_service import ShortsRenderService, safe_filename, unique_output_path
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
+from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
 from creator_assistant.domain.shorts.models import SubtitleCue
 
@@ -74,8 +75,8 @@ def test_render_command_adds_title_and_channel_banner_overlay(tmp_path):
             "show_channel_card": True,
             "channel_banner_path": str(banner),
             "banner_scale": 80,
-            "banner_x": 40,
-            "banner_y": 1540,
+            "banner_offset_x": 40,
+            "banner_offset_y": -60,
             "banner_opacity": 90,
         },
     )
@@ -83,8 +84,17 @@ def test_render_command_adds_title_and_channel_banner_overlay(tmp_path):
     graph = command[command.index("-filter_complex") + 1]
     assert str(banner) in command
     assert graph.count("drawtext=") == 1
-    assert "overlay=x=40:y=1540" in graph
+    assert "overlay=x='max(80,min(W-w-80,(W-w)/2+40))'" in graph
+    assert "H-h-80+-60" in graph
     assert "colorchannelmixer=aa=0.900" in graph
+
+
+def test_banner_geometry_contains_whole_wide_card_inside_safe_bounds():
+    rect = OverlayLayoutCalculator().banner_rect(2048, 682, {"banner_scale": 100, "safe_margin": 80})
+    assert rect.width <= 1080 * 0.90
+    assert rect.x >= 80
+    assert rect.x + rect.width <= 1000
+    assert rect.y + rect.height <= 1840
 
 
 def test_channel_assets_resolve_exact_profile_and_never_random(tmp_path):

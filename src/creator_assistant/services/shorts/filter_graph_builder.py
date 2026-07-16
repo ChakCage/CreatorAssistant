@@ -59,10 +59,19 @@ class ShortsFilterGraphBuilder:
         if show_banner:
             scale = max(0.1, min(2.0, float(branding.get("banner_scale", 100) or 100) / 100))
             opacity = max(0.0, min(1.0, float(branding.get("banner_opacity", 100) or 100) / 100))
-            x = int(branding.get("banner_x", 50) or 50)
-            y = int(branding.get("banner_y", 1600) or 1600)
-            filters.append(f"[1:v]scale=iw*{scale:.3f}:-1,format=rgba,colorchannelmixer=aa={opacity:.3f}[banner]")
-            filters.append(f"[{current}][banner]overlay=x={x}:y={y}:format=auto[overlayed]")
+            safe = max(0, int(branding.get("safe_margin", 80) or 80))
+            offset_x = int(branding.get("banner_offset_x", branding.get("banner_x", 0)) or 0)
+            offset_y = int(branding.get("banner_offset_y", 0) or 0)
+            if "banner_y" in branding and "banner_offset_y" not in branding:
+                offset_y = int(branding.get("banner_y", 1600) or 1600) - 1600
+            max_width = max(120, int(1080 * 0.90) - safe * 2)
+            filters.append(
+                f"[1:v]scale=w='min(iw*{scale:.3f},{max_width})':h=-1,"
+                f"format=rgba,colorchannelmixer=aa={opacity:.3f}[banner]"
+            )
+            x_expr = f"max({safe},min(W-w-{safe},(W-w)/2+{offset_x}))"
+            y_expr = f"max({safe},min(H-h-{safe},H-h-{safe}+{offset_y}))"
+            filters.append(f"[{current}][banner]overlay=x='{x_expr}':y='{y_expr}':format=auto[overlayed]")
             current = "overlayed"
         filters.append(f"[{current}]null[v]")
         return ";".join(filters + [audio_chain])
