@@ -1,6 +1,7 @@
 param(
     [switch]$SkipInstall,
-    [switch]$VerifyLaunch
+    [switch]$VerifyLaunch,
+    [string]$VerifyUiReport = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -65,7 +66,22 @@ if (-not (Test-Path -LiteralPath $StagedExe)) { throw "EXE was not found after b
 if (Test-Path -LiteralPath $Current) { Remove-Item -LiteralPath $Current -Recurse -Force }
 Move-Item -LiteralPath $StagedApp -Destination $Current
 if (Test-Path -LiteralPath $Staging) { Remove-Item -LiteralPath $Staging }
-& (Join-Path $PSScriptRoot 'update-desktop-shortcut.ps1') -TargetPath $CurrentExe -CommitHash $Commit -Launch:$VerifyLaunch
+$LaunchArguments = if ($VerifyUiReport) { '"--verify-template-ui=' + [System.IO.Path]::GetFullPath($VerifyUiReport) + '"' } else { '' }
+& (Join-Path $PSScriptRoot 'update-desktop-shortcut.ps1') `
+    -TargetPath $CurrentExe `
+    -CommitHash $Commit `
+    -Launch:($VerifyLaunch -or [bool]$VerifyUiReport) `
+    -LaunchArguments $LaunchArguments
 if ($LASTEXITCODE -ne 0) { throw 'Desktop shortcut update failed.' }
+if ($VerifyUiReport) {
+    $Report = [System.IO.Path]::GetFullPath($VerifyUiReport)
+    for ($Attempt = 0; $Attempt -lt 60 -and -not (Test-Path -LiteralPath $Report); $Attempt++) {
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not (Test-Path -LiteralPath $Report)) { throw "Packaged UI verification report was not created: $Report" }
+    $Verification = Get-Content -Raw -LiteralPath $Report | ConvertFrom-Json
+    if (-not $Verification.success) { throw "Packaged UI verification failed: $Report" }
+    Write-Host "Packaged UI verified: $Report"
+}
 Write-Host "Ready: $CurrentExe"
 Write-Host "Commit: $Commit"

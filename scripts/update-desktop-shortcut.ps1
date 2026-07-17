@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$TargetPath,
     [string]$CommitHash = "",
-    [switch]$Launch
+    [switch]$Launch,
+    [string]$LaunchArguments = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,7 +41,9 @@ Write-Host "Shortcut: $ShortcutPath"
 Write-Host "Target: $TargetPath"
 Write-Host "Working directory: $WorkingDirectory"
 if ($Launch) {
-    $ExitCode = $Shell.Run('"' + $ShortcutPath + '"', 1, $false)
+    $Command = '"' + $ShortcutPath + '"'
+    if ($LaunchArguments) { $Command += ' ' + $LaunchArguments }
+    $ExitCode = $Shell.Run($Command, 1, $false)
     if ($ExitCode -ne 0) { throw "Desktop shortcut launch failed: $ExitCode" }
     Write-Host "Launched through shortcut: $ShortcutPath"
 }
