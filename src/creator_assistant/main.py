@@ -20,6 +20,7 @@ from creator_assistant.ui.main_window import MainWindow
 from creator_assistant.ui.settings_dialog import SettingsDialog
 from creator_assistant.domain.stages import JobStage, ORDERED_STAGES
 from creator_assistant.infrastructure.crash_logging import exception as log_exception, install_qt_message_handler
+from creator_assistant.infrastructure.build_info import current_build_info
 
 
 STYLE = """
@@ -148,6 +149,47 @@ def _proxy_ui_verification(window: MainWindow, container: ServiceContainer, repo
     container.save_settings(original)
 
 
+def _template_ui_verification(window: MainWindow, report_path: Path) -> None:
+    """Render and inspect the actual packaged Vertical Editor controls."""
+    window.tabs.setCurrentWidget(window.shorts_tab)
+    editor = window.shorts_tab.subtitle_editor
+    window.shorts_tab.workspace.setCurrentWidget(editor)
+    editor.settings_scroll.ensureWidgetVisible(editor.template_group, 20, 20)
+    QApplication.processEvents()
+    buttons = {
+        "save": editor.template_save,
+        "apply_all": editor.template_apply_all,
+        "reset_short": editor.template_reset_short,
+        "view": editor.template_view,
+    }
+    image_path = report_path.with_suffix(".png")
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    window.grab().save(str(image_path), "PNG")
+    build = current_build_info()
+    report = {
+        "success": all(button.isVisibleTo(window) and button.width() > 120 and button.height() > 20 for button in buttons.values()),
+        "window_title": window.windowTitle(),
+        "executable": build.executable,
+        "commit": build.commit,
+        "build_date": build.build_date,
+        "main_tab": window.tabs.tabText(window.tabs.currentIndex()),
+        "shorts_tab": window.shorts_tab.workspace.tabText(window.shorts_tab.workspace.currentIndex()),
+        "group_visible": editor.template_group.isVisibleTo(window),
+        "buttons": {
+            name: {
+                "text": button.text(),
+                "visible": button.isVisibleTo(window),
+                "width": button.width(),
+                "height": button.height(),
+                "tooltip": button.toolTip(),
+            }
+            for name, button in buttons.items()
+        },
+        "screenshot": str(image_path),
+    }
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def main() -> int:
     multiprocessing.freeze_support()
     install_qt_message_handler()
@@ -185,6 +227,19 @@ def main() -> int:
                 250,
                 lambda: (
                     _proxy_ui_verification(window, container, Path(verification_arg)),
+                    app.quit(),
+                ),
+            )
+        template_verification_arg = next(
+            (value.split("=", 1)[1] for value in sys.argv if value.startswith("--verify-template-ui=")),
+            "",
+        )
+        if template_verification_arg:
+            container.first_run = False
+            QTimer.singleShot(
+                500,
+                lambda: (
+                    _template_ui_verification(window, Path(template_verification_arg)),
                     app.quit(),
                 ),
             )
