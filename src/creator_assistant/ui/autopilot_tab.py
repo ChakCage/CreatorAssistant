@@ -6,12 +6,19 @@ from pathlib import Path
 from PySide6.QtCore import QDate, QThread, QTimer, Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QFileDialog, QFormLayout, QHBoxLayout,
-    QDialog, QDialogButtonBox, QHeaderView, QLabel, QLineEdit, QListWidget,
+    QDialog, QDialogButtonBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHeaderView, QLabel, QLineEdit, QListWidget,
     QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
 
 from creator_assistant.domain.automation.models import AutomationMode, AutomationProfile, AutomationStatus
+from creator_assistant.domain.shorts.models import Candidate
+from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
+from creator_assistant.services.shorts.manifest import ShortsManifestStore
+from creator_assistant.services.shorts.project_template import ProjectShortsTemplate, composition_snapshot_hash
+from creator_assistant.services.shorts.render_settings import VerticalRenderSettingsResolver
+from creator_assistant.services.shorts.shorts_project_store import ShortsProjectStore
+from creator_assistant.ui.shorts.project_template_dialog import ProjectTemplateDialog, template_details
 from creator_assistant.ui.workers import FunctionWorker
 
 
@@ -22,6 +29,10 @@ class AutopilotResultsDialog(QDialog):
         self.setWindowTitle(f"Результаты автопилота — {job.job_id}")
         self.resize(980, 460)
         layout = QVBoxLayout(self)
+        summary = QLabel(job.result.summary or "")
+        summary.setWordWrap(True)
+        summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(summary)
         table = QTableWidget(0, 14)
         table.setHorizontalHeaderLabels(("Место", "Short ID", "Candidate ID", "Start", "End", "Score", "Selected", "Шаблон", "Субтитры", "Рендер", "QC", "Итог", "Файл", "Проблема"))
         rows = self.rows(job)
@@ -73,6 +84,8 @@ class AutopilotTab(QWidget):
         self.engine = container.automation_engine
         self._thread: QThread | None = None
         self._worker = None
+        self._template_draft: ProjectShortsTemplate | None = None
+        self._template_source = ""
         self._build_ui()
         self.refresh_jobs()
         QTimer.singleShot(500, self._offer_recovery)
@@ -102,11 +115,10 @@ class AutopilotTab(QWidget):
         self.profile.addItem("Определить автоматически", "")
         for channel in self.container.channel_assets.profiles():
             self.profile.addItem(channel.display_name, channel.id)
-        self.template_summary = QLabel()
-        self.template_preview = QPushButton("Просмотреть настройки")
-        self.template_preview.clicked.connect(self._show_template_summary)
         self.profile.currentIndexChanged.connect(self._refresh_template_summary)
-        self.minimum_score = QSpinBox(); self.minimum_score.setRange(0, 100); self.minimum_score.setValue(80)
+        self.minimum_score = QDoubleSpinBox(); self.minimum_score.setRange(0, 100); self.minimum_score.setDecimals(1); self.minimum_score.setValue(80)
+        self.weakest_score = QPushButton("Установить порог по самому слабому найденному кандидату")
+        self.weakest_score.clicked.connect(self._set_weakest_score)
         self.maximum_per_source = QSpinBox(); self.maximum_per_source.setRange(0, 50); self.maximum_per_source.setValue(10)
         self.start_date = QDateEdit(QDate.currentDate()); self.start_date.setCalendarPopup(True)
         self.timezone = QLineEdit("Europe/Moscow")
@@ -117,11 +129,8 @@ class AutopilotTab(QWidget):
         platforms = QWidget(); platform_layout = QHBoxLayout(platforms); platform_layout.setContentsMargins(0, 0, 0, 0); platform_layout.addWidget(self.youtube); platform_layout.addWidget(self.tiktok); platform_layout.addStretch(1)
         form.addRow("Режим", self.mode)
         form.addRow("Профиль", self.profile)
-        template_row = QWidget(); template_layout = QHBoxLayout(template_row); template_layout.setContentsMargins(0, 0, 0, 0)
-        template_layout.addWidget(self.template_summary, 1); template_layout.addWidget(self.template_preview)
-        form.addRow("Шаблон оформления", template_row)
         form.addRow("Количество", QLabel("Автоматически (AUTO)"))
-        form.addRow("Минимальный score", self.minimum_score)
+        form.addRow("Минимальный score", self._score_row())
         form.addRow("Максимум с источника", self.maximum_per_source)
         form.addRow("Дата начала", self.start_date)
         form.addRow("Timezone", self.timezone)
@@ -129,6 +138,28 @@ class AutopilotTab(QWidget):
         form.addRow("Временные слоты", self.slots)
         form.addRow("Платформы", platforms)
         root.addLayout(form)
+
+        template_group = QGroupBox("Шаблон оформления")
+        template_group_layout = QVBoxLayout(template_group)
+        self.template_summary = QLabel()
+        self.template_summary.setWordWrap(True)
+        self.template_summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        template_group_layout.addWidget(self.template_summary)
+        template_actions = QGridLayout()
+        for index, (text, callback, tooltip) in enumerate((
+            ("Открыть в вертикальном редакторе", self._open_vertical_editor, "Открывает источник и вкладку Shorts → Вертикальный редактор"),
+            ("Взять настройки текущего Short", self._take_current_short, "Создаёт черновик полного шаблона из текущей композиции выбранного Short"),
+            ("Сохранить как шаблон проекта", self._save_template_project, "Сохраняет полную композицию в ProjectShortsTemplate"),
+            ("Применить шаблон ко всем Shorts", self._apply_template_all, "Массово применяет шаблон с отдельным выбором для ручных overrides"),
+            ("Сбросить к пользовательским настройкам", self._reset_template_defaults, "Готовит snapshot из пользовательских defaults, не меняя отдельный Short"),
+            ("Просмотреть настройки", self._show_template_summary, "Показывает полный snapshot, который будет передан Autopilot"),
+        )):
+            button = QPushButton(text)
+            button.setToolTip(tooltip)
+            button.clicked.connect(callback)
+            template_actions.addWidget(button, index // 2, index % 2)
+        template_group_layout.addLayout(template_actions)
+        root.addWidget(template_group)
 
         actions = QHBoxLayout()
         for text, callback in (
@@ -150,24 +181,130 @@ class AutopilotTab(QWidget):
         self._refresh_template_summary()
 
     def _refresh_template_summary(self) -> None:
-        profile_name = self.profile.currentText() if hasattr(self, "profile") else "Автоматически"
-        self.template_summary.setText(f"Текущие сохранённые настройки · {profile_name}")
+        template, source = self._resolved_template()
+        self.template_summary.setText(template_details(template, source))
 
     def _show_template_summary(self) -> None:
-        defaults = self.container.settings.get("shorts_subtitle_defaults", {})
-        branding = self.container.settings.get("shorts_branding_defaults", {})
-        mode = str(defaults.get("layout_mode", "center_crop"))
-        profile = self.profile.currentText()
-        QMessageBox.information(
-            self, "Шаблон оформления",
-            f"Кадр: {mode}\nПередний слой: {int(defaults.get('foreground_scale', 100))}%\n"
-            f"Субтитры: {defaults.get('style', 'clean')}\nБаннер: {profile}\n"
-            f"Заголовок: русский перевод исходного названия\nРендер: 1080×1920 · source FPS · "
-            f"{'H.264 NVENC' if self.container.shorts_render.prefer_nvenc else 'H.264 libx264'} · AAC",
+        template, source = self._resolved_template()
+        ProjectTemplateDialog(template, source, self).exec()
+
+    def _score_row(self) -> QWidget:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.minimum_score)
+        layout.addWidget(self.weakest_score)
+        return row
+
+    def _source_paths(self) -> list[Path]:
+        return [Path(self.sources.item(index).text()) for index in range(self.sources.count())]
+
+    def _resolved_template(self) -> tuple[ProjectShortsTemplate, str]:
+        if self._template_draft:
+            return self._template_draft, self._template_source or "Черновик Autopilot"
+        paths = self._source_paths() if hasattr(self, "sources") else []
+        if paths:
+            root = ShortsProjectStore.suggested_root(paths[0])
+            manifest = ShortsManifestStore(root / "shorts_manifest.json").load()
+            stored = ProjectShortsTemplate.from_dict(manifest.shorts_template if manifest else None)
+            if stored:
+                return stored, f"Шаблон проекта: {root}"
+        settings_store = getattr(self.container, "settings", {})
+        branding = settings_store.get("shorts_branding_defaults", {})
+        candidate = Candidate("defaults", 0, 30, 0, "")
+        resolved = VerticalRenderSettingsResolver(settings_store, ChannelAssetStore()).resolve(
+            candidate,
+            selected_profile_id=str(self.profile.currentData() or "") if hasattr(self, "profile") else "",
+            use_candidate_override=False,
         )
+        candidate.subtitle_settings = resolved.subtitle
+        candidate.layout_settings = resolved.layout
+        candidate.branding_settings = {**resolved.branding, **branding}
+        return ProjectShortsTemplate.from_candidate(candidate), "Пользовательские настройки"
+
+    def _current_shorts_tab(self):
+        return getattr(self.window(), "shorts_tab", None)
+
+    def _open_vertical_editor(self) -> None:
+        main = self.window()
+        shorts_tab = self._current_shorts_tab()
+        paths = self._source_paths()
+        if not shorts_tab or not hasattr(main, "tabs"):
+            return
+        main.tabs.setCurrentWidget(shorts_tab)
+        if paths:
+            shorts_tab.open_source(paths[0])
+        shorts_tab.workspace.setCurrentWidget(shorts_tab.subtitle_editor)
+
+    def _take_current_short(self) -> None:
+        shorts_tab = self._current_shorts_tab()
+        candidate = getattr(getattr(shorts_tab, "subtitle_editor", None), "candidate", None)
+        if not candidate:
+            QMessageBox.information(self, "Шаблон оформления", "Сначала откройте Short в вертикальном редакторе.")
+            return
+        self._template_draft = ProjectShortsTemplate.from_candidate(candidate, {
+            "width": 1080, "height": 1920, "fps_policy": "source",
+            "encoder": "h264_nvenc" if self.container.shorts_render.prefer_nvenc else "libx264",
+            "audio_codec": "aac",
+        })
+        self._template_source = f"Настройки только этого Short: {candidate.id}"
+        self._refresh_template_summary()
+
+    def _save_template_project(self) -> None:
+        shorts_tab = self._current_shorts_tab()
+        candidate = getattr(getattr(shorts_tab, "subtitle_editor", None), "candidate", None)
+        if candidate and getattr(shorts_tab, "paths", None):
+            shorts_tab._save_project_template(candidate)
+            self._template_draft = None
+            self._template_source = ""
+            self._refresh_template_summary()
+            return
+        QMessageBox.information(self, "Шаблон оформления", "Откройте нужный проект и Short в вертикальном редакторе.")
+
+    def _apply_template_all(self) -> None:
+        shorts_tab = self._current_shorts_tab()
+        if not shorts_tab or not getattr(shorts_tab, "paths", None):
+            QMessageBox.information(self, "Шаблон оформления", "Сначала откройте проект в вертикальном редакторе.")
+            return
+        shorts_tab._apply_project_template_all()
+        self._refresh_template_summary()
+
+    def _reset_template_defaults(self) -> None:
+        self._template_draft = None
+        self._template_source = ""
+        paths = self._source_paths()
+        if paths:
+            root = ShortsProjectStore.suggested_root(paths[0])
+            manifest = ShortsManifestStore(root / "shorts_manifest.json").load()
+            if manifest:
+                manifest.shorts_template = {}
+                ShortsManifestStore(root / "shorts_manifest.json").save(manifest)
+        self._refresh_template_summary()
+
+    def _set_weakest_score(self) -> None:
+        scores: list[float] = []
+        job = self.engine.store.load(self.selected_job_id()) if self.selected_job_id() else None
+        if job:
+            scores.extend(float(item.get("score", 0)) for item in job.resume_data.get("selection_details", []) if item.get("score") is not None)
+        if not scores:
+            for source in self._source_paths():
+                path = ShortsProjectStore.suggested_root(source) / "Analysis" / "candidates.json"
+                if not path.is_file():
+                    continue
+                try:
+                    import json
+                    scores.extend(float(item.get("final_score") or item.get("score") or 0) for item in json.loads(path.read_text(encoding="utf-8")))
+                except (OSError, ValueError, TypeError):
+                    continue
+        if not scores:
+            QMessageBox.information(self, "Минимальный score", "Сначала проанализируйте источник или выберите готовое задание.")
+            return
+        self.minimum_score.setValue(min(scores))
 
     def sources_clear(self) -> None:
         self.sources.clear()
+        self._template_draft = None
+        self._refresh_template_summary()
 
     def _add_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Добавить видео", "", "Video (*.mp4 *.mkv *.mov *.webm)")
@@ -189,6 +326,8 @@ class AutopilotTab(QWidget):
         for path in paths:
             if path not in existing:
                 self.sources.addItem(path); existing.add(path)
+        self._template_draft = None
+        self._refresh_template_summary()
 
     def _remove_source(self) -> None:
         for item in self.sources.selectedItems():
@@ -211,6 +350,15 @@ class AutopilotTab(QWidget):
                 "preferred_time_slots": [value.strip() for value in self.slots.text().split(",") if value.strip()],
             }, platforms=platforms,
         )
+        template, source = self._resolved_template()
+        job.composition_snapshot = {
+            "schema_version": 1,
+            "template": template.to_dict(),
+            "selected_profile_id": profile_id,
+            "source": source,
+        }
+        job.composition_snapshot_hash = composition_snapshot_hash(job.composition_snapshot)
+        self.engine.store.save(job)
         self.refresh_jobs(select_id=job.job_id)
         self._run_background(job.job_id)
 
@@ -300,6 +448,8 @@ class AutopilotTab(QWidget):
             cells = (source_label, job.mode, job.status, f"{job.progress:.0f}%", found, selected, f"{rendered} / {selected}", f"{checked} / {rendered}", problems, str(job.resume_data.get("eta", "—")), job.error)
             for column, value in enumerate(cells):
                 item = QTableWidgetItem(str(value)); item.setData(256, job.job_id); self.jobs.setItem(row, column, item)
+                if column == 5 and job.result.summary:
+                    item.setToolTip(job.result.summary)
             if job.job_id == select_id:
                 self.jobs.selectRow(row)
         self.jobs.resizeColumnsToContents()
