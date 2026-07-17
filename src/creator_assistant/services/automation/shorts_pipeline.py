@@ -22,6 +22,7 @@ from creator_assistant.services.shorts.source_service import ShortsSourceService
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
 from creator_assistant.services.shorts.title_assets import ShortTitleAssetService
 from creator_assistant.services.shorts.render_settings import VerticalRenderSettingsResolver
+from creator_assistant.services.shorts.render_state import RenderStateStore
 from creator_assistant.services.shorts.project_template import (
     ProjectShortsTemplate, TRANSLATED_SOURCE_TITLE, composition_snapshot_hash, render_identity,
 )
@@ -134,13 +135,17 @@ class ExistingShortsAutomationPipeline:
 
     def select(self, job: AutomationJob) -> None:
         job.shorts.clear()
+        job.resume_data["selection_details"] = []
         summaries = []
         for source in job.sources:
             values = job.resume_data.get("analysis_candidates", {}).get(source.source_id, [])
             candidates = [Candidate(**item) for item in values]
-            selected, summary = self.selector.select(candidates, job.selection_settings)
+            selected, summary, details = self.selector.evaluate(candidates, job.selection_settings)
             source.shorts_selected = len(selected)
             summaries.append(f"{Path(source.path).name}: {summary}")
+            for detail in details:
+                detail["source_id"] = source.source_id
+            job.resume_data.setdefault("selection_details", []).extend(details)
             for candidate in selected:
                 job.shorts.append(AutomationShort(
                     short_id=f"{source.source_id}-{candidate.id}", source_id=source.source_id,
@@ -205,11 +210,11 @@ class ExistingShortsAutomationPipeline:
                         if key not in {"final_title_text", "channel_banner_path"}
                     },
                 })
+            self._rebuild_subtitles(source, candidate, short)
             short.render_key = render_identity(
                 self._source_fingerprint(source), short.candidate_id, short.start, short.end,
-                job.composition_snapshot_hash,
+                short.composition_snapshot_hash,
             )
-            self._rebuild_subtitles(source, candidate, short)
             short.candidate_data = asdict(candidate)
             if short.status != AutomationShortStatus.NEEDS_REVIEW.value:
                 short.status = AutomationShortStatus.READY.value
@@ -258,6 +263,8 @@ class ExistingShortsAutomationPipeline:
             source_job = self._source(job, short.source_id)
             project = Path(source_job.shorts_project_path)
             paths = ShortsProjectStore.paths(project)
+            state_store = RenderStateStore(project)
+            state_store.migrate_legacy()
             source = SourceInfo.from_dict(json.loads((paths.analysis / "source_info.json").read_text(encoding="utf-8")))
             candidate = Candidate(**short.candidate_data)
             candidate.subtitle_settings = dict(short.subtitle_settings)
@@ -271,23 +278,21 @@ class ExistingShortsAutomationPipeline:
             interval = f"{short.start:.3f}-{short.end:.3f}"
             target = paths.renders / f"[{rank:02d}] {candidate.id} [{interval}] [autopilot].mp4"
             if target.exists():
-                metadata = target.with_suffix(".render.json")
-                if metadata.is_file():
-                    try:
-                        previous = json.loads(metadata.read_text(encoding="utf-8"))
-                    except (OSError, ValueError, TypeError):
-                        previous = {}
-                    if previous.get("render_key") == short.render_key:
-                        short.artifact = RenderArtifact(candidate.id, candidate.candidate_rank, str(target))
-                        artifact, issues = self.qc.probe_render(
-                            self.container.runner, self.container.paths.get("ffprobe", "ffprobe.exe"),
-                            short, source.fps,
-                        )
-                        short.artifact = artifact
-                        short.issues.extend(issues)
-                        short.status = AutomationShortStatus.RENDERED.value if artifact.validated else AutomationShortStatus.NEEDS_REVIEW.value
-                        save()
-                        continue
+                previous = state_store.load(short.render_key)
+                if (
+                    previous.get("render_key") == short.render_key
+                    and Path(str(previous.get("output_path") or target)) == target
+                ):
+                    short.artifact = RenderArtifact(candidate.id, candidate.candidate_rank, str(target))
+                    artifact, issues = self.qc.probe_render(
+                        self.container.runner, self.container.paths.get("ffprobe", "ffprobe.exe"),
+                        short, source.fps,
+                    )
+                    short.artifact = artifact
+                    short.issues.extend(issues)
+                    short.status = AutomationShortStatus.RENDERED.value if artifact.validated else AutomationShortStatus.NEEDS_REVIEW.value
+                    save()
+                    continue
                 target = paths.renders / f"[{rank:02d}] {candidate.id} [{interval}] [autopilot {job.job_id[-6:]}].mp4"
             short.status = AutomationShortStatus.RENDERING.value
             save()
@@ -295,14 +300,15 @@ class ExistingShortsAutomationPipeline:
             short.artifact = RenderArtifact(candidate.id, candidate.candidate_rank, str(target))
             artifact, issues = self.qc.probe_render(self.container.runner, self.container.paths.get("ffprobe", "ffprobe.exe"), short, source.fps)
             short.artifact = artifact
-            render_metadata = target.with_suffix(".render.json")
-            render_metadata.write_text(json.dumps({
+            state_store.save(short.render_key, {
                 "render_key": short.render_key,
+                "job_id": job.job_id,
+                "output_path": str(target),
                 "composition_snapshot_hash": short.composition_snapshot_hash,
                 "candidate_id": short.candidate_id,
                 "start": short.start,
                 "end": short.end,
-            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            })
             if artifact.validated:
                 issues.extend(self.qc.inspect_frames(
                     self.container.runner, self.container.paths.get("ffmpeg", "ffmpeg.exe"), short,
@@ -389,6 +395,15 @@ class ExistingShortsAutomationPipeline:
             short.subtitle_status = "missing"
             return
         service = SubtitleService()
+        adjusted_end = service.suggested_candidate_end(transcript, candidate)
+        if adjusted_end > candidate.end + 0.001:
+            candidate.end = adjusted_end
+            short.end = adjusted_end
+        track = service.track(transcript, candidate)
+        candidate.last_aligned_word_end = track.last_word_end
+        candidate.boundary_tail_padding_ms = max(
+            0, round((candidate.end - track.last_word_end) * 1000)
+        ) if track.last_word_end is not None else 0
         cues = service.generate(
             transcript, candidate,
             int(short.subtitle_settings.get("maximum", 36)),

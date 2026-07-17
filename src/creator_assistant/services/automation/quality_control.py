@@ -39,6 +39,13 @@ class AutomationQualityControl:
             issues.append(AutomationIssue("cut_phrase", "Конец кандидата может обрывать фразу", True, "pre_render", short.short_id))
         if any("обрыв" in str(value).casefold() for value in short.candidate_data.get("warnings", [])):
             issues.append(AutomationIssue("boundary_warning", "Анализ отметил возможный обрыв фразы", True, "pre_render", short.short_id))
+        last_word_end = short.candidate_data.get("last_aligned_word_end")
+        if last_word_end is not None:
+            tail = short.end - float(last_word_end)
+            if tail < -0.001:
+                issues.append(AutomationIssue("clipped_last_word", "Граница обрезает последнее aligned Whisper-слово", True, "pre_render", short.short_id))
+            elif tail < 0.12:
+                issues.append(AutomationIssue("short_audio_tail", "После последнего слова осталось менее 120 мс аудио", False, "pre_render", short.short_id))
         if short.title.strip().casefold() in self.INVALID_TITLES:
             issues.append(AutomationIssue("invalid_title", "Заголовок отсутствует или является техническим", True, "pre_render", short.short_id))
         if profile_required and not short.profile_id:

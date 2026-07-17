@@ -47,6 +47,7 @@ from creator_assistant.ui.shorts.candidate_list import CandidateList
 from creator_assistant.ui.shorts.source_panel import SourcePanel
 from creator_assistant.ui.shorts.subtitle_editor import SubtitleEditor
 from creator_assistant.ui.shorts.render_queue import RenderQueue
+from creator_assistant.ui.shorts.project_template_dialog import ProjectTemplateDialog
 from creator_assistant.ui.widgets.error_dialog import ErrorDialog
 
 
@@ -336,11 +337,12 @@ class _RenderWorker(QObject):
                 self.job_updated.emit(job)
                 settings = candidate.subtitle_settings or {"style": "clean", "position": "lower", "size": 58}
                 stored_cues = settings.get("cues") or []
-                cues = (
-                    [SubtitleCue(float(item["start"]), float(item["end"]), str(item["text"])) for item in stored_cues]
-                    if stored_cues else
-                    subtitle_service.generate(self.transcript, candidate, int(settings.get("maximum", 36)), int(settings.get("lines", 2)))
-                )
+                stored = [SubtitleCue(float(item["start"]), float(item["end"]), str(item["text"])) for item in stored_cues]
+                cues = subtitle_service.track(
+                    self.transcript, candidate,
+                    int(settings.get("maximum", 36)), int(settings.get("lines", 2)),
+                    stored if stored else None,
+                ).cues
                 ass = self.paths.cache / f"{candidate.id}.render.ass"
                 branding = candidate.branding_settings or {}
                 subtitle_service.write(cues, self.paths.cache / f"{candidate.id}.render.srt", ass, settings, branding)
@@ -499,6 +501,7 @@ class ShortsTab(QWidget):
         self.subtitle_editor.template_save_requested.connect(self._save_project_template)
         self.subtitle_editor.template_apply_all_requested.connect(self._apply_project_template_all)
         self.subtitle_editor.template_reset_requested.connect(self._reset_candidate_to_template)
+        self.subtitle_editor.template_view_requested.connect(self._view_project_template)
         self.render_queue.render_requested.connect(self._start_render)
         self.render_queue.retry_requested.connect(self._start_render)
         self.render_queue.cancel_requested.connect(self.cancel_analysis)
@@ -535,6 +538,13 @@ class ShortsTab(QWidget):
         )
         if output:
             self._begin_probe(source, Path(output))
+
+    def open_source(self, source: Path) -> None:
+        """Open a source requested by another in-app workflow such as Autopilot."""
+        source = Path(source)
+        if self.source and Path(self.source.path) == source and self.paths:
+            return
+        self._begin_probe(source, self.project_store.suggested_root(source))
 
     @Slot()
     def choose_output(self) -> None:
@@ -649,10 +659,13 @@ class ShortsTab(QWidget):
     def _analysis_finished(self, payload) -> None:
         candidates = payload["candidates"]
         self.transcript = payload["transcript"]
+        tails_changed = self._align_candidate_tails(candidates)
         self.candidates = candidates
         self.candidate_list.set_candidates(candidates)
         if self.paths:
             self.render_queue.set_context(candidates, self.paths.renders)
+        if tails_changed and self.review_service:
+            self.review_service.save(candidates)
         result = payload.get("analysis_result")
         if result and result.used_ai:
             detail = f"гибридный локальный AI ({'cache' if result.cache_hit else result.model})"
@@ -866,6 +879,23 @@ class ShortsTab(QWidget):
         self.review_service.save(self.candidates)
         self.subtitle_editor.set_context(candidate, self.transcript, self.paths)
         self.progress_panel.update_state("Шаблон Shorts сохранён", "Общий шаблон проекта применяется ко всем кандидатам без ручного override.", 94)
+        answer = QMessageBox.question(
+            self,
+            "Шаблон проекта сохранён",
+            "Применить новый шаблон ко всем существующим Shorts?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Yes:
+            self._apply_project_template_all()
+
+    @Slot()
+    def _view_project_template(self) -> None:
+        template = self._project_template()
+        if not template:
+            QMessageBox.information(self, "Шаблон оформления проекта", "Шаблон проекта ещё не сохранён.")
+            return
+        ProjectTemplateDialog(template, "ProjectShortsTemplate из shorts_manifest.json", self).exec()
 
     @Slot()
     def _apply_project_template_all(self) -> None:
@@ -1103,16 +1133,17 @@ class ShortsTab(QWidget):
             from creator_assistant.domain.shorts.models import Candidate
             try:
                 self.candidates = [Candidate(**item) for item in json.loads(candidates_path.read_text(encoding="utf-8"))]
+                tails_changed = self._align_candidate_tails(self.candidates)
                 from creator_assistant.services.shorts.candidate_ranking import assign_candidate_ranks
                 ranks_changed = assign_candidate_ranks(self.candidates)
-                if ranks_changed:
+                if ranks_changed or tails_changed:
                     candidates_path.write_text(
                         json.dumps([asdict(item) for item in self.candidates], ensure_ascii=False, indent=2),
                         encoding="utf-8",
                     )
                 self.candidate_list.set_candidates(self.candidates)
                 manifest = ShortsManifestStore(self.paths.manifest).load()
-                if manifest and ranks_changed:
+                if manifest and (ranks_changed or tails_changed):
                     manifest.candidates = [asdict(item) for item in self.candidates]
                     ShortsManifestStore(self.paths.manifest).save(manifest)
                 jobs = [RenderJob(**item) for item in (manifest.render_jobs if manifest else [])]
@@ -1121,6 +1152,23 @@ class ShortsTab(QWidget):
                     self.progress_panel.update_state("Проект восстановлен", f"Загружено {len(self.candidates)} кандидатов; завершённые этапы будут взяты из cache.", 90)
             except (OSError, ValueError, TypeError):
                 self.candidates = []
+
+    def _align_candidate_tails(self, candidates) -> bool:
+        if not self.transcript:
+            return False
+        service = SubtitleService()
+        changed = False
+        for candidate in candidates:
+            end = service.suggested_candidate_end(self.transcript, candidate)
+            if end > candidate.end + 0.001:
+                candidate.end = end
+                changed = True
+            track = service.track(self.transcript, candidate)
+            candidate.last_aligned_word_end = track.last_word_end
+            candidate.boundary_tail_padding_ms = max(
+                0, round((candidate.end - track.last_word_end) * 1000)
+            ) if track.last_word_end is not None else 0
+        return changed
 
     @Slot(str, str)
     def _probe_failed(self, message: str, details: str) -> None:

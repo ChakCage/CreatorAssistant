@@ -101,6 +101,8 @@ class Candidate:
     selected_boundary_variant_id: str = "main"
     candidate_rank: Optional[int] = None
     settings_override: bool = False
+    last_aligned_word_end: Optional[float] = None
+    boundary_tail_padding_ms: int = 0
 
     @property
     def duration(self) -> float:

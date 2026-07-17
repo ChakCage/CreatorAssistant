@@ -9,7 +9,7 @@ from PySide6.QtCore import QObject, QEvent, QPoint, QProcess, QSettings, QRect, 
 from PySide6.QtGui import QColor, QBrush, QFont, QFontDatabase, QFontMetricsF, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
-    QHeaderView, QLabel, QListWidget, QGridLayout, QLineEdit, QMessageBox, QPushButton,
+    QHeaderView, QLabel, QListWidget, QGridLayout, QGroupBox, QLineEdit, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QSlider, QSplitter, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -407,6 +407,7 @@ class SubtitleEditor(QWidget):
     template_save_requested = Signal(object)
     template_apply_all_requested = Signal()
     template_reset_requested = Signal(object)
+    template_view_requested = Signal()
     subtitle_preset_changed = Signal(str, object)
 
     def __init__(self, semantic_backend=None, parent=None, subtitle_presets=None) -> None:
@@ -622,6 +623,26 @@ class SubtitleEditor(QWidget):
         self.subtitle_preset_status.setProperty("class", "muted")
         style_form.addRow(self._row(self.subtitle_preset_save, self.subtitle_preset_reset))
         style_form.addRow(self.subtitle_preset_status)
+        template_group = QGroupBox("Шаблон оформления проекта")
+        template_layout = QVBoxLayout(template_group)
+        self.template_scope_label = QLabel("Настройки шаблона проекта ещё не загружены")
+        self.template_scope_label.setWordWrap(True)
+        self.template_scope_label.setProperty("class", "muted")
+        template_layout.addWidget(self.template_scope_label)
+        template_buttons = QGridLayout()
+        self.template_save = QPushButton("Сохранить текущие настройки как шаблон проекта")
+        self.template_apply_all = QPushButton("Применить шаблон ко всем Shorts")
+        self.template_reset_short = QPushButton("Сбросить этот Short к шаблону")
+        self.template_view = QPushButton("Просмотреть шаблон проекта")
+        self.template_save.setToolTip("Сохраняет всю вертикальную композицию проекта; это не пресет субтитров и не профиль канала")
+        self.template_apply_all.setToolTip("Применяет сохранённую композицию к существующим Shorts с выбором судьбы ручных overrides")
+        self.template_reset_short.setToolTip("Удаляет ручной override выбранного Short и возвращает настройки шаблона проекта")
+        self.template_view.setToolTip("Показывает фактический ProjectShortsTemplate, который использует Autopilot")
+        template_buttons.addWidget(self.template_save, 0, 0)
+        template_buttons.addWidget(self.template_apply_all, 0, 1)
+        template_buttons.addWidget(self.template_reset_short, 1, 0)
+        template_buttons.addWidget(self.template_view, 1, 1)
+        template_layout.addLayout(template_buttons)
         self.preview = RealtimeCompositionRenderer()
         self.preview_quality = QComboBox()
         for label, size, hint in (
@@ -712,6 +733,7 @@ class SubtitleEditor(QWidget):
         self.settings_layout.addWidget(self.vertical)
         self.settings_layout.addWidget(style_widget)
         self.settings_layout.addWidget(branding_widget)
+        self.settings_layout.addWidget(template_group)
         self.settings_layout.addStretch(1)
         self.top_splitter.addWidget(self.settings_scroll)
         self.top_splitter.addWidget(preview_panel)
@@ -725,7 +747,7 @@ class SubtitleEditor(QWidget):
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.addWidget(self.table, 1)
         actions = QHBoxLayout()
-        for text, handler in (("Объединить", self._merge), ("Разделить", self._split), ("Удалить", self._delete), ("Восстановить исходный вариант", self._restore), ("Сохранить SRT и ASS", self._export), ("Рендер тестовых 5 секунд", self._test_render), ("Использовать эти настройки по умолчанию", self._save_defaults), ("Сохранить как шаблон для всех Shorts проекта", self._save_project_template), ("Применить шаблон ко всем кандидатам", self._apply_project_template_all), ("Сбросить настройки этого Short к шаблону", self._reset_to_project_template)):
+        for text, handler in (("Объединить", self._merge), ("Разделить", self._split), ("Удалить", self._delete), ("Восстановить исходный вариант", self._restore), ("Сохранить SRT и ASS", self._export), ("Рендер тестовых 5 секунд", self._test_render), ("Использовать эти настройки по умолчанию", self._save_defaults)):
             button = QPushButton(text)
             button.clicked.connect(handler)
             actions.addWidget(button)
@@ -743,6 +765,10 @@ class SubtitleEditor(QWidget):
         self.style.currentIndexChanged.connect(self._style_selected)
         self.subtitle_preset_save.clicked.connect(self._save_subtitle_preset)
         self.subtitle_preset_reset.clicked.connect(self._reset_subtitle_preset)
+        self.template_save.clicked.connect(self._save_project_template)
+        self.template_apply_all.clicked.connect(self._apply_project_template_all)
+        self.template_reset_short.clicked.connect(self._reset_to_project_template)
+        self.template_view.clicked.connect(self.template_view_requested.emit)
         self.title_style.currentIndexChanged.connect(self._title_style_selected)
         self.branding_preset.currentIndexChanged.connect(self._branding_preset_selected)
         self.title_from_video.clicked.connect(self._title_from_video_clicked)
@@ -1453,14 +1479,25 @@ class SubtitleEditor(QWidget):
         self._loading = True
         self.candidate, self.transcript, self.paths = candidate, transcript, paths
         self.heading.setText(f"{candidate.id} · настройки сохраняются автоматически")
+        self.template_scope_label.setText(
+            "Настройки только этого Short (ручной override)"
+            if bool(getattr(candidate, "settings_override", False))
+            else "Настройки шаблона проекта"
+        )
         settings = candidate.subtitle_settings or {}
         stored_cues = settings.get("cues")
+        canonical = self.service.generate(
+            transcript, candidate,
+            int(settings.get("maximum", 36)), min(2, int(settings.get("lines", 2))),
+        )
         if stored_cues:
-            cues = [SubtitleCue(float(item["start"]), float(item["end"]), str(item["text"])) for item in stored_cues]
+            stored = [SubtitleCue(float(item["start"]), float(item["end"]), str(item["text"])) for item in stored_cues]
+            cues = self.service.sanitize_stored_cues(stored, canonical, candidate.duration)
         else:
             srt = paths.subtitles / f"{candidate.id}.srt"
-            cues = self.service.parse_srt(srt) if srt.is_file() else self.service.generate(transcript, candidate, self.maximum.value(), self.lines.value())
-        self.original = deepcopy(self.service.generate(transcript, candidate, self.maximum.value(), self.lines.value()))
+            parsed = self.service.parse_srt(srt) if srt.is_file() else []
+            cues = self.service.sanitize_stored_cues(parsed, canonical, candidate.duration) if parsed else canonical
+        self.original = deepcopy(canonical)
         self.style.setCurrentIndex(max(0, self.style.findData(settings.get("style", "clean"))))
         self.position.setCurrentIndex(max(0, self.position.findData(settings.get("position", "lower"))))
         self.subtitle_alignment.setCurrentIndex(max(0, self.subtitle_alignment.findData(settings.get("alignment", "center"))))
@@ -1694,6 +1731,7 @@ class SubtitleEditor(QWidget):
         self._preview_generation_id += 1
         self._mark_exact_stale()
         self.dirty_label.setText("Изменено · автосохранение…")
+        self.template_scope_label.setText("Настройки только этого Short (ручной override после автосохранения)")
         self.dirty_label.setStyleSheet("color: #e6b450;")
         self._update_preview()
         self._save_timer.start()
@@ -1715,11 +1753,6 @@ class SubtitleEditor(QWidget):
             self.offset.blockSignals(False)
             self.offset_value.blockSignals(False)
             self.dirty_label.setText("Достигнут безопасный предел позиции")
-
-        if layout.clamped_horizontal_offset != self.subtitle_offset_x.value():
-            self.subtitle_offset_x.blockSignals(True)
-            self.subtitle_offset_x.setValue(layout.clamped_horizontal_offset)
-            self.subtitle_offset_x.blockSignals(False)
 
     def _apply_configuration(self) -> None:
         if not self.candidate:

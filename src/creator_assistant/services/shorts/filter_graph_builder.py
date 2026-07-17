@@ -25,7 +25,11 @@ class ShortsFilterGraphBuilder:
         layout = candidate.layout_settings or {}
         mode = layout.get("mode", "center_crop")
         if mode == "blur_background":
-            reframe = BlurBackgroundReframe(int(layout.get("foreground_scale", 100)))
+            reframe = BlurBackgroundReframe(
+                int(layout.get("foreground_scale", 100)),
+                int(layout.get("blur_radius", 12)),
+                int(layout.get("blur_power", 6)),
+            )
         elif mode == "solid_color":
             reframe = SolidColorReframe(int(layout.get("foreground_scale", 100)), str(layout.get("background_color", "black")))
         else:

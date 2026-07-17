@@ -12,6 +12,7 @@ from creator_assistant.domain.automation.models import (
 )
 from creator_assistant.infrastructure.automation_job_store import AutomationJobStore
 from creator_assistant.services.automation.schedule import SchedulePlanner
+from creator_assistant.services.shorts.render_state import RenderStateStore
 
 
 def _now() -> str:
@@ -158,6 +159,9 @@ class AutomationEngine:
         }
         if job.status not in allowed:
             raise ValueError("Сначала отмените активное задание")
+        for source in job.sources:
+            if source.shorts_project_path:
+                RenderStateStore(Path(source.shorts_project_path)).delete_job(job_id)
         return self.store.delete(job_id)
 
     def _schedule(self, job: AutomationJob) -> None:

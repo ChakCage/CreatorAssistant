@@ -19,6 +19,7 @@ class ShortsProjectPaths:
     subtitles: Path
     renders: Path
     reports: Path
+    render_state: Path
     manifest: Path
 
 
@@ -49,12 +50,13 @@ class ShortsProjectStore:
             subtitles=root / "Subtitles",
             renders=root / "Renders",
             reports=root / "Reports",
+            render_state=root / ".creator-assistant" / "render-state",
             manifest=root / "shorts_manifest.json",
         )
 
     def create(self, root: Path, source: SourceInfo) -> ShortsProjectPaths:
         paths = self.paths(root)
-        for folder in (paths.analysis, paths.cache, paths.thumbnails, paths.approved, paths.subtitles, paths.renders, paths.reports):
+        for folder in (paths.analysis, paths.cache, paths.thumbnails, paths.approved, paths.subtitles, paths.renders, paths.reports, paths.render_state):
             folder.mkdir(parents=True, exist_ok=True)
         project_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", Path(source.name).stem).strip("-")[:40]
         project_id = f"{project_id or 'shorts'}-{uuid.uuid4().hex[:8]}"
@@ -66,5 +68,7 @@ class ShortsProjectStore:
         if paths.manifest.is_file():
             manifest = ShortsManifestStore(paths.manifest).load()
             if manifest and manifest.source_fingerprint == source.fingerprint:
+                from creator_assistant.services.shorts.render_state import RenderStateStore
+                RenderStateStore(paths.root).migrate_legacy()
                 return paths
         return self.create(root, source)

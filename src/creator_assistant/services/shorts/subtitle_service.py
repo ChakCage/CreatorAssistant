@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -21,6 +22,13 @@ from creator_assistant.services.shorts.subtitle_layout import (
 from creator_assistant.services.shorts.text_alignment import HorizontalTextAlignment, ass_anchor
 from creator_assistant.services.shorts.overlay_layout import OverlayLayoutCalculator
 from creator_assistant.services.shorts.transcription_service import srt_timestamp
+
+
+@dataclass(frozen=True)
+class CandidateSubtitleTrack:
+    cues: list[SubtitleCue]
+    last_word_end: float | None
+    suggested_candidate_end: float
 
 
 def wrap_subtitle(text: str, maximum: int = 36, lines: int = 2) -> str:
@@ -92,6 +100,96 @@ def fit_cues(cues: Iterable[SubtitleCue], settings: dict) -> tuple[list[Subtitle
 
 
 class SubtitleService:
+    TAIL_PADDING_SECONDS = 0.20
+
+    def track(
+        self,
+        transcript: Transcript,
+        candidate: Candidate,
+        maximum: int = 36,
+        lines: int = 2,
+        stored_cues: Iterable[SubtitleCue] | None = None,
+    ) -> CandidateSubtitleTrack:
+        canonical = self.generate(transcript, candidate, maximum, lines)
+        cues = self.sanitize_stored_cues(stored_cues, canonical, candidate.duration) if stored_cues is not None else canonical
+        words = sorted(
+            (
+                word for segment in transcript.segments for word in segment.words
+                if (
+                    word.word.strip() and word.start < candidate.end
+                    and word.end > candidate.start and word.end <= candidate.end + 0.001
+                )
+            ),
+            key=lambda word: (word.start, word.end),
+        )
+        last_word_end = words[-1].end if words else None
+        return CandidateSubtitleTrack(
+            cues=cues,
+            last_word_end=last_word_end,
+            suggested_candidate_end=self.suggested_candidate_end(transcript, candidate),
+        )
+
+    def suggested_candidate_end(self, transcript: Transcript, candidate: Candidate) -> float:
+        words = sorted(
+            (
+                word for segment in transcript.segments for word in segment.words
+                if word.word.strip() and word.start < candidate.end and word.end > candidate.start
+            ),
+            key=lambda word: (word.start, word.end),
+        )
+        if not words:
+            return candidate.end
+        last = words[-1]
+        # Only repair a boundary that is already at, or slightly inside, the
+        # final aligned word. A distant pause remains an intentional boundary.
+        if last.end < candidate.end - 0.35 or last.end > candidate.end + 0.75:
+            return candidate.end
+        end = max(candidate.end, float(last.end)) + self.TAIL_PADDING_SECONDS
+        later_words = sorted(
+            (
+                word for segment in transcript.segments for word in segment.words
+                if word.word.strip() and word.start >= last.end - 0.001 and word is not last
+            ),
+            key=lambda word: (word.start, word.end),
+        )
+        if later_words:
+            end = min(end, max(float(last.end), float(later_words[0].start) - 0.03))
+        end = min(end, candidate.start + 75.5, transcript.duration or end)
+        return round(max(candidate.end, end), 3)
+
+    @staticmethod
+    def sanitize_stored_cues(
+        stored_cues: Iterable[SubtitleCue] | None,
+        canonical: Iterable[SubtitleCue],
+        duration: float,
+    ) -> list[SubtitleCue]:
+        stored = [
+            SubtitleCue(max(0.0, cue.start), min(duration, cue.end), cue.text.strip())
+            for cue in (stored_cues or [])
+            if cue.text.strip() and cue.end > cue.start and cue.start < duration
+        ]
+        reference = list(canonical)
+        if not stored:
+            return reference
+        canonical_end = max((cue.end for cue in reference), default=0.0)
+        connectors = {"и", "а", "но", "или", "что", "как", "когда", "если", "чтобы"}
+
+        def tokens(text: str) -> set[str]:
+            return set(re.findall(r"[0-9A-Za-zА-Яа-яЁё]+", text.casefold()))
+
+        while stored:
+            cue = stored[-1]
+            cue_tokens = tokens(cue.text)
+            overlaps = [item for item in reference if item.end > cue.start and item.start < cue.end]
+            reference_tokens = set().union(*(tokens(item.text) for item in overlaps)) if overlaps else set()
+            is_unaligned = cue.start >= canonical_end + 0.02 or not (cue_tokens & reference_tokens)
+            is_service_fragment = len(cue_tokens) == 1 and next(iter(cue_tokens), "") in connectors
+            if is_unaligned or (is_service_fragment and not overlaps):
+                stored.pop()
+                continue
+            break
+        return stored or reference
+
     def generate(self, transcript: Transcript, candidate: Candidate, maximum: int = 36, lines: int = 2) -> list[SubtitleCue]:
         timed_words: list[tuple[float, float, str]] = []
         fallback_segments: list[tuple[float, float, str]] = []
@@ -101,14 +199,20 @@ class SubtitleService:
             if end <= start or not segment.text.strip():
                 continue
             words = [
-                (max(word.start, candidate.start), min(word.end, candidate.end), word.word.strip())
+                (max(word.start, candidate.start), word.end, word.word.strip())
                 for word in segment.words
-                if word.end > candidate.start and word.start < candidate.end and word.word.strip()
+                if (
+                    word.end > candidate.start
+                    and word.start < candidate.end
+                    and word.end <= candidate.end + 0.001
+                    and word.word.strip()
+                )
             ]
             if words:
                 timed_words.extend(item for item in words if item[1] > item[0])
             else:
-                fallback_segments.append((start, end, segment.text.strip()))
+                if segment.end <= candidate.end + 0.05:
+                    fallback_segments.append((start, end, segment.text.strip()))
         cues = self._word_cues(timed_words, candidate, maximum, lines)
         cues.extend(self._segment_cues(fallback_segments, candidate, maximum, lines))
         cues.sort(key=lambda item: (item.start, item.end))
