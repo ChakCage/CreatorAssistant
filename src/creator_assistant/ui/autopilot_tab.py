@@ -7,7 +7,7 @@ from PySide6.QtCore import QDate, QThread, QTimer, Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QFileDialog, QFormLayout, QHBoxLayout,
     QDialog, QDialogButtonBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHeaderView, QLabel, QLineEdit, QListWidget,
-    QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
+    QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
 
@@ -92,22 +92,41 @@ class AutopilotTab(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.addWidget(QLabel("Локальный автопилот Shorts — анализ, оформление, проверка, рендер и внутреннее расписание"))
+        root.setContentsMargins(10, 8, 10, 8)
+        title = QLabel("Локальный автопилот Shorts — анализ, оформление, проверка, рендер и публикация")
+        title.setObjectName("autopilotTitle")
+        root.addWidget(title)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMaximumHeight(440)
+        workspace = QWidget()
+        cards = QGridLayout(workspace)
+        cards.setContentsMargins(0, 0, 0, 0)
+        cards.setHorizontalSpacing(10)
+        cards.setVerticalSpacing(8)
+
+        sources_group = QGroupBox("1. Источники")
+        sources_layout = QVBoxLayout(sources_group)
         source_actions = QHBoxLayout()
         for text, callback in (
-            ("Добавить видео", self._add_video), ("Добавить несколько видео", self._add_videos),
-            ("Добавить папку", self._add_folder), ("Удалить источник", self._remove_source),
-            ("Очистить список", self.sources_clear),
+            ("Видео", self._add_video), ("Несколько", self._add_videos),
+            ("Папка", self._add_folder), ("Удалить", self._remove_source),
+            ("Очистить", self.sources_clear),
         ):
             button = QPushButton(text)
             button.clicked.connect(callback)
             source_actions.addWidget(button)
-        root.addLayout(source_actions)
+        source_actions.addStretch(1)
+        sources_layout.addLayout(source_actions)
         self.sources = QListWidget()
-        self.sources.setMaximumHeight(110)
-        root.addWidget(self.sources)
+        self.sources.setMaximumHeight(92)
+        sources_layout.addWidget(self.sources)
+        cards.addWidget(sources_group, 0, 0)
 
+        mode_group = QGroupBox("2. Режим и профиль")
         form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
         self.mode = QComboBox()
         self.mode.addItem("Подготовка с подтверждением", AutomationMode.APPROVAL_REQUIRED.value)
         self.mode.addItem("Полный автопилот", AutomationMode.FULL_AUTOPILOT.value)
@@ -116,61 +135,88 @@ class AutopilotTab(QWidget):
         for channel in self.container.channel_assets.profiles():
             self.profile.addItem(channel.display_name, channel.id)
         self.profile.currentIndexChanged.connect(self._refresh_template_summary)
-        self.minimum_score = QDoubleSpinBox(); self.minimum_score.setRange(0, 100); self.minimum_score.setDecimals(1); self.minimum_score.setValue(80)
-        self.weakest_score = QPushButton("Установить порог по самому слабому найденному кандидату")
-        self.weakest_score.clicked.connect(self._set_weakest_score)
-        self.maximum_per_source = QSpinBox(); self.maximum_per_source.setRange(0, 50); self.maximum_per_source.setValue(10)
-        self.start_date = QDateEdit(QDate.currentDate()); self.start_date.setCalendarPopup(True)
-        self.timezone = QLineEdit("Europe/Moscow")
-        self.per_day = QSpinBox(); self.per_day.setRange(1, 10); self.per_day.setValue(2)
-        self.slots = QLineEdit("13:00, 19:00")
-        self.youtube = QCheckBox("YouTube"); self.youtube.setChecked(True)
-        self.tiktok = QCheckBox("TikTok")
-        platforms = QWidget(); platform_layout = QHBoxLayout(platforms); platform_layout.setContentsMargins(0, 0, 0, 0); platform_layout.addWidget(self.youtube); platform_layout.addWidget(self.tiktok); platform_layout.addStretch(1)
+        self.mode.setMaximumWidth(320)
+        self.profile.setMaximumWidth(320)
         form.addRow("Режим", self.mode)
         form.addRow("Профиль", self.profile)
         form.addRow("Количество", QLabel("Автоматически (AUTO)"))
-        form.addRow("Минимальный score", self._score_row())
-        form.addRow("Максимум с источника", self.maximum_per_source)
-        form.addRow("Дата начала", self.start_date)
-        form.addRow("Timezone", self.timezone)
-        form.addRow("Публикаций в день", self.per_day)
-        form.addRow("Временные слоты", self.slots)
-        form.addRow("Платформы", platforms)
-        root.addLayout(form)
+        mode_group.setLayout(form)
+        cards.addWidget(mode_group, 0, 1)
 
-        template_group = QGroupBox("Шаблон оформления")
-        template_group_layout = QVBoxLayout(template_group)
+        selection_group = QGroupBox("3. Отбор Shorts")
+        selection = QFormLayout(selection_group)
+        selection.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
+        self.minimum_score = QDoubleSpinBox(); self.minimum_score.setRange(0, 100); self.minimum_score.setDecimals(1); self.minimum_score.setValue(80); self.minimum_score.setMaximumWidth(100)
+        self.minimum_score.valueChanged.connect(self._update_score_forecast)
+        self.weakest_score = QPushButton("Выбрать всех найденных кандидатов")
+        self.weakest_score.setToolTip("Установить минимальную оценку по оценке самого слабого найденного кандидата, чтобы выбрать все текущие результаты")
+        self.weakest_score.clicked.connect(self._set_weakest_score)
+        self.maximum_per_source = QSpinBox(); self.maximum_per_source.setRange(0, 50); self.maximum_per_source.setValue(10); self.maximum_per_source.setMaximumWidth(100)
+        self.score_forecast = QLabel("Нет результатов анализа")
+        self.score_forecast.setWordWrap(True)
+        selection.addRow("Минимальный score", self.minimum_score)
+        selection.addRow("Максимум с источника", self.maximum_per_source)
+        selection.addRow(self.weakest_score)
+        selection.addRow(self.score_forecast)
+        cards.addWidget(selection_group, 1, 0)
+
+        schedule_group = QGroupBox("5. Расписание")
+        schedule = QFormLayout(schedule_group)
+        schedule.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
+        self.start_date = QDateEdit(QDate.currentDate()); self.start_date.setCalendarPopup(True)
+        self.timezone = QLineEdit("Europe/Moscow"); self.timezone.setMaximumWidth(220)
+        self.per_day = QSpinBox(); self.per_day.setRange(1, 10); self.per_day.setValue(2); self.per_day.setMaximumWidth(100)
+        self.slots = QLineEdit("13:00, 19:00"); self.slots.setMaximumWidth(220)
+        schedule.addRow("Дата начала", self.start_date)
+        schedule.addRow("Timezone", self.timezone)
+        schedule.addRow("В день", self.per_day)
+        schedule.addRow("Слоты", self.slots)
+        cards.addWidget(schedule_group, 1, 1)
+
+        platforms_group = QGroupBox("6. Подключённые платформы")
+        platforms_layout = QHBoxLayout(platforms_group)
+        self.youtube = QCheckBox("YouTube"); self.youtube.setChecked(True)
+        self.tiktok = QCheckBox("TikTok")
+        platforms_layout.addWidget(self.youtube); platforms_layout.addWidget(self.tiktok); platforms_layout.addStretch(1)
+        cards.addWidget(platforms_group, 2, 1)
+
+        template_group = QGroupBox("4. Оформление")
+        template_group_layout = QHBoxLayout(template_group)
         self.template_summary = QLabel()
-        self.template_summary.setWordWrap(True)
+        self.template_summary.setWordWrap(False)
+        self.template_summary.setMaximumWidth(520)
         self.template_summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
         template_group_layout.addWidget(self.template_summary)
-        template_actions = QGridLayout()
-        for index, (text, callback, tooltip) in enumerate((
-            ("Открыть в вертикальном редакторе", self._open_vertical_editor, "Открывает источник и вкладку Shorts → Вертикальный редактор"),
-            ("Взять настройки текущего Short", self._take_current_short, "Создаёт черновик полного шаблона из текущей композиции выбранного Short"),
-            ("Сохранить как шаблон проекта", self._save_template_project, "Сохраняет полную композицию в ProjectShortsTemplate"),
-            ("Применить шаблон ко всем Shorts", self._apply_template_all, "Массово применяет шаблон с отдельным выбором для ручных overrides"),
-            ("Сбросить к пользовательским настройкам", self._reset_template_defaults, "Готовит snapshot из пользовательских defaults, не меняя отдельный Short"),
-            ("Просмотреть настройки", self._show_template_summary, "Показывает полный snapshot, который будет передан Autopilot"),
-        )):
+        template_group_layout.addStretch(1)
+        for text, callback, tooltip in (
+            ("Редактировать", self._open_vertical_editor, "Открыть ProjectShortsTemplate во вкладке Shorts → Вертикальный редактор"),
+            ("Просмотреть", self._show_template_summary, "Показать шаблон, который будет использован Autopilot"),
+        ):
             button = QPushButton(text)
             button.setToolTip(tooltip)
             button.clicked.connect(callback)
-            template_actions.addWidget(button, index // 2, index % 2)
-        template_group_layout.addLayout(template_actions)
-        root.addWidget(template_group)
+            template_group_layout.addWidget(button)
+        cards.addWidget(template_group, 2, 0)
+        cards.setColumnStretch(0, 1)
+        cards.setColumnStretch(1, 1)
+        scroll.setWidget(workspace)
+        root.addWidget(scroll)
 
-        actions = QHBoxLayout()
+        primary_group = QGroupBox("7. Задания — управление")
+        primary = QHBoxLayout(primary_group)
         for text, callback in (
             ("Запустить", self.start_job), ("Пауза", self.pause_job), ("Продолжить", self.resume_job),
-            ("Отменить", self.cancel_job), ("Открыть результаты", self.open_results),
-            ("Одобрить и создать тестовое расписание", self.approve_job),
-            ("Удалить задание", self.delete_job),
+            ("Отменить", self.cancel_job),
         ):
-            button = QPushButton(text); button.clicked.connect(callback); actions.addWidget(button)
-        actions.addStretch(1)
-        root.addLayout(actions)
+            button = QPushButton(text); button.clicked.connect(callback); primary.addWidget(button)
+        primary.addStretch(1)
+        results_group = QGroupBox("Результаты")
+        results = QHBoxLayout(results_group)
+        for text, callback in (("Открыть результаты", self.open_results), ("Одобрить и запланировать", self.approve_job), ("Удалить задание", self.delete_job)):
+            button = QPushButton(text); button.clicked.connect(callback); results.addWidget(button)
+        results.addStretch(1)
+        action_row = QHBoxLayout(); action_row.addWidget(primary_group); action_row.addWidget(results_group)
+        root.addLayout(action_row)
         self.jobs = QTableWidget(0, 11)
         self.jobs.setHorizontalHeaderLabels(("Источник", "Режим", "Этап", "Прогресс", "Найдено", "Выбрано", "Отрендерено", "Проверено", "Проблемы", "ETA", "Ошибка"))
         self.jobs.setSelectionBehavior(QTableWidget.SelectRows)
@@ -179,10 +225,19 @@ class AutopilotTab(QWidget):
         delete_action.triggered.connect(self.delete_job)
         root.addWidget(self.jobs, 1)
         self._refresh_template_summary()
+        self._update_score_forecast()
 
     def _refresh_template_summary(self) -> None:
         template, source = self._resolved_template()
-        self.template_summary.setText(template_details(template, source))
+        layout = template.layout or {}
+        subtitle = template.subtitle or {}
+        branding = template.branding or {}
+        mode = str(layout.get("mode", "center_crop")).replace("_", " ").title()
+        scale = int(float(layout.get("foreground_scale", 1.0)) * 100)
+        preset = str(subtitle.get("preset", "clean")).title()
+        profile = str(branding.get("profile_id") or self.profile.currentText() or "Авто")
+        self.template_summary.setText(f"Шаблон проекта\n{mode} · {scale}% · {preset} · {profile}")
+        self.template_summary.setToolTip(template_details(template, source))
 
     def _show_template_summary(self) -> None:
         template, source = self._resolved_template()
@@ -282,6 +337,14 @@ class AutopilotTab(QWidget):
         self._refresh_template_summary()
 
     def _set_weakest_score(self) -> None:
+        scores = self._candidate_scores()
+        if not scores:
+            QMessageBox.information(self, "Минимальный score", "Сначала проанализируйте источник или выберите готовое задание.")
+            return
+        self.minimum_score.setValue(min(scores))
+        self._update_score_forecast()
+
+    def _candidate_scores(self) -> list[float]:
         scores: list[float] = []
         job = self.engine.store.load(self.selected_job_id()) if self.selected_job_id() else None
         if job:
@@ -296,10 +359,20 @@ class AutopilotTab(QWidget):
                     scores.extend(float(item.get("final_score") or item.get("score") or 0) for item in json.loads(path.read_text(encoding="utf-8")))
                 except (OSError, ValueError, TypeError):
                     continue
-        if not scores:
-            QMessageBox.information(self, "Минимальный score", "Сначала проанализируйте источник или выберите готовое задание.")
+        return scores
+
+    def _update_score_forecast(self, *_args) -> None:
+        if not hasattr(self, "score_forecast"):
             return
-        self.minimum_score.setValue(min(scores))
+        scores = self._candidate_scores()
+        if not scores:
+            self.score_forecast.setText("Нет результатов анализа для прогноза отбора")
+            return
+        threshold = float(self.minimum_score.value())
+        selected = sum(score >= threshold for score in scores)
+        self.score_forecast.setText(
+            f"При пороге {threshold:g} будет выбрано {selected} из {len(scores)} кандидатов"
+        )
 
     def sources_clear(self) -> None:
         self.sources.clear()
