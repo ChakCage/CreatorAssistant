@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$TargetPath,
-    [string]$CommitHash = ""
+    [string]$CommitHash = "",
+    [switch]$Launch
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,3 +39,8 @@ foreach ($Folder in $CandidateFolders) {
 Write-Host "Shortcut: $ShortcutPath"
 Write-Host "Target: $TargetPath"
 Write-Host "Working directory: $WorkingDirectory"
+if ($Launch) {
+    $ExitCode = $Shell.Run('"' + $ShortcutPath + '"', 1, $false)
+    if ($ExitCode -ne 0) { throw "Desktop shortcut launch failed: $ExitCode" }
+    Write-Host "Launched through shortcut: $ShortcutPath"
+}

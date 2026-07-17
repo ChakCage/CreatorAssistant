@@ -1,5 +1,6 @@
 param(
-    [switch]$SkipInstall
+    [switch]$SkipInstall,
+    [switch]$VerifyLaunch
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,7 +65,7 @@ if (-not (Test-Path -LiteralPath $StagedExe)) { throw "EXE was not found after b
 if (Test-Path -LiteralPath $Current) { Remove-Item -LiteralPath $Current -Recurse -Force }
 Move-Item -LiteralPath $StagedApp -Destination $Current
 if (Test-Path -LiteralPath $Staging) { Remove-Item -LiteralPath $Staging }
-& (Join-Path $PSScriptRoot 'update-desktop-shortcut.ps1') -TargetPath $CurrentExe -CommitHash $Commit
+& (Join-Path $PSScriptRoot 'update-desktop-shortcut.ps1') -TargetPath $CurrentExe -CommitHash $Commit -Launch:$VerifyLaunch
 if ($LASTEXITCODE -ne 0) { throw 'Desktop shortcut update failed.' }
 Write-Host "Ready: $CurrentExe"
 Write-Host "Commit: $Commit"
