@@ -5,15 +5,19 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(SPECPATH).resolve()
 SOURCE_ROOT = PROJECT_ROOT / 'src'
+BUILD_INFO = PROJECT_ROOT / 'build' / 'generated' / 'build_info.json'
+DATA_FILES = [(
+    str(SOURCE_ROOT / 'creator_assistant' / 'workers' / 'audio_separator_worker.py'),
+    'creator_assistant\\workers',
+)]
+if BUILD_INFO.is_file():
+    DATA_FILES.append((str(BUILD_INFO), 'creator_assistant'))
 
 a = Analysis(
     [str(SOURCE_ROOT / 'creator_assistant' / 'main.py')],
     pathex=[str(SOURCE_ROOT)],
     binaries=[],
-    datas=[(
-        str(SOURCE_ROOT / 'creator_assistant' / 'workers' / 'audio_separator_worker.py'),
-        'creator_assistant\\workers',
-    )],
+    datas=DATA_FILES,
     hiddenimports=['PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets'],
     hookspath=[],
     hooksconfig={},

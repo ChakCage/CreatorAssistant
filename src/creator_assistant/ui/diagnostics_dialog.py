@@ -30,6 +30,7 @@ from creator_assistant.app import ServiceContainer
 from creator_assistant.domain.job import CancellationToken
 from creator_assistant.domain.models import DependencyInfo, ProgressInfo
 from creator_assistant.infrastructure.settings_store import local_data_root
+from creator_assistant.infrastructure.build_info import current_build_info
 from creator_assistant.ui.widgets.error_dialog import ErrorDialog
 from creator_assistant.ui.workers import FunctionWorker, UiWorkerBridge
 from creator_assistant.infrastructure.crash_logging import event as crash_event
@@ -54,6 +55,13 @@ class DiagnosticsDialog(QDialog):
         self.setWindowTitle("Диагностика зависимостей")
         self.resize(940, 570)
         layout = QVBoxLayout(self)
+        build = current_build_info()
+        self.build_info = QLabel(
+            f"Запущенная EXE: {build.executable}\nCommit: {build.commit}\nДата сборки: {build.build_date}"
+        )
+        self.build_info.setWordWrap(True)
+        self.build_info.setTextInteractionFlags(self.build_info.textInteractionFlags())
+        layout.addWidget(self.build_info)
         self.summary = QLabel("Нажмите «Проверить», чтобы обновить сведения.")
         layout.addWidget(self.summary)
         self.table = QTableWidget(0, 7)

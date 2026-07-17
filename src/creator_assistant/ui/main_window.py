@@ -11,13 +11,15 @@ from creator_assistant.ui.shorts.shorts_tab import ShortsTab
 from creator_assistant.ui.autopilot_tab import AutopilotTab
 from creator_assistant.ui.settings_dialog import SettingsDialog
 from creator_assistant.infrastructure.crash_logging import event as crash_event, safe_call
+from creator_assistant.infrastructure.build_info import current_build_info
 
 
 class MainWindow(QMainWindow):
     def __init__(self, container: ServiceContainer) -> None:
         super().__init__()
         self.container = container
-        self.setWindowTitle("Creator Assistant")
+        build = current_build_info()
+        self.setWindowTitle(f"Creator Assistant · {build.commit}")
         self.setMinimumSize(1040, 700)
         toolbar = QToolBar("Основное")
         toolbar.setMovable(False)
@@ -44,7 +46,8 @@ class MainWindow(QMainWindow):
         self.autopilot_tab = AutopilotTab(container)
         self.tabs.addTab(self.autopilot_tab, "Автопилот")
         self.setCentralWidget(self.tabs)
-        self.statusBar().showMessage("Готов к работе")
+        self.statusBar().showMessage(f"Готов к работе · {build.executable}")
+        self.statusBar().setToolTip(f"EXE: {build.executable}\nCommit: {build.commit}\nСборка: {build.build_date}")
         self._restore_or_size_window()
         if self.container.first_run:
             QTimer.singleShot(500, self.open_diagnostics)
