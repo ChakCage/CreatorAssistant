@@ -50,7 +50,7 @@ def score(candidate_id="c1"):
 
 
 def test_lists_local_model_and_rejects_remote_endpoint():
-    backend = OllamaSemanticScorer(opener=lambda *_args, **_kwargs: Response({
+    backend = OllamaSemanticScorer(model="qwen3:14b", opener=lambda *_args, **_kwargs: Response({
         "models": [{"name": "qwen3:14b", "size": 9_000_000_000}]
     }))
     assert backend.model_info()["name"] == "qwen3:14b"
@@ -98,7 +98,7 @@ def test_structured_score_uses_schema_and_records_metrics():
     assert result[0].semantic_score == 84
     assert requests[0]["format"]["type"] == "object"
     assert requests[0]["options"]["temperature"] == 0
-    assert requests[0]["options"]["num_ctx"] == 16384
+    assert requests[0]["options"]["num_ctx"] == 32768
     assert backend.last_metrics.eval_count == 12
 
 
@@ -155,8 +155,34 @@ def test_timeout_is_converted_to_backend_error():
     def timeout(*_args, **_kwargs):
         raise TimeoutError("slow")
 
-    with pytest.raises(SemanticBackendError, match="недоступен"):
+    with pytest.raises(SemanticBackendError, match="timeout подключения"):
         OllamaSemanticScorer(opener=timeout).list_models()
+
+
+def test_prepare_checks_local_api_exact_model_and_warms_it_with_long_keep_alive():
+    requests = []
+
+    def opener(request, **kwargs):
+        requests.append((request.full_url, json.loads(request.data) if request.data else None, kwargs["timeout"]))
+        if request.full_url.endswith("/api/version"):
+            return Response({"version": "0.12.0"})
+        if request.full_url.endswith("/api/tags"):
+            return Response({"models": [{"name": "qwen3.6:35b-a3b", "digest": "deep"}]})
+        if request.full_url.endswith("/api/ps"):
+            return Response({"models": [{"name": "qwen3.6:35b-a3b", "context_length": 32768}]})
+        return Response({"response": "готов", "done": True})
+
+    backend = OllamaSemanticScorer(
+        model="qwen3.6:35b-a3b", opener=opener, connection_timeout=15,
+        warmup_timeout=900, timeout=1800, keep_alive="60m", context_length=32768,
+    )
+    result = backend.prepare(CancellationToken())
+    warmup = next(item for item in requests if item[0].endswith("/api/generate"))
+    assert result["model"]["name"] == "qwen3.6:35b-a3b"
+    assert warmup[1]["model"] == "qwen3.6:35b-a3b"
+    assert warmup[1]["keep_alive"] == "60m"
+    assert warmup[1]["options"]["num_ctx"] == 32768
+    assert warmup[2] == 900
 
 
 def test_cancellation_is_checked_after_api_response():

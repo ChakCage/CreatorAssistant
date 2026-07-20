@@ -53,6 +53,7 @@ from creator_assistant.infrastructure.automation_job_store import AutomationJobS
 from creator_assistant.services.automation.engine import AutomationEngine
 from creator_assistant.services.automation.shorts_pipeline import ExistingShortsAutomationPipeline
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
+from creator_assistant.services.shorts.global_template_library import GlobalShortsTemplateLibrary
 from creator_assistant.infrastructure.credential_store import WindowsCredentialStore
 from creator_assistant.infrastructure.publishing_store import PublishingStore
 from creator_assistant.services.publishing.accounts import PublishingAccountService
@@ -75,6 +76,7 @@ class ServiceContainer:
         self.publishing_accounts = PublishingAccountService(self.publishing_store, self.publishing_credentials, self.publishing_oauth)
         self.publishing_manager = PublishingManager(self.publishing_store, self.publishing_credentials)
         self.publishing_agent = BackgroundPublishingAgent(self.publishing_manager)
+        self.global_shorts_templates = GlobalShortsTemplateLibrary()
         self.youtube_auth = YtDlpAuthContext.from_settings(self.settings)
         self.runner = ProcessRunner(self.logger)
         self.detector = DependencyDetector(self.runner)
@@ -182,12 +184,18 @@ class ServiceContainer:
         self.shorts_candidate_generator = CandidateGenerator()
         self.shorts_candidate_scorer = HeuristicCandidateScorer()
         ai_settings = self.settings.get("shorts_ai", {})
+        ai_context = int(ai_settings.get("context_length", 32768))
+        if str(ai_settings.get("context_mode", "auto")) == "auto":
+            ai_context = max(32768, ai_context)
         if ai_settings.get("enabled", False) and ai_settings.get("backend", "ollama") == "ollama":
             self.shorts_semantic_backend = OllamaSemanticScorer(
                 endpoint=str(ai_settings.get("endpoint", "http://127.0.0.1:11434")),
-                model=str(ai_settings.get("model", "qwen3:14b")),
-                timeout=float(ai_settings.get("timeout", 180)),
-                context_length=int(ai_settings.get("context_length", 16384)),
+                model=str(ai_settings.get("model", "qwen3.6:35b-a3b")),
+                timeout=float(ai_settings.get("timeout", 1800)),
+                keep_alive=str(ai_settings.get("keep_alive", "60m")),
+                connection_timeout=float(ai_settings.get("connection_timeout", 15)),
+                warmup_timeout=float(ai_settings.get("warmup_timeout", 900)),
+                context_length=ai_context,
             )
         else:
             self.shorts_semantic_backend = DisabledSemanticScorer()

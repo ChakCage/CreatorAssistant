@@ -5,6 +5,7 @@ import socket
 import urllib.error
 import urllib.parse
 import urllib.request
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -22,6 +23,7 @@ from creator_assistant.services.shorts.semantic_models import (
 
 PROMPT_VERSION = "shorts-semantic-v1"
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+DEFAULT_OLLAMA_MODEL = "qwen3.6:35b-a3b"
 
 
 class TitleTranslationResponse(BaseModel):
@@ -50,6 +52,14 @@ class SemanticBackendError(RuntimeError):
 
 
 class SemanticResponseError(SemanticBackendError):
+    pass
+
+
+class OllamaConnectionError(SemanticBackendError):
+    pass
+
+
+class OllamaGenerationTimeout(SemanticBackendError):
     pass
 
 
@@ -223,11 +233,13 @@ class OllamaSemanticScorer(SemanticScorerBackend):
     def __init__(
         self,
         endpoint: str = "http://127.0.0.1:11434",
-        model: str = "qwen3:14b",
-        timeout: float = 180.0,
+        model: str = DEFAULT_OLLAMA_MODEL,
+        timeout: float = 1800.0,
         opener: Optional[Callable[..., Any]] = None,
-        keep_alive: str = "10m",
-        context_length: int = 16384,
+        keep_alive: str = "60m",
+        context_length: int = 32768,
+        connection_timeout: float = 15.0,
+        warmup_timeout: float = 900.0,
     ) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.model = model
@@ -235,7 +247,11 @@ class OllamaSemanticScorer(SemanticScorerBackend):
         self.opener = opener or urllib.request.urlopen
         self.keep_alive = keep_alive
         self.context_length = max(2048, min(65536, int(context_length)))
+        self.connection_timeout = max(1.0, float(connection_timeout))
+        self.warmup_timeout = max(1.0, float(warmup_timeout))
         self.last_metrics = SemanticRunMetrics()
+        self.last_activity_at = 0.0
+        self.last_runtime_info: Dict[str, Any] = {}
 
     @property
     def is_local(self) -> bool:
@@ -248,7 +264,7 @@ class OllamaSemanticScorer(SemanticScorerBackend):
 
     def list_models(self) -> List[Dict[str, Any]]:
         self.require_local()
-        payload = self._request("GET", "/api/tags")
+        payload = self._request("GET", "/api/tags", timeout=self.connection_timeout, phase="подключение")
         models = payload.get("models", [])
         if not isinstance(models, list):
             raise SemanticResponseError("Ollama вернула некорректный список моделей.")
@@ -272,6 +288,34 @@ class OllamaSemanticScorer(SemanticScorerBackend):
         if cancellation:
             cancellation.raise_if_cancelled()
         return info
+
+    def preflight(self, cancellation: Optional[CancellationToken] = None) -> Dict[str, Any]:
+        """Check localhost API and the exact configured model without substituting another model."""
+        if cancellation:
+            cancellation.raise_if_cancelled()
+        version = self._request("GET", "/api/version", timeout=self.connection_timeout, phase="подключение")
+        info = self.model_info()
+        return {"version": str(version.get("version", "")), "model": info}
+
+    def warm_up(self, cancellation: CancellationToken) -> Dict[str, Any]:
+        cancellation.raise_if_cancelled()
+        payload = {
+            "model": self.model,
+            "prompt": "Ответь одним словом: готов",
+            "stream": False,
+            "keep_alive": self.keep_alive,
+            "options": {"temperature": 0, "num_predict": 4, "num_ctx": self.context_length},
+        }
+        value = self._request("POST", "/api/generate", payload, timeout=self.warmup_timeout, phase="прогрев модели")
+        self._record_metrics(value)
+        cancellation.raise_if_cancelled()
+        return self.runtime_info() or value
+
+    def prepare(self, cancellation: CancellationToken) -> Dict[str, Any]:
+        preflight = self.preflight(cancellation)
+        runtime = self.warm_up(cancellation)
+        self.last_runtime_info = dict(runtime or {})
+        return {**preflight, "runtime": runtime}
 
     def runtime_models(self) -> List[Dict[str, Any]]:
         values = self._request("GET", "/api/ps").get("models", [])
@@ -430,13 +474,13 @@ class OllamaSemanticScorer(SemanticScorerBackend):
             payload = {
                 "model": self.model,
                 "messages": messages,
-                "stream": False,
+                "stream": True,
                 "format": model_class.model_json_schema(),
                 "think": bool(think),
                 "keep_alive": self.keep_alive,
                 "options": {"temperature": 0, "num_ctx": self.context_length},
             }
-            raw = self._request("POST", "/api/chat", payload)
+            raw = self._stream_chat(payload)
             self._record_metrics(raw)
             cancellation.raise_if_cancelled()
             try:
@@ -457,18 +501,94 @@ class OllamaSemanticScorer(SemanticScorerBackend):
         ):
             setattr(self.last_metrics, target, getattr(self.last_metrics, target) + int(raw.get(source, 0) or 0))
 
-    def _request(self, method: str, path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _stream_chat(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Consume Ollama NDJSON incrementally; socket timeout is inactivity, not total generation time."""
+        self.require_local()
+        request = urllib.request.Request(
+            self.endpoint + "/api/chat",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+        try:
+            with self.opener(request, timeout=self.timeout) as response:
+                if not hasattr(response, "readline"):
+                    raw = response.read().decode("utf-8")
+                    value = json.loads(raw)
+                    if not isinstance(value, dict):
+                        raise SemanticResponseError("Ollama API вернула неожиданный тип streaming-ответа.")
+                    return value
+                content_parts: list[str] = []
+                thinking_parts: list[str] = []
+                final: Dict[str, Any] = {}
+                while True:
+                    line = response.readline()
+                    if not line:
+                        break
+                    self.last_activity_at = time.monotonic()
+                    value = json.loads(line.decode("utf-8"))
+                    if value.get("error"):
+                        raise SemanticBackendError(str(value["error"]))
+                    message = value.get("message") if isinstance(value.get("message"), dict) else {}
+                    content_parts.append(str(message.get("content", "")))
+                    thinking_parts.append(str(message.get("thinking", "")))
+                    final = value
+                final["message"] = {
+                    "content": "".join(content_parts),
+                    "thinking": "".join(thinking_parts),
+                }
+                return final
+        except (TimeoutError, socket.timeout) as exc:
+            raise OllamaGenerationTimeout(
+                f"Ollama: generation timeout для модели {self.model} после {self.timeout:.0f} сек без данных. "
+                "API localhost доступен, но генерация не сообщала активности."
+            ) from exc
+        except urllib.error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
+            raise SemanticBackendError(f"Ollama HTTP {exc.code}, модель {self.model}: {details[:1000]}") from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise OllamaConnectionError(f"Соединение с Ollama {self.endpoint} потеряно во время генерации: {exc}") from exc
+        except ValueError as exc:
+            raise SemanticResponseError("Ollama streaming API вернула повреждённый NDJSON.") from exc
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        payload: Optional[Dict[str, Any]] = None,
+        *,
+        timeout: float | None = None,
+        phase: str = "запрос",
+    ) -> Dict[str, Any]:
         self.require_local()
         data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(
             self.endpoint + path, data=data, method=method,
             headers={"Content-Type": "application/json; charset=utf-8"},
         )
+        request_timeout = self.timeout if timeout is None else float(timeout)
         try:
-            with self.opener(request, timeout=self.timeout) as response:
+            with self.opener(request, timeout=request_timeout) as response:
                 raw = response.read().decode("utf-8")
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, socket.timeout, OSError) as exc:
-            raise SemanticBackendError(f"Ollama API недоступен: {exc}") from exc
+                self.last_activity_at = time.monotonic()
+        except (TimeoutError, socket.timeout) as exc:
+            if phase in {"генерация", "прогрев модели"}:
+                raise OllamaGenerationTimeout(
+                    f"Ollama: истёк timeout этапа «{phase}» для модели {self.model} "
+                    f"({request_timeout:.0f} сек). API localhost мог оставаться доступен."
+                ) from exc
+            raise OllamaConnectionError(
+                f"Ollama: timeout подключения к {self.endpoint} ({request_timeout:.0f} сек): {exc}"
+            ) from exc
+        except urllib.error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
+            raise SemanticBackendError(
+                f"Ollama HTTP {exc.code} на этапе «{phase}», модель {self.model}: {details[:1000]}"
+            ) from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise OllamaConnectionError(
+                f"Ollama API {self.endpoint} недоступен на этапе «{phase}»: {exc}"
+            ) from exc
         try:
             value = json.loads(raw)
         except ValueError as exc:

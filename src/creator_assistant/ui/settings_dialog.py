@@ -195,18 +195,19 @@ class SettingsDialog(QDialog):
         self.shorts_ai_model.setMinimumContentsLength(28)
         self.shorts_ai_model.setMaxVisibleItems(10)
         self.shorts_ai_model.view().setTextElideMode(Qt.ElideRight)
-        saved_model = str(ai.get("model", "qwen3:14b"))
+        saved_model = str(ai.get("model", "qwen3.6:35b-a3b"))
         self.shorts_ai_model.addItem(saved_model, saved_model)
         self.shorts_ai_model.setToolTip(saved_model)
         self.shorts_ai_mode = QComboBox()
         for label, value in (("Быстро", "fast"), ("Сбалансированно", "balanced"), ("Глубоко", "deep")):
             self.shorts_ai_mode.addItem(label, value)
         self.shorts_ai_mode.setCurrentIndex(max(0, self.shorts_ai_mode.findData(ai.get("mode", "balanced"))))
-        self.shorts_ai_context = QSpinBox()
-        self.shorts_ai_context.setRange(2048, 65536)
-        self.shorts_ai_context.setSingleStep(2048)
-        self.shorts_ai_context.setSuffix(" ctx")
-        self.shorts_ai_context.setValue(int(ai.get("context_length", MODE_PROFILES.get(str(ai.get("mode", "balanced")), MODE_PROFILES["balanced"])["context_length"])))
+        self.shorts_ai_context = QComboBox()
+        for label, value in (("Auto (рекомендуется)", 0), ("16384", 16384), ("32768", 32768), ("65536", 65536)):
+            self.shorts_ai_context.addItem(label, value)
+        context_mode = str(ai.get("context_mode", "auto"))
+        saved_context = 0 if context_mode == "auto" else int(ai.get("context_length", 32768))
+        self.shorts_ai_context.setCurrentIndex(max(0, self.shorts_ai_context.findData(saved_context)))
         self.shorts_ai_preliminary = QSpinBox()
         self.shorts_ai_preliminary.setRange(10, 80)
         self.shorts_ai_preliminary.setValue(int(ai.get("preliminary_count", 40)))
@@ -214,11 +215,21 @@ class SettingsDialog(QDialog):
         self.shorts_ai_final.setRange(1, 20)
         self.shorts_ai_final.setValue(int(ai.get("final_count", 5)))
         self.shorts_ai_timeout = QSpinBox()
-        self.shorts_ai_timeout.setRange(10, 900)
+        self.shorts_ai_timeout.setRange(60, 3600)
         self.shorts_ai_timeout.setSuffix(" сек")
-        self.shorts_ai_timeout.setValue(int(ai.get("timeout", 180)))
-        self.shorts_ai_fallback = QCheckBox("Fallback на эвристику при ошибке")
-        self.shorts_ai_fallback.setChecked(bool(ai.get("fallback", True)))
+        self.shorts_ai_timeout.setValue(int(ai.get("timeout", 1800)))
+        self.shorts_ai_warmup_timeout = QSpinBox()
+        self.shorts_ai_warmup_timeout.setRange(60, 1800)
+        self.shorts_ai_warmup_timeout.setSuffix(" сек")
+        self.shorts_ai_warmup_timeout.setValue(int(ai.get("warmup_timeout", 900)))
+        self.shorts_ai_strict = QCheckBox("Использовать только выбранную AI-модель")
+        self.shorts_ai_strict.setChecked(bool(ai.get("strict_model", True)))
+        self.shorts_ai_fallback = QCheckBox("Явно разрешить fallback на эвристику при ошибке")
+        self.shorts_ai_fallback.setChecked(bool(ai.get("fallback", False)))
+        if self.shorts_ai_strict.isChecked():
+            self.shorts_ai_fallback.setChecked(False)
+        self.shorts_ai_fallback.setEnabled(not self.shorts_ai_strict.isChecked())
+        self.shorts_ai_strict.toggled.connect(self._strict_ai_toggled)
         self.shorts_ai_cache = QCheckBox("Кэшировать смысловую оценку")
         self.shorts_ai_cache.setChecked(bool(ai.get("cache", True)))
         self.shorts_ai_global = QCheckBox("Глобально сравнивать финалистов")
@@ -245,7 +256,9 @@ class SettingsDialog(QDialog):
         shorts_form.addRow("Context", self.shorts_ai_context)
         shorts_form.addRow("Предварительных", self.shorts_ai_preliminary)
         shorts_form.addRow("Финальных", self.shorts_ai_final)
-        shorts_form.addRow("Timeout", self.shorts_ai_timeout)
+        shorts_form.addRow("Generation timeout", self.shorts_ai_timeout)
+        shorts_form.addRow("Warm-up timeout", self.shorts_ai_warmup_timeout)
+        shorts_form.addRow(self.shorts_ai_strict)
         shorts_form.addRow(self.shorts_ai_fallback)
         shorts_form.addRow(self.shorts_ai_cache)
         shorts_form.addRow(self.shorts_ai_global)
@@ -256,6 +269,28 @@ class SettingsDialog(QDialog):
         shorts_form.addRow(ai_actions)
         shorts_form.addRow("Статус", self.shorts_ai_status)
         content_layout.addWidget(shorts_group)
+
+        self.global_template_selectors = {}
+        if self.container and hasattr(self.container, "global_shorts_templates"):
+            global_group = QGroupBox("Глобальные шаблоны Shorts")
+            global_form = QFormLayout(global_group)
+            library = self.container.global_shorts_templates
+            for label, scope in (
+                ("Шаблон по умолчанию для новых проектов", "default"),
+                ("YouTube template", "youtube"),
+                ("TikTok template", "tiktok"),
+            ):
+                combo = QComboBox()
+                combo.addItem("Не назначен", "")
+                for template in library.templates():
+                    combo.addItem(template.name, template.template_id)
+                combo.setCurrentIndex(max(0, combo.findData(library.assignment(scope))))
+                self.global_template_selectors[scope] = combo
+                global_form.addRow(label, combo)
+            note = QLabel("Изображение баннера не хранится в шаблоне и выбирается по профилю автора.")
+            note.setWordWrap(True)
+            global_form.addRow(note)
+            content_layout.addWidget(global_group)
 
         access_group = QGroupBox("Доступ к YouTube")
         access_form = QFormLayout(access_group)
@@ -898,8 +933,22 @@ class SettingsDialog(QDialog):
             endpoint=self.shorts_ai_endpoint.text().strip(),
             model=self._selected_shorts_ai_model(),
             timeout=timeout or self.shorts_ai_timeout.value(),
-            context_length=self.shorts_ai_context.value(),
+            warmup_timeout=self.shorts_ai_warmup_timeout.value(),
+            keep_alive="60m",
+            context_length=self._selected_shorts_ai_context(),
         )
+
+    def _selected_shorts_ai_context(self) -> int:
+        selected = int(self.shorts_ai_context.currentData() or 0)
+        if selected:
+            return selected
+        profile = MODE_PROFILES.get(str(self.shorts_ai_mode.currentData()), MODE_PROFILES["balanced"])
+        return max(32768, int(profile["context_length"]))
+
+    def _strict_ai_toggled(self, enabled: bool) -> None:
+        if enabled:
+            self.shorts_ai_fallback.setChecked(False)
+        self.shorts_ai_fallback.setEnabled(not enabled)
 
     def _set_shorts_ai_buttons_enabled(self, enabled: bool) -> None:
         for button in (self.shorts_ai_refresh, self.shorts_ai_test, self.shorts_ai_unload, self.shorts_ai_compare):
@@ -1040,7 +1089,7 @@ class SettingsDialog(QDialog):
                     endpoint=self.shorts_ai_endpoint.text().strip(),
                     model=name,
                     timeout=min(180, self.shorts_ai_timeout.value()),
-                    context_length=self.shorts_ai_context.value(),
+                    context_length=self._selected_shorts_ai_context(),
                 )
                 rows.append(backend.compatibility_test(CancellationToken()))
             return rows
@@ -1059,7 +1108,6 @@ class SettingsDialog(QDialog):
 
     def _apply_shorts_ai_mode_profile(self) -> None:
         profile = MODE_PROFILES.get(str(self.shorts_ai_mode.currentData()), MODE_PROFILES["balanced"])
-        self.shorts_ai_context.setValue(int(profile["context_length"]))
         self.shorts_ai_preliminary.setValue(int(profile["preliminary_count"]))
 
     def _save(self) -> None:
@@ -1094,16 +1142,24 @@ class SettingsDialog(QDialog):
             "model_digest": selected_model_info.digest if selected_model_info else previous_ai.get("model_digest", ""),
             "model_quantization": selected_model_info.quantization if selected_model_info else previous_ai.get("model_quantization", ""),
             "mode": self.shorts_ai_mode.currentData(),
-            "context_length": self.shorts_ai_context.value(),
+            "context_mode": "auto" if int(self.shorts_ai_context.currentData() or 0) == 0 else "fixed",
+            "context_length": self._selected_shorts_ai_context(),
             "preliminary_count": self.shorts_ai_preliminary.value(),
             "final_count": self.shorts_ai_final.value(),
             "timeout": self.shorts_ai_timeout.value(),
-            "fallback": self.shorts_ai_fallback.isChecked(),
+            "connection_timeout": 15,
+            "warmup_timeout": self.shorts_ai_warmup_timeout.value(),
+            "keep_alive": "60m",
+            "strict_model": self.shorts_ai_strict.isChecked(),
+            "fallback": self.shorts_ai_fallback.isChecked() and not self.shorts_ai_strict.isChecked(),
             "cache": self.shorts_ai_cache.isChecked(),
             "show_reasons": self.shorts_ai_show_reasons.isChecked(),
             "global_comparison": self.shorts_ai_global.isChecked(),
             "weights": previous_ai.get("weights", {"semantic": 0.55, "heuristic": 0.25, "activity": 0.15, "uniqueness": 0.05}),
         }
+        if self.container and hasattr(self.container, "global_shorts_templates"):
+            for scope, combo in self.global_template_selectors.items():
+                self.container.global_shorts_templates.assign(scope, str(combo.currentData() or ""))
         self.result_settings["reaper_initial_audio"] = self.initial_audio.currentData()
         self.result_settings["whisper_backend"] = self.whisper_backend.currentData()
         self.result_settings["whisper_model"] = self.whisper_model.currentData()

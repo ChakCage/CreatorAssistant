@@ -127,15 +127,20 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "enabled": True,
         "backend": "ollama",
         "endpoint": "http://127.0.0.1:11434",
-        "model": "qwen3:14b",
+        "model": "qwen3.6:35b-a3b",
         "model_digest": "",
         "model_quantization": "",
         "mode": "balanced",
-        "context_length": 16384,
+        "context_length": 32768,
+        "context_mode": "auto",
         "preliminary_count": 40,
         "final_count": 5,
-        "timeout": 180,
-        "fallback": True,
+        "timeout": 1800,
+        "connection_timeout": 15,
+        "warmup_timeout": 900,
+        "keep_alive": "60m",
+        "strict_model": True,
+        "fallback": False,
         "cache": True,
         "show_reasons": True,
         "global_comparison": True,
@@ -248,6 +253,17 @@ class SettingsStore:
         ai.setdefault("model_digest", "")
         ai.setdefault("model_quantization", "")
         ai.setdefault("context_length", {"fast": 8192, "balanced": 16384, "deep": 32768}.get(ai.get("mode"), 16384))
+        ai.setdefault("context_mode", "auto")
+        ai.setdefault("connection_timeout", 15)
+        ai.setdefault("warmup_timeout", 900)
+        ai.setdefault("keep_alive", "60m")
+        ai.setdefault("strict_model", True)
+        if ai.get("model") == "qwen3:14b":
+            ai["model"] = "qwen3.6:35b-a3b"
+        if int(ai.get("timeout", 0) or 0) < 600:
+            ai["timeout"] = 1800
+        if ai.get("strict_model", True):
+            ai["fallback"] = False
 
     @staticmethod
     def _migrate_author_presets(settings: Dict[str, Any]) -> None:

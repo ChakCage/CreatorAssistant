@@ -106,10 +106,18 @@ class ProcessRunner:
                     raise JobCancelledError("Операция отменена пользователем.")
                 if timeout and time.monotonic() - started > timeout:
                     self._terminate_tree(process)
-                    raise ProcessExecutionError("Внешняя программа не ответила вовремя.")
+                    name = Path(args[0]).name if args else "unknown"
+                    raise ProcessExecutionError(
+                        f"Процесс {name} превысил timeout {timeout:g} сек.",
+                        details="stderr:\n" + "\n".join(stderr_lines)[-8000:],
+                    )
                 if no_output_timeout and time.monotonic() - last_activity > no_output_timeout:
                     self._terminate_tree(process)
-                    raise ProcessExecutionError("Внешняя программа запущена, но обработка не началась или перестала сообщать о прогрессе.")
+                    name = Path(args[0]).name if args else "unknown"
+                    raise ProcessExecutionError(
+                        f"Процесс {name} запущен, но обработка не началась или перестала сообщать о прогрессе.",
+                        details="stderr:\n" + "\n".join(stderr_lines)[-8000:],
+                    )
                 try:
                     stream_name, item = output_queue.get(timeout=0.1)
                 except queue.Empty:
@@ -149,8 +157,8 @@ class ProcessRunner:
             if classified:
                 raise classified
             raise ProcessExecutionError(
-                "Внешняя программа завершилась с ошибкой.",
-                details=output[-8000:],
+                f"Процесс {Path(args[0]).name if args else 'unknown'} завершился с кодом {returncode}.",
+                details=("stderr:\n" + result.stderr + "\n\nstdout:\n" + result.stdout)[-8000:],
             )
         return result
 
