@@ -48,6 +48,7 @@ from creator_assistant.ui.shorts.source_panel import SourcePanel
 from creator_assistant.ui.shorts.subtitle_editor import SubtitleEditor
 from creator_assistant.ui.shorts.render_queue import RenderQueue
 from creator_assistant.ui.shorts.project_template_dialog import ProjectTemplateDialog
+from creator_assistant.ui.shorts.global_template_dialog import GlobalTemplateLibraryDialog
 from creator_assistant.ui.widgets.error_dialog import ErrorDialog
 
 
@@ -212,7 +213,7 @@ class _AnalysisWorker(QObject):
                 if ai_settings.get("enabled", False):
                     self.progress.emit(
                         "10. Локальный AI-анализ",
-                        f"{ai_settings.get('model', 'qwen3:14b')} сравнивает смысловые моменты; исходник остаётся на компьютере.",
+                        f"{ai_settings.get('model', 'qwen3.6:35b-a3b')} сравнивает смысловые моменты; исходник остаётся на компьютере.",
                         88,
                     )
                 analysis_result = self.container.shorts_hybrid_analyzer.analyse(
@@ -502,6 +503,7 @@ class ShortsTab(QWidget):
         self.subtitle_editor.template_apply_all_requested.connect(self._apply_project_template_all)
         self.subtitle_editor.template_reset_requested.connect(self._reset_candidate_to_template)
         self.subtitle_editor.template_view_requested.connect(self._view_project_template)
+        self.subtitle_editor.global_templates_requested.connect(self._open_global_templates)
         self.render_queue.render_requested.connect(self._start_render)
         self.render_queue.retry_requested.connect(self._start_render)
         self.render_queue.cancel_requested.connect(self.cancel_analysis)
@@ -660,6 +662,12 @@ class ShortsTab(QWidget):
         candidates = payload["candidates"]
         self.transcript = payload["transcript"]
         tails_changed = self._align_candidate_tails(candidates)
+        template = self._project_template()
+        if template:
+            for candidate in candidates:
+                if not candidate.settings_override:
+                    self._apply_template_to_candidate(candidate, template, reset_override=True)
+            tails_changed = True
         self.candidates = candidates
         self.candidate_list.set_candidates(candidates)
         if self.paths:
@@ -668,7 +676,16 @@ class ShortsTab(QWidget):
             self.review_service.save(candidates)
         result = payload.get("analysis_result")
         if result and result.used_ai:
-            detail = f"гибридный локальный AI ({'cache' if result.cache_hit else result.model})"
+            metrics = result.metrics or {}
+            context = int(metrics.get("allocated_context") or metrics.get("context_length") or 0)
+            split = ""
+            if metrics.get("gpu_percent") is not None:
+                split = f" · CPU {metrics.get('cpu_percent')}% / GPU {metrics.get('gpu_percent')}%"
+            blocks = f" · блоков {metrics.get('completed_blocks')}/{metrics.get('block_count')}" if metrics.get("block_count") else ""
+            detail = (
+                f"локальный AI {result.model} · context {context or '—'}{split}{blocks}"
+                if not result.cache_hit else f"локальный AI {result.model} · cache"
+            )
         elif result and result.fallback_reason:
             detail = f"эвристический fallback: {result.fallback_reason}"
         else:
@@ -888,6 +905,7 @@ class ShortsTab(QWidget):
         )
         if answer == QMessageBox.Yes:
             self._apply_project_template_all()
+        self._refresh_autopilot_template_summary()
 
     @Slot()
     def _view_project_template(self) -> None:
@@ -915,15 +933,50 @@ class ShortsTab(QWidget):
             if answer == QMessageBox.Cancel:
                 return
             overwrite = answer == QMessageBox.Yes
+        applied = 0
         for candidate in self.candidates:
             if candidate.settings_override and not overwrite:
                 continue
             self._apply_template_to_candidate(candidate, template, reset_override=True)
+            applied += 1
         self.review_service.save(self.candidates)
         current = self.subtitle_editor.candidate
         if current:
             self.subtitle_editor.set_context(current, self.transcript, self.paths)
-        self.progress_panel.update_state("Шаблон применён", f"Обновлено кандидатов: {sum(not item.settings_override for item in self.candidates)}.", 94)
+        self.progress_panel.update_state("Шаблон применён", f"Шаблон применён к {applied} Shorts.", 94)
+        self._refresh_autopilot_template_summary()
+
+    def _refresh_autopilot_template_summary(self) -> None:
+        tab = getattr(self.window(), "autopilot_tab", None)
+        refresh = getattr(tab, "_refresh_template_summary", None)
+        if callable(refresh):
+            refresh()
+
+    @Slot(object)
+    def _open_global_templates(self, candidate) -> None:
+        def current() -> ProjectShortsTemplate:
+            return ProjectShortsTemplate.from_candidate(candidate, {
+                "width": 1080, "height": 1920, "fps_policy": "source",
+                "encoder": "h264_nvenc" if self.container.shorts_render.prefer_nvenc else "libx264",
+                "audio_codec": "aac",
+            })
+
+        def apply(template: ProjectShortsTemplate, name: str) -> None:
+            if not self.paths:
+                return
+            store = ShortsManifestStore(self.paths.manifest)
+            manifest = store.load()
+            if manifest is None:
+                return
+            manifest.shorts_template = template.to_dict()
+            manifest.analysis_settings["global_template_name"] = name
+            store.save(manifest)
+            self._apply_project_template_all()
+            self._refresh_autopilot_template_summary()
+
+        GlobalTemplateLibraryDialog(
+            self.container.global_shorts_templates, current, apply, self,
+        ).exec()
 
     @Slot(object)
     def _reset_candidate_to_template(self, candidate) -> None:
@@ -1116,11 +1169,15 @@ class ShortsTab(QWidget):
         assert self._pending_root is not None
         self.source = source
         self.paths = self.project_store.open_or_create(self._pending_root, source)
+        applied_global = self._ensure_global_project_template()
         self.review_service = CandidateReviewService(self.paths, source.duration)
         source_json = self.paths.analysis / "source_info.json"
         source_json.write_text(json.dumps(source.__dict__, ensure_ascii=False, indent=2), encoding="utf-8")
         self.source_panel.show_source(source, self.paths.root)
-        self.progress_panel.update_state("Источник готов", "Manifest и структура проекта сохранены атомарно.", 8)
+        message = "Manifest и структура проекта сохранены атомарно."
+        if applied_global:
+            message += f" Будет применён шаблон: {applied_global}."
+        self.progress_panel.update_state("Источник готов", message, 8)
         self.start_button.setEnabled(True)
         transcript_path = self.paths.analysis / "transcript.json"
         if transcript_path.is_file():
@@ -1152,6 +1209,23 @@ class ShortsTab(QWidget):
                     self.progress_panel.update_state("Проект восстановлен", f"Загружено {len(self.candidates)} кандидатов; завершённые этапы будут взяты из cache.", 90)
             except (OSError, ValueError, TypeError):
                 self.candidates = []
+
+    def _ensure_global_project_template(self) -> str:
+        if not self.paths:
+            return ""
+        store = ShortsManifestStore(self.paths.manifest)
+        manifest = store.load()
+        if manifest is None or manifest.shorts_template:
+            return ""
+        library = getattr(self.container, "global_shorts_templates", None)
+        selected = library.selected("default") if library else None
+        if selected is None:
+            return ""
+        manifest.shorts_template = selected.project_template().to_dict()
+        manifest.analysis_settings["global_template_id"] = selected.template_id
+        manifest.analysis_settings["global_template_name"] = selected.name
+        store.save(manifest)
+        return selected.name
 
     def _align_candidate_tails(self, candidates) -> bool:
         if not self.transcript:

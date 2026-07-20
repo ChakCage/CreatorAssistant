@@ -16,6 +16,7 @@ from creator_assistant.services.shorts.semantic_backend import (
 )
 from creator_assistant.services.shorts.semantic_cache import SemanticCache, semantic_cache_payload
 from creator_assistant.services.shorts.semantic_models import SemanticCandidateInput, SemanticCandidateScore
+from creator_assistant.services.shorts.hierarchical_analyzer import HierarchicalLongVideoAnalyzer, estimate_tokens
 
 
 @dataclass
@@ -69,16 +70,25 @@ class HybridCandidateAnalyzer:
         inputs = [self._input(item, transcript, scenes, audio, content_type, context_window) for item in clustered]
         model = str(settings.get("model", getattr(backend, "model", "")))
         cached = None
+        hierarchy_metrics: Dict[str, Any] = {}
         try:
             model_info = None
             if hasattr(backend, "installed_models"):
                 installed = backend.installed_models()
-                model_info = choose_installed_model(installed, model)
+                strict_model = bool(settings.get("strict_model", True))
+                model_info = next((item for item in installed if item.name == model), None)
+                if model_info is None and not strict_model:
+                    model_info = choose_installed_model(installed, model)
                 if model_info is None:
-                    raise SemanticBackendError("В Ollama нет установленных моделей для анализа.")
+                    raise SemanticBackendError(
+                        f"Выбранная модель Ollama «{model}» не установлена. "
+                        "Автоматическая замена другой моделью запрещена."
+                    )
                 backend.model = model_info.name
                 model = model_info.name
                 settings["_resolved_model"] = model
+                if hasattr(backend, "prepare"):
+                    backend.prepare(cancellation)
             digest = getattr(model_info, "digest", "") or str(settings.get("model_digest", ""))
             quantization = getattr(model_info, "quantization", "") or str(settings.get("model_quantization", ""))
             transcript_hash = hashlib.sha256(transcript.text.encode("utf-8")).hexdigest()
@@ -95,7 +105,21 @@ class HybridCandidateAnalyzer:
             else:
                 if not hasattr(backend, "installed_models") and hasattr(backend, "check"):
                     backend.check(cancellation)
-                semantic = self._evaluate_batches(backend, inputs, cancellation, settings)
+                token_estimate = estimate_tokens(transcript.text)
+                if token_estimate > int(settings.get("long_video_threshold_tokens", 16000)):
+                    hierarchical = HierarchicalLongVideoAnalyzer().analyse(
+                        inputs, transcript, backend, cache, cancellation, settings,
+                    )
+                    semantic = hierarchical.scores
+                    hierarchy_metrics = {
+                        **hierarchical.diagnostics,
+                        "transcript_tokens_estimated": token_estimate,
+                        "block_cache_hits": hierarchical.cache_hits,
+                        "resumed": hierarchical.resumed,
+                        "context_length": hierarchical.context_length,
+                    }
+                else:
+                    semantic = self._evaluate_batches(backend, inputs, cancellation, settings)
                 selected_ids = []
                 cache_hit = False
             by_id = {item.candidate_id: item for item in semantic}
@@ -114,15 +138,26 @@ class HybridCandidateAnalyzer:
                     })
             result = self._ordered(clustered, selected_ids, requested_count)
             metrics = getattr(backend, "last_metrics", None)
+            runtime = dict(getattr(backend, "last_runtime_info", {}) or {})
+            size = int(runtime.get("size", 0) or 0)
+            size_vram = int(runtime.get("size_vram", 0) or 0)
+            runtime_metrics = {
+                "allocated_context": int(runtime.get("context_length", 0) or 0),
+                "size": size,
+                "size_vram": size_vram,
+                "gpu_percent": round(100 * size_vram / size, 1) if size else None,
+                "cpu_percent": round(100 * (size - size_vram) / size, 1) if size else None,
+            }
             return HybridAnalysisResult(
                 result, True, cache_hit, backend=backend.name, model=model,
                 model_digest=digest, quantization=quantization, analysis_mode=mode,
-                cache_key=cache_key, metrics=(metrics.__dict__.copy() if metrics else {}),
+                cache_key=cache_key,
+                metrics={**(metrics.__dict__.copy() if metrics else {}), **runtime_metrics, **hierarchy_metrics},
             )
         except Exception as exc:
             if cancellation.is_cancelled:
                 cancellation.raise_if_cancelled()
-            if not settings.get("fallback", True):
+            if not settings.get("fallback", False):
                 raise
             message = str(exc).strip() or type(exc).__name__
             for item in clustered:
