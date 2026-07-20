@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from creator_assistant.domain.publishing import (
-    ConnectionStatus, PublishingAccount, PublishingAttemptStatus, PublishingMode,
+    ConnectionStatus, PublishingAccount, PublishingAttemptStatus, PublishingMode, PublishingReceipt,
 )
 from creator_assistant.infrastructure.credential_store import WindowsCredentialStore
 from creator_assistant.infrastructure.publishing_store import PublishingStore
@@ -121,3 +121,51 @@ def test_connected_accounts_ui_lists_multiple_youtube_channels(tmp_path):
     assert {panel.table.item(row, 1).text() for row in range(2)} == {"Channel One", "Channel Two"}
     panel.close()
     assert QApplication.instance() is app
+
+
+class RemoteScheduleConnector:
+    def __init__(self):
+        self.scheduled = []
+
+    def upload(self, path, metadata, progress, cancelled):
+        progress(5, 5)
+        assert metadata["privacyStatus"] == "private"
+        return "youtube-id"
+
+    def schedule(self, remote_id, at):
+        self.scheduled.append((remote_id, at))
+
+    def get_status(self, remote_id):
+        return {"id": remote_id, "processingDetails": {"processingStatus": "complete"}, "status": {"privacyStatus": "private"}}
+
+
+def test_youtube_remote_schedule_uploads_immediately_and_uses_utc_publish_at(tmp_path):
+    media = tmp_path / "short.mp4"; media.write_bytes(b"video")
+    store = PublishingStore(tmp_path / "store")
+    store.save_account(PublishingAccount("account", "youtube", "Channel", status=ConnectionStatus.CONNECTED.value,
+        capability="public", granted_scopes=["https://www.googleapis.com/auth/youtube.upload"]))
+    store.save_receipt(PublishingReceipt("r", "a", "youtube", "account", "old", status=PublishingMode.PRIVATE_TEST.value))
+    connector = RemoteScheduleConnector()
+    manager = PublishingManager(store, WindowsCredentialStore(allow_test_memory=True), lambda *_: connector)
+    future = "2026-07-21T00:50:00+03:00"
+    attempt = manager.create_attempt("short_001", "youtube", "account", str(media), mode=PublishingMode.REAL.value,
+        scheduled_at=future, metadata={"network_approved": True})
+    assert attempt.status == PublishingAttemptStatus.UPLOAD_QUEUED.value
+    assert BackgroundPublishingAgent(manager).run_once(datetime(2026, 7, 20, tzinfo=timezone.utc)) == [attempt.attempt_id]
+    uploaded = manager.store.attempts()[0]
+    assert connector.scheduled == [("youtube-id", "2026-07-20T21:50:00Z")]
+    assert uploaded.status == PublishingAttemptStatus.REMOTE_PROCESSING.value
+    final = manager.refresh_status(attempt.attempt_id)
+    assert final.status == PublishingAttemptStatus.SCHEDULED_REMOTE.value
+
+
+def test_rebuild_schedule_changes_only_planned_attempts(tmp_path):
+    media = tmp_path / "short.mp4"; media.write_bytes(b"video")
+    manager = PublishingManager(PublishingStore(tmp_path / "store"), WindowsCredentialStore(allow_test_memory=True))
+    planned = manager.create_attempt("short_001", "youtube", "", str(media), upload_strategy="LOCAL_AT_TIME")
+    completed = manager.create_attempt("short_002", "youtube", "", str(media), upload_strategy="LOCAL_AT_TIME", scheduled_at="2026-07-01T09:00:00+03:00")
+    completed.status = PublishingAttemptStatus.PUBLISHED.value; manager.store.save_attempt(completed)
+    manager.rebuild_planned_schedule({"start_date": "2026-07-21", "timezone": "Europe/Moscow", "publications_per_day": 1, "preferred_time_slots": ["1:00"]})
+    values = {item.short_id: item for item in manager.store.attempts()}
+    assert values["short_001"].scheduled_at == "2026-07-21T01:00:00+03:00"
+    assert values["short_002"].scheduled_at == "2026-07-01T09:00:00+03:00"

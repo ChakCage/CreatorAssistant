@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QTime, Signal
-from PySide6.QtWidgets import QHBoxLayout, QPushButton, QTimeEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QTimeEdit, QVBoxLayout, QWidget
 
 
 class ScheduleSlotsEditor(QWidget):
@@ -13,6 +13,7 @@ class ScheduleSlotsEditor(QWidget):
         super().__init__(parent)
         self._rows = QVBoxLayout(self)
         self._rows.setContentsMargins(0, 0, 0, 0)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self._edits: list[tuple[QWidget, QTimeEdit]] = []
         add = QPushButton("Добавить слот")
         add.clicked.connect(lambda: self.add_slot("12:00"))
@@ -36,11 +37,16 @@ class ScheduleSlotsEditor(QWidget):
         remove.clicked.connect(lambda: self._remove(row))
         if emit:
             self.changed.emit()
+        self._update_height()
 
     def _remove(self, row: QWidget) -> None:
         self._edits = [item for item in self._edits if item[0] is not row]
         row.deleteLater()
+        self._update_height()
         self.changed.emit()
+
+    def _update_height(self) -> None:
+        self.setMinimumHeight(max(40, 34 * (len(self._edits) + 1)))
 
     def values(self) -> list[str]:
         return sorted(editor.time().toString("HH:mm") for _row, editor in self._edits)

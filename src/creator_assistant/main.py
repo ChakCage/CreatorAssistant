@@ -228,9 +228,21 @@ def _publishing_ui_verification(window: MainWindow, container: ServiceContainer,
     queue_image = report_path.with_name(report_path.stem + "-queue.png")
     window.grab().save(str(queue_image), "PNG")
     required_groups = {"1. Источники", "2. Режим и профиль", "3. Отбор Shorts", "4. Оформление", "5. Расписание", "6. Подключённые платформы", "7. Задания — управление", "Результаты"}
+    schedule_values = window.autopilot_tab.slots.values()
+    schedule_preview = window.autopilot_tab.schedule_preview.text()
+    upload_strategy = str(window.autopilot_tab.upload_strategy.currentData())
     report = {
-        "success": required_groups <= groups and accounts_visible and "Выбрать всех найденных кандидатов" in buttons,
+        "success": (
+            required_groups <= groups and accounts_visible
+            and "Выбрать всех найденных кандидатов" in buttons
+            and schedule_values == ["13:00", "19:00"]
+            and "Short 001" in schedule_preview and "Short 010" in schedule_preview
+            and upload_strategy == "REMOTE_SCHEDULE"
+            and window.publishing_queue_tab.table.columnCount() == 13
+        ),
         "autopilot_groups": sorted(groups), "account_settings_visible": accounts_visible,
+        "schedule_slots": schedule_values, "schedule_preview": schedule_preview,
+        "default_upload_strategy": upload_strategy,
         "publishing_queue_columns": window.publishing_queue_tab.table.columnCount(),
         "screenshots": {"autopilot": str(autopilot_image), "accounts": str(settings_image), "queue": str(queue_image)},
         "build": current_build_info().__dict__,

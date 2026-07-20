@@ -24,9 +24,14 @@ class ConnectionStatus(str, Enum):
 
 
 class PublishingAttemptStatus(str, Enum):
+    RENDERED = "RENDERED"
+    UPLOAD_QUEUED = "UPLOAD_QUEUED"
     PLANNED = "PLANNED"
     READY = "READY"
     UPLOADING = "UPLOADING"
+    REMOTE_PROCESSING = "REMOTE_PROCESSING"
+    UPLOADED_PRIVATE = "UPLOADED_PRIVATE"
+    SCHEDULED_REMOTE = "SCHEDULED_REMOTE"
     PROCESSING = "PROCESSING"
     SCHEDULED = "SCHEDULED"
     PUBLISHED = "PUBLISHED"
@@ -96,6 +101,7 @@ class PublishingAttempt:
     local_file: str
     mode: str = PublishingMode.DRY_RUN.value
     scheduled_at: str = ""
+    upload_strategy: str = "REMOTE_SCHEDULE"
     status: str = PublishingAttemptStatus.PLANNED.value
     remote_id: str = ""
     upload_url_key: str = ""

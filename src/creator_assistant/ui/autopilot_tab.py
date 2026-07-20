@@ -20,6 +20,8 @@ from creator_assistant.services.shorts.render_settings import VerticalRenderSett
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectStore
 from creator_assistant.ui.shorts.project_template_dialog import ProjectTemplateDialog, template_details
 from creator_assistant.ui.workers import FunctionWorker
+from creator_assistant.ui.schedule_slots_editor import ScheduleSlotsEditor
+from creator_assistant.services.automation.schedule import SchedulePlanner, ScheduleValidationError
 
 
 class AutopilotResultsDialog(QDialog):
@@ -165,11 +167,22 @@ class AutopilotTab(QWidget):
         self.start_date = QDateEdit(QDate.currentDate()); self.start_date.setCalendarPopup(True)
         self.timezone = QLineEdit("Europe/Moscow"); self.timezone.setMaximumWidth(220)
         self.per_day = QSpinBox(); self.per_day.setRange(1, 10); self.per_day.setValue(2); self.per_day.setMaximumWidth(100)
-        self.slots = QLineEdit("13:00, 19:00"); self.slots.setMaximumWidth(220)
+        self.slots = ScheduleSlotsEditor(["13:00", "19:00"])
+        self.schedule_preview = QLabel()
+        self.schedule_preview.setWordWrap(True)
+        self.schedule_preview.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.upload_strategy = QComboBox()
+        self.upload_strategy.addItem("Загрузить сейчас и запланировать на YouTube", "REMOTE_SCHEDULE")
+        self.upload_strategy.addItem("Начать локальную загрузку в назначенное время", "LOCAL_AT_TIME")
         schedule.addRow("Дата начала", self.start_date)
         schedule.addRow("Timezone", self.timezone)
         schedule.addRow("В день", self.per_day)
         schedule.addRow("Слоты", self.slots)
+        schedule.addRow("Режим загрузки", self.upload_strategy)
+        schedule.addRow("Предварительный просмотр", self.schedule_preview)
+        self.per_day.valueChanged.connect(self._refresh_schedule_preview)
+        self.start_date.dateChanged.connect(self._refresh_schedule_preview)
+        self.slots.changed.connect(self._refresh_schedule_preview)
         cards.addWidget(schedule_group, 1, 1)
 
         platforms_group = QGroupBox("6. Подключённые платформы")
@@ -229,6 +242,30 @@ class AutopilotTab(QWidget):
         self._refresh_template_summary()
         self._update_score_forecast()
         self._refresh_platform_status()
+        self._refresh_schedule_preview()
+
+    def _schedule_settings(self) -> dict:
+        return {
+            "start_date": self.start_date.date().toString("yyyy-MM-dd"),
+            "timezone": self.timezone.text().strip() or "Europe/Moscow",
+            "publications_per_day": self.per_day.value(),
+            "preferred_time_slots": self.slots.values(),
+            "upload_strategy": str(self.upload_strategy.currentData()),
+        }
+
+    def _refresh_schedule_preview(self, *_args) -> None:
+        if not hasattr(self, "schedule_preview"):
+            return
+        try:
+            plan = SchedulePlanner().build(
+                [f"short_{index:03d}" for index in range(1, 11)], self._schedule_settings(), ["youtube"]
+            )
+            lines = [f"Short {slot.short_id[-3:]} — {slot.scheduled_at[:10]} {slot.scheduled_at[11:16]}" for slot in plan.slots]
+            self.schedule_preview.setText("\n".join(lines))
+            self.schedule_preview.setStyleSheet("")
+        except (ValueError, ScheduleValidationError) as exc:
+            self.schedule_preview.setText(str(exc))
+            self.schedule_preview.setStyleSheet("color: #ff8b8b;")
 
     def _refresh_platform_status(self) -> None:
         if not hasattr(self, "platform_status"):
@@ -425,17 +462,18 @@ class AutopilotTab(QWidget):
         if not paths:
             QMessageBox.information(self, "Автопилот", "Добавьте хотя бы одно видео.")
             return
+        try:
+            SchedulePlanner().validate_settings(self._schedule_settings())
+        except (ValueError, ScheduleValidationError) as exc:
+            QMessageBox.warning(self, "Расписание", str(exc))
+            return
         profile_id = str(self.profile.currentData() or "")
         platforms = [name for name, control in (("youtube", self.youtube), ("tiktok", self.tiktok)) if control.isChecked()]
         job = self.engine.create_job(
             paths, mode=str(self.mode.currentData()),
             profile=AutomationProfile(channel_profile_id=profile_id, auto_detect=not bool(profile_id)),
             selection_settings={"minimum_score": self.minimum_score.value(), "maximum_per_source": self.maximum_per_source.value()},
-            schedule_settings={
-                "start_date": self.start_date.date().toString("yyyy-MM-dd"), "timezone": self.timezone.text().strip(),
-                "publications_per_day": self.per_day.value(),
-                "preferred_time_slots": [value.strip() for value in self.slots.text().split(",") if value.strip()],
-            }, platforms=platforms,
+            schedule_settings=self._schedule_settings(), platforms=platforms,
         )
         template, source = self._resolved_template()
         job.composition_snapshot = {
@@ -482,16 +520,25 @@ class AutopilotTab(QWidget):
                 continue
             for platform in slot.platforms:
                 account = next((item for item in accounts if item.platform == platform and item.status == "CONNECTED"), None)
-                metadata = {"title": short.title or short.short_id, "short_id": short.short_id, "network_approved": network_approved}
+                strategy = str(job.schedule_settings.get("upload_strategy", "REMOTE_SCHEDULE"))
+                approved = network_approved or str(job.mode) == AutomationMode.FULL_AUTOPILOT.value
+                metadata = {
+                    "title": short.title or short.short_id, "short_id": short.short_id,
+                    "network_approved": approved, "publish_at": slot.scheduled_at,
+                    "schedule_settings": dict(job.schedule_settings),
+                }
                 if platform == "tiktok":
                     metadata.update({"post_mode": "draft", "privacy_level": "SELF_ONLY"})
                 self.container.publishing_manager.create_attempt(
                     short.short_id, platform, account.account_id if account else "",
-                    short.platform_artifacts.get(platform, short.artifact.output_path), mode=mode, scheduled_at=slot.scheduled_at, metadata=metadata,
+                    short.platform_artifacts.get(platform, short.artifact.output_path), mode=mode,
+                    scheduled_at=slot.scheduled_at, metadata=metadata, upload_strategy=strategy,
                 )
         queue = getattr(self.window(), "publishing_queue_tab", None)
         if queue:
             queue.refresh()
+        if str(job.schedule_settings.get("upload_strategy", "REMOTE_SCHEDULE")) == "REMOTE_SCHEDULE":
+            self.container.publishing_agent.wake()
 
     def _thread_finished(self) -> None:
         thread = self._thread

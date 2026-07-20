@@ -78,6 +78,14 @@ class PublishingStore:
     def save_attempt(self, attempt: PublishingAttempt) -> None:
         self._replace("attempts", "attempt_id", attempt.attempt_id, attempt.to_dict())
 
+    def save_attempts_atomic(self, attempts: list[PublishingAttempt]) -> None:
+        data = self._load()
+        replacements = {item.attempt_id: item.to_dict() for item in attempts}
+        values = [item for item in data.get("attempts", []) if str(item.get("attempt_id")) not in replacements]
+        values.extend(replacements.values())
+        data["attempts"] = values
+        self._save(data)
+
     def receipts(self) -> list[PublishingReceipt]:
         return [PublishingReceipt(**item) for item in self._load().get("receipts", [])]
 
