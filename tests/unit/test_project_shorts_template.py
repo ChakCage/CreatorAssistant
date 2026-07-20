@@ -10,7 +10,7 @@ from creator_assistant.infrastructure.automation_job_store import AutomationJobS
 from creator_assistant.services.automation.selection import AutomaticCandidateSelector
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
 from creator_assistant.services.shorts.project_template import (
-    ProjectShortsTemplate, composition_snapshot_hash, render_identity,
+    ProjectShortsTemplate, composition_snapshot_hash, render_identity, normalized_scale_percent,
 )
 from creator_assistant.services.shorts.render_settings import VerticalRenderSettingsResolver
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
@@ -126,6 +126,11 @@ def test_snapshot_and_render_keys_are_stable_and_unique():
     keys = [render_identity("fingerprint", f"short_{index:03d}", index * 50, index * 50 + 40, digest) for index in range(1, 5)]
     assert digest == composition_snapshot_hash(snapshot)
     assert len(set(keys)) == 4
+
+
+def test_template_summary_scale_is_not_multiplied_twice():
+    assert normalized_scale_percent(150) == 150
+    assert normalized_scale_percent(1.5) == 150
 
 
 def test_timed_subtitles_exclude_context_after_and_split_long_speech():

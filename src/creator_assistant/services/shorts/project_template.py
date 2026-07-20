@@ -11,6 +11,12 @@ from creator_assistant.domain.shorts.models import Candidate
 TRANSLATED_SOURCE_TITLE = "TRANSLATED_SOURCE_TITLE"
 
 
+def normalized_scale_percent(value: Any) -> int:
+    """Accept legacy ratio values and current integer percentages exactly once."""
+    raw = float(value or 100)
+    return round(raw * 100) if 0 < raw <= 5.5 else round(raw)
+
+
 @dataclass(frozen=True)
 class ProjectShortsTemplate:
     subtitle: dict[str, Any] = field(default_factory=dict)

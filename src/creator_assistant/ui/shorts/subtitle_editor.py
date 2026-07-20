@@ -408,6 +408,7 @@ class SubtitleEditor(QWidget):
     template_apply_all_requested = Signal()
     template_reset_requested = Signal(object)
     template_view_requested = Signal()
+    global_templates_requested = Signal(object)
     subtitle_preset_changed = Signal(str, object)
 
     def __init__(self, semantic_backend=None, parent=None, subtitle_presets=None) -> None:
@@ -634,6 +635,7 @@ class SubtitleEditor(QWidget):
         self.template_apply_all = QPushButton("Применить шаблон ко всем Shorts")
         self.template_reset_short = QPushButton("Сбросить этот Short к шаблону")
         self.template_view = QPushButton("Просмотреть шаблон проекта")
+        self.global_templates = QPushButton("Глобальная библиотека шаблонов…")
         self.template_save.setToolTip("Сохраняет всю вертикальную композицию проекта; это не пресет субтитров и не профиль канала")
         self.template_apply_all.setToolTip("Применяет сохранённую композицию к существующим Shorts с выбором судьбы ручных overrides")
         self.template_reset_short.setToolTip("Удаляет ручной override выбранного Short и возвращает настройки шаблона проекта")
@@ -642,6 +644,7 @@ class SubtitleEditor(QWidget):
         template_buttons.addWidget(self.template_apply_all, 0, 1)
         template_buttons.addWidget(self.template_reset_short, 1, 0)
         template_buttons.addWidget(self.template_view, 1, 1)
+        template_buttons.addWidget(self.global_templates, 2, 0, 1, 2)
         template_layout.addLayout(template_buttons)
         self.preview = RealtimeCompositionRenderer()
         self.preview_quality = QComboBox()
@@ -769,6 +772,7 @@ class SubtitleEditor(QWidget):
         self.template_apply_all.clicked.connect(self._apply_project_template_all)
         self.template_reset_short.clicked.connect(self._reset_to_project_template)
         self.template_view.clicked.connect(self.template_view_requested.emit)
+        self.global_templates.clicked.connect(self._open_global_templates)
         self.title_style.currentIndexChanged.connect(self._title_style_selected)
         self.branding_preset.currentIndexChanged.connect(self._branding_preset_selected)
         self.title_from_video.clicked.connect(self._title_from_video_clicked)
@@ -1845,4 +1849,9 @@ class SubtitleEditor(QWidget):
     def _reset_to_project_template(self) -> None:
         if self.candidate:
             self.template_reset_requested.emit(self.candidate)
+
+    def _open_global_templates(self) -> None:
+        if self.candidate:
+            self._apply_configuration()
+            self.global_templates_requested.emit(self.candidate)
 

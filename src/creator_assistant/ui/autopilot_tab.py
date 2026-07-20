@@ -15,7 +15,7 @@ from creator_assistant.domain.automation.models import AutomationMode, Automatio
 from creator_assistant.domain.shorts.models import Candidate
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
 from creator_assistant.services.shorts.manifest import ShortsManifestStore
-from creator_assistant.services.shorts.project_template import ProjectShortsTemplate, composition_snapshot_hash
+from creator_assistant.services.shorts.project_template import ProjectShortsTemplate, composition_snapshot_hash, normalized_scale_percent
 from creator_assistant.services.shorts.render_settings import VerticalRenderSettingsResolver
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectStore
 from creator_assistant.ui.shorts.project_template_dialog import ProjectTemplateDialog, template_details
@@ -247,7 +247,7 @@ class AutopilotTab(QWidget):
         subtitle = template.subtitle or {}
         branding = template.branding or {}
         mode = str(layout.get("mode", "center_crop")).replace("_", " ").title()
-        scale = int(float(layout.get("foreground_scale", 1.0)) * 100)
+        scale = normalized_scale_percent(layout.get("foreground_scale", 100))
         preset = str(subtitle.get("preset", "clean")).title()
         profile = str(branding.get("profile_id") or self.profile.currentText() or "Авто")
         self.template_summary.setText(f"Шаблон проекта\n{mode} · {scale}% · {preset} · {profile}")

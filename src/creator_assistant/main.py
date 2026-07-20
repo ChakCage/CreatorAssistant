@@ -161,13 +161,30 @@ def _template_ui_verification(window: MainWindow, report_path: Path) -> None:
         "apply_all": editor.template_apply_all,
         "reset_short": editor.template_reset_short,
         "view": editor.template_view,
+        "global_library": editor.global_templates,
     }
     image_path = report_path.with_suffix(".png")
     image_path.parent.mkdir(parents=True, exist_ok=True)
     window.grab().save(str(image_path), "PNG")
     build = current_build_info()
+    settings = SettingsDialog(window.container, window)
+    ai_verification = {
+        "model": settings._selected_shorts_ai_model(),
+        "timeout": settings.shorts_ai_timeout.value(),
+        "warmup_timeout": settings.shorts_ai_warmup_timeout.value(),
+        "strict_model": settings.shorts_ai_strict.isChecked(),
+        "context": settings._selected_shorts_ai_context(),
+        "global_template_selectors": len(settings.global_template_selectors),
+    }
+    settings.close()
     report = {
-        "success": all(button.isVisibleTo(window) and button.width() > 120 and button.height() > 20 for button in buttons.values()),
+        "success": (
+            all(button.isVisibleTo(window) and button.width() > 120 and button.height() > 20 for button in buttons.values())
+            and ai_verification["model"] == "qwen3.6:35b-a3b"
+            and ai_verification["timeout"] >= 600
+            and ai_verification["strict_model"]
+            and ai_verification["global_template_selectors"] == 3
+        ),
         "window_title": window.windowTitle(),
         "executable": build.executable,
         "commit": build.commit,
@@ -175,6 +192,7 @@ def _template_ui_verification(window: MainWindow, report_path: Path) -> None:
         "main_tab": window.tabs.tabText(window.tabs.currentIndex()),
         "shorts_tab": window.shorts_tab.workspace.tabText(window.shorts_tab.workspace.currentIndex()),
         "group_visible": editor.template_group.isVisibleTo(window),
+        "ai": ai_verification,
         "buttons": {
             name: {
                 "text": button.text(),
