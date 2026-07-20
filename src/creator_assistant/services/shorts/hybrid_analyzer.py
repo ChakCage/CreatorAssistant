@@ -32,6 +32,8 @@ class HybridAnalysisResult:
     analysis_mode: str = "balanced"
     cache_key: str = ""
     metrics: Dict[str, Any] = field(default_factory=dict)
+    diagnostics: Dict[str, Any] = field(default_factory=dict)
+    rejected: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class HybridCandidateAnalyzer:
@@ -58,13 +60,26 @@ class HybridCandidateAnalyzer:
         mode = str(settings.get("mode", "balanced"))
         profile = MODE_PROFILES.get(mode, MODE_PROFILES["balanced"])
         preliminary_count = max(requested_count, int(settings.get("preliminary_count", profile["preliminary_count"])))
-        preliminary = sorted(scored, key=lambda item: -item.score)[:preliminary_count]
-        clustered = self.duplicate_filter.filter(preliminary, preliminary_count)
+        duration = max((item.end for item in scored), default=0.0)
+        preliminary = self._preliminary_pool(scored, preliminary_count, duration)
+        clustered, duplicates_removed = self.duplicate_filter.filter_with_diagnostics(preliminary, preliminary_count)
+        diagnostics: Dict[str, Any] = {
+            "transcript_blocks": 1,
+            "found_per_block": [len(preliminary)],
+            "found_locally": len(preliminary),
+            "before_deduplication": len(preliminary),
+            "duplicates_removed": duplicates_removed,
+            "removed_by_score": 0,
+            "sent_to_global_ranking": len(clustered),
+            "requested_count": requested_count,
+        }
         for item in clustered:
             item.heuristic_score = item.score
             item.final_score = item.score
         if not settings.get("enabled", False) or backend.name == "disabled":
-            return HybridAnalysisResult(clustered[:requested_count], False, backend=backend.name)
+            result = self._temporally_diverse(clustered, requested_count, duration)
+            diagnostics.update({"model_returned": 0, "shown_to_user": len(result)})
+            return HybridAnalysisResult(result, False, backend=backend.name, diagnostics=diagnostics)
 
         context_window = {"fast": 8, "balanced": 20, "deep": 40, "quality": 40}.get(mode, 20)
         inputs = [self._input(item, transcript, scenes, audio, content_type, context_window) for item in clustered]
@@ -118,6 +133,11 @@ class HybridCandidateAnalyzer:
                         "resumed": hierarchical.resumed,
                         "context_length": hierarchical.context_length,
                     }
+                    diagnostics.update({
+                        "transcript_blocks": int(hierarchical.diagnostics.get("block_count", 0)),
+                        "found_per_block": list(hierarchical.diagnostics.get("found_per_block", [])),
+                        "found_locally": int(hierarchical.diagnostics.get("found_locally", 0)),
+                    })
                 else:
                     semantic = self._evaluate_batches(backend, inputs, cancellation, settings)
                 selected_ids = []
@@ -127,7 +147,9 @@ class HybridCandidateAnalyzer:
                 raise SemanticBackendError("AI-оценка не соответствует набору кандидатов.")
             self._combine(clustered, by_id, settings)
             if not selected_ids:
-                selected_ids = self._global_selection(backend, clustered, requested_count, cancellation, settings)
+                selected_ids, model_returned = self._global_selection(
+                    backend, clustered, requested_count, cancellation, settings, duration,
+                )
                 if settings.get("cache", True):
                     cache.put(payload, {
                         "prompt_version": PROMPT_VERSION,
@@ -136,7 +158,11 @@ class HybridCandidateAnalyzer:
                         "results": [item.model_dump(mode="json") for item in semantic],
                         "selected_ids": selected_ids,
                     })
+            else:
+                model_returned = len(selected_ids)
             result = self._ordered(clustered, selected_ids, requested_count)
+            diagnostics.update({"model_returned": model_returned, "shown_to_user": len(result)})
+            rejected = self._rejected(clustered, result, duplicates_removed)
             metrics = getattr(backend, "last_metrics", None)
             runtime = dict(getattr(backend, "last_runtime_info", {}) or {})
             size = int(runtime.get("size", 0) or 0)
@@ -153,6 +179,7 @@ class HybridCandidateAnalyzer:
                 model_digest=digest, quantization=quantization, analysis_mode=mode,
                 cache_key=cache_key,
                 metrics={**(metrics.__dict__.copy() if metrics else {}), **runtime_metrics, **hierarchy_metrics},
+                diagnostics=diagnostics, rejected=rejected,
             )
         except Exception as exc:
             if cancellation.is_cancelled:
@@ -165,7 +192,7 @@ class HybridCandidateAnalyzer:
                 item.warnings.append(f"Локальная AI-оценка недоступна: {message}")
             return HybridAnalysisResult(
                 clustered[:requested_count], False, bool(cached), message, backend.name, model,
-                analysis_mode=mode, metrics={},
+                analysis_mode=mode, metrics={}, diagnostics={**diagnostics, "shown_to_user": min(requested_count, len(clustered))},
             )
 
     @staticmethod
@@ -182,12 +209,13 @@ class HybridCandidateAnalyzer:
         return values
 
     @staticmethod
-    def _global_selection(backend, candidates, count, cancellation, settings):
+    def _global_selection(backend, candidates, count, cancellation, settings, duration=0.0):
         ranked = sorted(candidates, key=lambda item: -item.final_score)
         profile = MODE_PROFILES.get(str(settings.get("mode", "balanced")), MODE_PROFILES["balanced"])
         passes = int(profile["global_passes"]) if settings.get("global_comparison", True) else 0
         if passes <= 0:
-            return [item.id for item in ranked[:count]]
+            values = HybridCandidateAnalyzer._temporally_diverse(ranked, count, duration)
+            return [item.id for item in values], len(values)
         summaries = [{
             "candidate_id": item.id, "start": item.start, "end": item.end,
             "text": item.text, "heuristic_score": item.heuristic_score,
@@ -200,7 +228,14 @@ class HybridCandidateAnalyzer:
             selected = selection.candidate_ids
             order = {candidate_id: index for index, candidate_id in enumerate(selected)}
             summaries.sort(key=lambda item: order.get(item["candidate_id"], len(order)))
-        return selected
+        model_returned = len(dict.fromkeys(selected))
+        # Structured output intentionally permits fewer than requested.  Treat
+        # the model list as priority, not as permission to discard the pool.
+        selected = list(dict.fromkeys(selected))
+        selected_set = set(selected)
+        remaining = [item for item in ranked if item.id not in selected_set]
+        selected.extend(item.id for item in HybridCandidateAnalyzer._temporally_diverse(remaining, count - len(selected), duration))
+        return selected[:count], model_returned
 
     @staticmethod
     def _ordered(candidates, selected_ids, count):
@@ -209,6 +244,56 @@ class HybridCandidateAnalyzer:
         seen = {item.id for item in result}
         result.extend(item for item in sorted(candidates, key=lambda value: -value.final_score) if item.id not in seen)
         return result[:count]
+
+    @staticmethod
+    def _preliminary_pool(candidates, count, duration):
+        ranked = sorted(candidates, key=lambda item: -item.score)
+        if duration <= 1200 or len(ranked) <= count:
+            return ranked[:count]
+        # Reserve roughly half of the pool for best events from evenly spaced
+        # time regions, then fill by score. This prevents a long intro/event
+        # cluster from starving the middle and end of a long recording.
+        bucket_count = min(max(3, round(duration / 600)), max(3, count // 2))
+        chosen = []
+        for bucket in range(bucket_count):
+            start, end = duration * bucket / bucket_count, duration * (bucket + 1) / bucket_count
+            local = [item for item in ranked if start <= (item.start + item.end) / 2 < end]
+            if local:
+                chosen.append(local[0])
+        seen = {id(item) for item in chosen}
+        chosen.extend(item for item in ranked if id(item) not in seen)
+        return chosen[:count]
+
+    @staticmethod
+    def _temporally_diverse(candidates, count, duration):
+        if count <= 0:
+            return []
+        ranked = sorted(candidates, key=lambda item: -item.final_score)
+        if duration <= 1200 or len(ranked) <= 2:
+            return ranked[:count]
+        regions = min(5, max(3, count))
+        selected = []
+        for region in range(regions):
+            start, end = duration * region / regions, duration * (region + 1) / regions
+            local = [item for item in ranked if start <= (item.start + item.end) / 2 < end and item not in selected]
+            if local:
+                selected.append(local[0])
+            if len(selected) >= count:
+                return selected
+        selected.extend(item for item in ranked if item not in selected)
+        return selected[:count]
+
+    @staticmethod
+    def _rejected(pool, selected, duplicates_removed):
+        selected_ids = {item.id for item in selected}
+        values = [
+            {"candidate_id": item.id, "start": item.start, "end": item.end, "score": item.final_score,
+             "reason": "Не вошёл в запрошенный лимит после глобального ранжирования"}
+            for item in pool if item.id not in selected_ids
+        ]
+        if duplicates_removed:
+            values.append({"candidate_id": "duplicates", "reason": f"Объединено настоящих временных дублей: {duplicates_removed}"})
+        return values
 
     @staticmethod
     def _combine(candidates, semantic, settings):

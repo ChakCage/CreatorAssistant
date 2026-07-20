@@ -100,12 +100,14 @@ class HierarchicalLongVideoAnalyzer:
         )
         by_id: dict[str, SemanticCandidateScore] = {}
         cache_hits = 0
+        found_per_block: list[int] = []
         model = str(settings.get("_resolved_model") or settings.get("model") or getattr(backend, "model", ""))
         digest = str(settings.get("model_digest", ""))
         context = int(settings.get("context_length", getattr(backend, "context_length", 32768)))
         for block in blocks:
             cancellation.raise_if_cancelled()
             local = [item for item in inputs if item.end > block.start and item.start < block.end]
+            found_per_block.append(len(local))
             if not local:
                 continue
             payload = {
@@ -146,5 +148,11 @@ class HierarchicalLongVideoAnalyzer:
         return HierarchicalAnalysisResult(
             ordered, blocks, len(blocks), cache_hits, resumed=cache_hits > 0,
             model=model, context_length=context,
-            diagnostics={"block_count": len(blocks), "completed_blocks": len(blocks)},
+            diagnostics={
+                "block_count": len(blocks),
+                "completed_blocks": len(blocks),
+                "found_per_block": found_per_block,
+                "found_locally": sum(found_per_block),
+                "unique_local_candidates": len(by_id),
+            },
         )

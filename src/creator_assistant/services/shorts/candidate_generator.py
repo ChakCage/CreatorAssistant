@@ -45,8 +45,17 @@ class CandidateGenerator:
                 score=0.0, text=text, reasons=["Границы совпадают с законченными фразами"],
                 thumbnail=thumbnail,
             ))
-        # Generate extra windows before scoring so the ranker has real alternatives.
-        return candidates[: max(settings.count * 4, settings.count)]
+        # Keep a bounded pool, but sample it across the whole timeline.  Taking
+        # candidates[:limit] silently restricted long videos to their opening
+        # minutes and made the overlapping windows collapse into one event.
+        limit = max(settings.count * 8, settings.count)
+        if len(candidates) <= limit:
+            return candidates
+        indexes = {
+            round(index * (len(candidates) - 1) / (limit - 1))
+            for index in range(limit)
+        }
+        return [candidates[index] for index in sorted(indexes)]
 
     @staticmethod
     def _nearest_boundary(value: float, scenes: list[Scene], audio: AudioFeatures, before: bool) -> float:

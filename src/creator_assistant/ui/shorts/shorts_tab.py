@@ -96,10 +96,11 @@ class _AnalysisWorker(QObject):
     cancelled = Signal()
     progress = Signal(str, str, int)
 
-    def __init__(self, container: ServiceContainer, source: SourceInfo, paths: ShortsProjectPaths, token: CancellationToken, candidate_settings: CandidateSettings) -> None:
+    def __init__(self, container: ServiceContainer, source: SourceInfo, paths: ShortsProjectPaths, token: CancellationToken, candidate_settings: CandidateSettings, rebuild_candidates: bool = False) -> None:
         super().__init__()
         self.container, self.source, self.paths, self.token = container, source, paths, token
         self.candidate_settings = candidate_settings
+        self.rebuild_candidates = rebuild_candidates
 
     @Slot()
     def run(self) -> None:
@@ -185,11 +186,11 @@ class _AnalysisWorker(QObject):
                 "shorts_ai": ai_settings,
                 "source_fingerprint": self.source.fingerprint,
                 "transcript_hash": transcript_hash,
-                "heuristic_version": "shorts-heuristic-v2-content-profile",
+                "heuristic_version": "shorts-heuristic-v3-long-video-coverage",
                 "prompt_version": "shorts-semantic-v1",
                 "clustering": {"overlap": 0.62},
             }
-            if cache.stage_valid("candidates", candidates_path, candidate_config):
+            if not self.rebuild_candidates and cache.stage_valid("candidates", candidates_path, candidate_config):
                 from creator_assistant.domain.shorts.models import Candidate
                 candidates = [Candidate(**item) for item in json.loads(candidates_path.read_text(encoding="utf-8"))]
                 restored_ai = any(item.selection_source == "hybrid_ai" for item in candidates)
@@ -203,6 +204,8 @@ class _AnalysisWorker(QObject):
                     quantization=str(manifest.ai_analysis.get("quantization", "")) if manifest else "",
                     analysis_mode=str(manifest.ai_analysis.get("mode", ai_settings.get("mode", "balanced"))),
                     cache_key=str(manifest.ai_analysis.get("cache_key", "")) if manifest else "",
+                    diagnostics=dict(manifest.ai_analysis.get("diagnostics", {})) if manifest else {},
+                    rejected=list(manifest.ai_analysis.get("rejected", [])) if manifest else [],
                 )
             else:
                 raw_candidates = self.container.shorts_candidate_generator.generate(transcript, scenes, audio_features, self.candidate_settings)
@@ -210,6 +213,9 @@ class _AnalysisWorker(QObject):
                     self.container.shorts_candidate_scorer.score(item, scenes, audio_features, self.candidate_settings.content_type)
                     for item in raw_candidates
                 ]
+                (self.paths.analysis / "candidate_pool.json").write_text(
+                    json.dumps([asdict(item) for item in scored], ensure_ascii=False, indent=2), encoding="utf-8"
+                )
                 if ai_settings.get("enabled", False):
                     self.progress.emit(
                         "10. Локальный AI-анализ",
@@ -221,10 +227,9 @@ class _AnalysisWorker(QObject):
                     self.container.shorts_semantic_backend, ai_settings,
                     SemanticCache(self.paths.analysis / "semantic_cache.json"), self.token,
                     content_type=self.candidate_settings.content_type,
-                    requested_count=(
-                        int(ai_settings.get("final_count", 5))
-                        if ai_settings.get("enabled", False) else self.candidate_settings.count
-                    ),
+                    # The visible "Кандидатов" control is the source of truth;
+                    # a stale hidden AI final_count must never truncate it.
+                    requested_count=self.candidate_settings.count,
                 )
                 candidates = analysis_result.candidates
                 from creator_assistant.services.shorts.candidate_ranking import assign_candidate_ranks
@@ -247,6 +252,8 @@ class _AnalysisWorker(QObject):
                     "used_ai": analysis_result.used_ai,
                     "fallback_reason": analysis_result.fallback_reason,
                     "metrics": analysis_result.metrics,
+                    "diagnostics": analysis_result.diagnostics,
+                    "rejected": analysis_result.rejected,
                 }
                 store.save(manifest)
             from creator_assistant.services.shorts.candidate_ranking import assign_candidate_ranks
@@ -276,7 +283,17 @@ class _AnalysisWorker(QObject):
                 summary = f"Гибридная оценка завершена: {source}."
             else:
                 summary = "Использована эвристическая оценка."
-            self.progress.emit("11. Ожидание пользователя", f"Подготовлено {len(candidates)} непохожих кандидатов. {summary}", 92)
+            diagnostics = analysis_result.diagnostics if analysis_result else {}
+            stats = (
+                f"Блоков: {diagnostics.get('transcript_blocks', 1)} · "
+                f"Найдено локально: {diagnostics.get('found_locally', len(candidates))} · "
+                f"После дедупликации: {diagnostics.get('sent_to_global_ranking', len(candidates))} · "
+                f"Выше порога: {diagnostics.get('sent_to_global_ranking', len(candidates)) - diagnostics.get('removed_by_score', 0)} · "
+                f"Финально: {len(candidates)}"
+            )
+            if len(candidates) < 3:
+                summary += " Получено меньше трёх: исходный пул после удаления настоящих дублей мал; попробуйте снизить score или пересобрать из AI-кэша."
+            self.progress.emit("11. Ожидание пользователя", f"{stats}. {summary}", 92)
             title_summary = (
                 f"AI-заголовки: перевод {'готов' if title_result.translated_ready else 'недоступен'}, "
                 f"hooks {title_result.hook_ready}/{len(candidates)}, cache hits {title_result.cache_hits}."
@@ -468,11 +485,15 @@ class ShortsTab(QWidget):
         self.progress_panel = AnalysisProgressPanel()
         self.analysis_settings = AnalysisSettingsPanel()
         self.start_button = QPushButton("Запустить анализ")
+        self.rebuild_button = QPushButton("Повторно собрать кандидатов из AI-кэша")
+        self.rebuild_button.setToolTip("Повторить дедупликацию и глобальное ранжирование без Whisper, proxy и повторной оценки transcript-блоков")
+        self.rebuild_button.setEnabled(False)
         self.start_button.setEnabled(False)
         self.cancel_button = QPushButton("Отменить")
         self.cancel_button.setEnabled(False)
         action_row = QHBoxLayout()
         action_row.addWidget(self.start_button)
+        action_row.addWidget(self.rebuild_button)
         action_row.addWidget(self.cancel_button)
         left_layout.addWidget(self.source_panel)
         left_layout.addWidget(self.progress_panel)
@@ -500,6 +521,7 @@ class ShortsTab(QWidget):
         self.source_panel.choose_project_requested.connect(self.choose_project)
         self.source_panel.choose_output_requested.connect(self.choose_output)
         self.start_button.clicked.connect(self.start_analysis)
+        self.rebuild_button.clicked.connect(self.rebuild_candidates_from_cache)
         self.cancel_button.clicked.connect(self.cancel_analysis)
         self.candidate_list.selected.connect(self._edit_candidate)
         self.candidate_list.status_changed.connect(self._set_candidate_status)
@@ -634,6 +656,13 @@ class ShortsTab(QWidget):
 
     @Slot()
     def start_analysis(self) -> None:
+        self._start_analysis_worker(False)
+
+    @Slot()
+    def rebuild_candidates_from_cache(self) -> None:
+        self._start_analysis_worker(True)
+
+    def _start_analysis_worker(self, rebuild_candidates: bool) -> None:
         if not self.source or not self.paths or (self._thread and self._thread.isRunning()):
             return
         self.candidate_editor.release_media()
@@ -647,7 +676,10 @@ class ShortsTab(QWidget):
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         thread = QThread(self)
-        worker = _AnalysisWorker(self.container, self.source, self.paths, self._token, self.analysis_settings.value())
+        worker = _AnalysisWorker(
+            self.container, self.source, self.paths, self._token,
+            self.analysis_settings.value(), rebuild_candidates=rebuild_candidates,
+        )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self.progress_panel.update_state)
@@ -703,6 +735,16 @@ class ShortsTab(QWidget):
         else:
             detail = "эвристическая оценка"
         self.progress_panel.update_state("Анализ готов", f"Найдено {len(candidates)} кандидатов · {detail}.", 92)
+        if result and len(candidates) < 3:
+            rejected = "\n".join(
+                f"• {item.get('candidate_id', '—')}: {item.get('reason', 'без причины')}"
+                for item in result.rejected[:20]
+            ) or "Отклонённых окон нет: эвристический генератор создал слишком маленький пул."
+            QMessageBox.information(
+                self, "Мало кандидатов",
+                "Финально осталось меньше трёх кандидатов. Попробуйте снизить score или нажать "
+                "«Повторно собрать кандидатов из AI-кэша».\n\nОтклонённые варианты:\n" + rejected,
+            )
 
     @Slot(object)
     def _edit_candidate(self, candidate) -> None:
@@ -1172,6 +1214,7 @@ class ShortsTab(QWidget):
         self._token = None
         self.progress_panel.finish_operation()
         self.start_button.setEnabled(bool(self.source))
+        self.rebuild_button.setEnabled(bool(self.source and self.paths and (self.paths.analysis / "semantic_cache.json").is_file()))
         self.cancel_button.setEnabled(False)
         if thread:
             thread.deleteLater()
@@ -1191,6 +1234,7 @@ class ShortsTab(QWidget):
             message += f" Будет применён шаблон: {applied_global}."
         self.progress_panel.update_state("Источник готов", message, 8)
         self.start_button.setEnabled(True)
+        self.rebuild_button.setEnabled((self.paths.analysis / "semantic_cache.json").is_file())
         transcript_path = self.paths.analysis / "transcript.json"
         if transcript_path.is_file():
             try:
