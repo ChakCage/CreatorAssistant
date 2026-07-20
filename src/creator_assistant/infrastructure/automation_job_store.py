@@ -48,7 +48,10 @@ class AutomationJobStore:
         return sorted(jobs, key=lambda item: item.updated_at or item.created_at, reverse=True)
 
     def unfinished(self) -> List[AutomationJob]:
-        terminal = {AutomationStatus.COMPLETED.value, AutomationStatus.CANCELLED.value, AutomationStatus.FAILED.value}
+        terminal = {
+            AutomationStatus.COMPLETED.value, AutomationStatus.CANCELLED.value,
+            AutomationStatus.FAILED.value, AutomationStatus.AI_FAILED.value,
+        }
         return [job for job in self.list() if job.status not in terminal]
 
     def delete(self, job_id: str) -> bool:

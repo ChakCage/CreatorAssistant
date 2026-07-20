@@ -5,6 +5,7 @@ from creator_assistant.domain.automation.models import (
 )
 from creator_assistant.infrastructure.automation_job_store import AutomationJobStore
 from creator_assistant.services.automation.engine import AutomationEngine
+from creator_assistant.services.shorts.semantic_backend import SemanticBackendError
 
 
 class FakePipeline:
@@ -93,6 +94,25 @@ def test_failed_job_can_resume_from_failed_stage(tmp_path):
     assert resumed.status == AutomationStatus.WAITING_FOR_APPROVAL.value
     assert pipeline.calls.count("validate") == 1
     assert pipeline.calls.count("titles") == 2
+
+
+def test_strict_ai_failure_is_resumable_ai_failed_not_generic_failed(tmp_path):
+    class AiPipeline(FakePipeline):
+        def analyze(self, job):
+            self.calls.append("analyze")
+            if self.calls.count("analyze") == 1:
+                raise SemanticBackendError("generation timeout qwen3.6:35b-a3b")
+
+    pipeline = AiPipeline()
+    service = engine(tmp_path, pipeline)
+    job = service.create_job(["one.mp4"])
+    failed = service.run(job)
+    assert failed.status == AutomationStatus.AI_FAILED.value
+    assert failed.resume_data["failed_stage"] == AutomationStatus.ANALYZING.value
+    resumed = service.resume(job.job_id)
+    assert resumed.status == AutomationStatus.WAITING_FOR_APPROVAL.value
+    assert pipeline.calls.count("validate") == 1
+    assert pipeline.calls.count("analyze") == 2
 
 
 def test_pause_cancel_and_unfinished_discovery(tmp_path):

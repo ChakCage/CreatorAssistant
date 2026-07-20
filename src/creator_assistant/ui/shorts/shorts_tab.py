@@ -288,9 +288,21 @@ class _AnalysisWorker(QObject):
             })
         except Exception as exc:
             from creator_assistant.domain.errors import JobCancelledError
+            from creator_assistant.services.shorts.semantic_backend import SemanticBackendError
             if isinstance(exc, JobCancelledError) or self.token.is_cancelled:
                 self.cancelled.emit()
             else:
+                if isinstance(exc, SemanticBackendError):
+                    store = ShortsManifestStore(self.paths.manifest)
+                    manifest = store.load()
+                    if manifest:
+                        manifest.ai_analysis.update({
+                            "status": "AI_FAILED",
+                            "model": str(self.container.settings.get("shorts_ai", {}).get("model", "")),
+                            "error": str(exc),
+                            "timestamp": utc_now(),
+                        })
+                        store.save(manifest)
                 import traceback
                 self.failed.emit(_friendly_error(exc), traceback.format_exc())
         finally:

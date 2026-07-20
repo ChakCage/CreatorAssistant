@@ -27,6 +27,7 @@ class AutomationStatus(str, Enum):
     PAUSED = "PAUSED"
     CANCELLED = "CANCELLED"
     FAILED = "FAILED"
+    AI_FAILED = "AI_FAILED"
 
 
 class AutomationShortStatus(str, Enum):

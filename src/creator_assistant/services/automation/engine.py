@@ -13,6 +13,7 @@ from creator_assistant.domain.automation.models import (
 from creator_assistant.infrastructure.automation_job_store import AutomationJobStore
 from creator_assistant.services.automation.schedule import SchedulePlanner
 from creator_assistant.services.shorts.render_state import RenderStateStore
+from creator_assistant.services.shorts.semantic_backend import SemanticBackendError
 
 
 def _now() -> str:
@@ -65,7 +66,7 @@ class AutomationEngine:
     def run(self, job_or_id: AutomationJob | str) -> AutomationJob:
         with self._lock:
             job = job_or_id if isinstance(job_or_id, AutomationJob) else self._required(job_or_id)
-            if job.status in {AutomationStatus.COMPLETED.value, AutomationStatus.CANCELLED.value, AutomationStatus.FAILED.value, AutomationStatus.WAITING_FOR_APPROVAL.value, AutomationStatus.SCHEDULED.value}:
+            if job.status in {AutomationStatus.COMPLETED.value, AutomationStatus.CANCELLED.value, AutomationStatus.FAILED.value, AutomationStatus.AI_FAILED.value, AutomationStatus.WAITING_FOR_APPROVAL.value, AutomationStatus.SCHEDULED.value}:
                 return job
             if job.status == AutomationStatus.PAUSED.value:
                 job.status = str(job.resume_data.pop("paused_from", AutomationStatus.VALIDATING.value))
@@ -106,7 +107,10 @@ class AutomationEngine:
                 return job
             except Exception as exc:
                 job.resume_data["failed_stage"] = job.status
-                job.status = AutomationStatus.FAILED.value
+                job.status = (
+                    AutomationStatus.AI_FAILED.value
+                    if isinstance(exc, SemanticBackendError) else AutomationStatus.FAILED.value
+                )
                 job.error = str(exc)
                 job.finished_at = _now()
                 self._save(job)
@@ -135,7 +139,7 @@ class AutomationEngine:
     def resume(self, job_id: str) -> AutomationJob:
         self._pause_requested.discard(job_id)
         job = self._required(job_id)
-        if job.status == AutomationStatus.FAILED.value:
+        if job.status in {AutomationStatus.FAILED.value, AutomationStatus.AI_FAILED.value}:
             job.status = str(job.resume_data.pop("failed_stage", AutomationStatus.VALIDATING.value))
             job.error = ""
             job.finished_at = ""
@@ -154,7 +158,7 @@ class AutomationEngine:
         job = self._required(job_id)
         allowed = {
             AutomationStatus.CREATED.value, AutomationStatus.CANCELLED.value,
-            AutomationStatus.FAILED.value, AutomationStatus.COMPLETED.value,
+            AutomationStatus.FAILED.value, AutomationStatus.AI_FAILED.value, AutomationStatus.COMPLETED.value,
             AutomationStatus.WAITING_FOR_APPROVAL.value, AutomationStatus.SCHEDULED.value,
         }
         if job.status not in allowed:
