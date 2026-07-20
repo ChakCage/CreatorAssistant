@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from creator_assistant.domain.shorts.models import Candidate
-from creator_assistant.services.automation.schedule import SchedulePlanner
+from creator_assistant.services.automation.schedule import SchedulePlanner, ScheduleValidationError
 from creator_assistant.services.automation.selection import AutomaticCandidateSelector
 
 
@@ -48,3 +48,38 @@ def test_schedule_planner_skips_inactive_days_and_occupied_slots():
     )
     assert plan.slots[0].scheduled_at == "2026-07-20T19:00:00+03:00"
     assert plan.slots[1].scheduled_at == "2026-07-27T13:00:00+03:00"
+
+
+def test_schedule_fills_every_daily_slot_before_next_day():
+    planner = SchedulePlanner()
+    plan = planner.build(
+        ["s1", "s2", "s3", "s4"],
+        {"start_date": "2026-07-21", "timezone": "Europe/Moscow", "publications_per_day": 2,
+         "preferred_time_slots": ["00:50", "00:55"]}, ["youtube"],
+    )
+    assert [item.scheduled_at for item in plan.slots] == [
+        "2026-07-21T00:50:00+03:00", "2026-07-21T00:55:00+03:00",
+        "2026-07-22T00:50:00+03:00", "2026-07-22T00:55:00+03:00",
+    ]
+
+
+def test_schedule_five_items_three_slots_and_normalizes_short_hour():
+    planner = SchedulePlanner()
+    settings = {"start_date": "2026-07-21", "timezone": "Europe/Moscow", "publications_per_day": 3,
+                "preferred_time_slots": ["1:00", "09:30", "18:00"]}
+    plan = planner.build([f"s{i}" for i in range(5)], settings, ["youtube"])
+    assert plan.slots[0].scheduled_at == "2026-07-21T01:00:00+03:00"
+    assert plan.slots[2].scheduled_at.startswith("2026-07-21")
+    assert plan.slots[3].scheduled_at.startswith("2026-07-22")
+
+
+def test_schedule_reports_invalid_duplicate_or_missing_slots_without_iso_traceback():
+    planner = SchedulePlanner()
+    for slots, message in [(["25:00", "09:00"], "Некорректное время"), (["09:00", "09:00"], "повторяющиеся"), (["09:00"], "временных слотов: 1")]:
+        try:
+            planner.build(["s1"], {"publications_per_day": 2, "preferred_time_slots": slots}, ["youtube"])
+        except ScheduleValidationError as exc:
+            assert message in str(exc)
+            assert "Invalid isoformat" not in str(exc)
+        else:
+            raise AssertionError("invalid schedule accepted")
