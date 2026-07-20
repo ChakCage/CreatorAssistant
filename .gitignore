@@ -69,3 +69,7 @@ _test_output/
 runtimes/
 models/
 tools/
+*client_secret*.json
+*oauth_client*.json
+*oauth-token*
+*refresh-token*
