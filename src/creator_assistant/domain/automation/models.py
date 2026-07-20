@@ -112,6 +112,7 @@ class AutomationShort:
     composition_snapshot_hash: str = ""
     render_key: str = ""
     subtitle_status: str = "pending"
+    platform_artifacts: Dict[str, str] = field(default_factory=dict)
 
     @property
     def duration(self) -> float:

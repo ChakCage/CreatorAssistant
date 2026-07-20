@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 
@@ -291,6 +292,7 @@ class ExistingShortsAutomationPipeline:
                     short.artifact = artifact
                     short.issues.extend(issues)
                     short.status = AutomationShortStatus.RENDERED.value if artifact.validated else AutomationShortStatus.NEEDS_REVIEW.value
+                    self._render_platform_variants(job, short, source, candidate, ass, paths, state_store)
                     save()
                     continue
                 target = paths.renders / f"[{rank:02d}] {candidate.id} [{interval}] [autopilot {job.job_id[-6:]}].mp4"
@@ -317,7 +319,44 @@ class ExistingShortsAutomationPipeline:
             short.issues.extend(issues)
             job.issues.extend(issues)
             short.status = AutomationShortStatus.NEEDS_REVIEW.value if any(item.critical for item in issues) else AutomationShortStatus.RENDERED.value
+            self._render_platform_variants(job, short, source, candidate, ass, paths, state_store)
             save()
+
+    def _render_platform_variants(self, job, short, source, candidate, ass, paths, state_store) -> None:
+        if not short.artifact or not short.artifact.validated:
+            return
+        base = short.artifact.output_path
+        if "youtube" in job.platforms:
+            short.platform_artifacts["youtube"] = base
+        if "tiktok" not in job.platforms:
+            return
+        if not bool(short.branding_settings.get("show_channel_card", False)):
+            short.platform_artifacts["tiktok"] = base
+            return
+        variant = Candidate(**short.candidate_data)
+        variant.subtitle_settings = dict(short.subtitle_settings)
+        variant.layout_settings = dict(short.layout_settings)
+        variant.branding_settings = dict(short.branding_settings)
+        variant.branding_settings.update({"show_channel_card": False, "channel_profile_id": "", "channel_banner_path": ""})
+        variant.title = short.title
+        target = paths.renders / f"{candidate.id}_tiktok.mp4"
+        state_key = f"{short.render_key}-tiktok"
+        previous = state_store.load(state_key)
+        if not (target.is_file() and previous.get("render_key") == state_key):
+            self.container.shorts_render.render(source, variant, ass, target, _NeverCancelled())
+            state_store.save(state_key, {
+                "render_key": state_key, "job_id": job.job_id, "output_path": str(target),
+                "platform": "tiktok", "candidate_id": short.candidate_id,
+            })
+        probe = deepcopy(short)
+        probe.artifact = RenderArtifact(candidate.id, candidate.candidate_rank, str(target))
+        artifact, issues = self.qc.probe_render(self.container.runner, self.container.paths.get("ffprobe", "ffprobe.exe"), probe, source.fps)
+        short.issues.extend(issues)
+        job.issues.extend(issues)
+        if artifact.validated:
+            short.platform_artifacts["tiktok"] = str(target)
+        else:
+            short.status = AutomationShortStatus.NEEDS_REVIEW.value
 
     @staticmethod
     def _render_queue_details(shorts) -> list[dict]:
