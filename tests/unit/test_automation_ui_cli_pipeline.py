@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QGroupBox, QPushButton
 
 from creator_assistant.domain.automation.models import AutomationJobSource, AutomationMode
 from creator_assistant.domain.shorts.models import Candidate
@@ -30,6 +30,13 @@ def test_cli_and_ui_use_same_automation_engine(tmp_path):
     container = SimpleNamespace(automation_engine=engine, channel_assets=SimpleNamespace(profiles=lambda: []))
     tab = AutopilotTab(container)
     assert tab.engine is engine
+    groups = {group.title() for group in tab.findChildren(QGroupBox)}
+    assert {"1. Источники", "2. Режим и профиль", "3. Отбор Shorts", "4. Оформление", "5. Расписание", "6. Подключённые платформы", "7. Задания — управление", "Результаты"} <= groups
+    labels = {button.text(): button for button in tab.findChildren(QPushButton)}
+    assert "Выбрать всех найденных кандидатов" in labels
+    assert "Сохранить как шаблон проекта" not in labels
+    assert "Применить шаблон ко всем Shorts" not in labels
+    assert labels["Выбрать всех найденных кандидатов"].toolTip().startswith("Установить минимальную оценку")
     engine.create_job(["one.mp4"])
     tab.refresh_jobs()
     assert engine.store.list()

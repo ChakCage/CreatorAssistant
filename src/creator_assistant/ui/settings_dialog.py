@@ -43,6 +43,8 @@ from creator_assistant.domain.author_presets import merge_presets
 from creator_assistant.infrastructure.project_index import ProjectRoot
 from creator_assistant.infrastructure.windows_paths import discover_author_folders
 from creator_assistant.infrastructure.settings_store import config_root
+from creator_assistant.ui.publishing_accounts import PublishingAccountsPanel
+from creator_assistant.infrastructure.publishing_startup import set_publishing_startup
 
 
 class SettingsDialog(QDialog):
@@ -306,6 +308,32 @@ class SettingsDialog(QDialog):
         self.youtube_auth_mode.currentIndexChanged.connect(self._sync_youtube_access)
         self._sync_youtube_access()
         content_layout.addWidget(access_group)
+
+        if self.container and hasattr(self.container, "publishing_store"):
+            self.publishing_accounts_panel = PublishingAccountsPanel(self.container, self)
+            publishing_options = QFormLayout()
+            publishing = settings.get("publishing", {})
+            self.publishing_mode = QComboBox()
+            self.publishing_mode.addItem("Dry run — без сетевых запросов", "DRY_RUN")
+            self.publishing_mode.addItem("Private test", "PRIVATE_TEST")
+            self.publishing_mode.addItem("Real publishing", "REAL")
+            self.publishing_mode.setCurrentIndex(max(0, self.publishing_mode.findData(publishing.get("mode", "DRY_RUN"))))
+            private_test_ok = any(receipt.status == "PRIVATE_TEST" for receipt in self.container.publishing_store.receipts())
+            self.publishing_real = QCheckBox("Явно разрешить реальную публичную публикацию")
+            self.publishing_real.setChecked(bool(publishing.get("real_publishing_enabled", False)) and private_test_ok)
+            self.publishing_real.setEnabled(private_test_ok)
+            self.publishing_real.setToolTip("Доступно только после успешного PRIVATE_TEST; ограничения и app review платформы всё равно применяются")
+            if not private_test_ok:
+                real_index = self.publishing_mode.findData("REAL")
+                self.publishing_mode.setItemData(real_index, 0, Qt.UserRole - 1)
+                if self.publishing_mode.currentData() == "REAL": self.publishing_mode.setCurrentIndex(self.publishing_mode.findData("DRY_RUN"))
+            self.publishing_startup = QCheckBox("Запускать агент публикаций вместе с Windows")
+            self.publishing_startup.setChecked(bool(publishing.get("start_agent_with_windows", False)))
+            publishing_options.addRow("Режим", self.publishing_mode)
+            publishing_options.addRow(self.publishing_real)
+            publishing_options.addRow(self.publishing_startup)
+            self.publishing_accounts_panel.layout().addLayout(publishing_options)
+            content_layout.addWidget(self.publishing_accounts_panel)
 
         options_group = QGroupBox("Обработка")
         options_form = QFormLayout(options_group)
@@ -1099,6 +1127,21 @@ class SettingsDialog(QDialog):
             "schema_version": 2,
         }
         self.result_settings["naming"] = {key: edit.text().strip() for key, edit in self.naming_edits.items()}
+        if self.container and hasattr(self, "publishing_mode"):
+            publishing = dict(self.result_settings.get("publishing", {}))
+            publishing["mode"] = str(self.publishing_mode.currentData())
+            publishing["start_agent_with_windows"] = self.publishing_startup.isChecked()
+            publishing["real_publishing_enabled"] = self.publishing_real.isChecked()
+            self.result_settings["publishing"] = publishing
+            if self.publishing_real.isChecked():
+                for account in self.container.publishing_store.accounts():
+                    if account.platform == "youtube" and not account.review_required:
+                        account.capability = "ready-for-public"
+                        self.container.publishing_store.save_account(account)
+            try:
+                set_publishing_startup(self.publishing_startup.isChecked())
+            except Exception as exc:
+                QMessageBox.warning(self, "Агент публикаций", f"Не удалось обновить автозапуск: {exc}")
         if self.container:
             self.container.save_settings(self.result_settings, started_at=save_clicked_at)
         self.accept()

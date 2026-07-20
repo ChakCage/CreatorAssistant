@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
@@ -52,6 +53,11 @@ from creator_assistant.infrastructure.automation_job_store import AutomationJobS
 from creator_assistant.services.automation.engine import AutomationEngine
 from creator_assistant.services.automation.shorts_pipeline import ExistingShortsAutomationPipeline
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
+from creator_assistant.infrastructure.credential_store import WindowsCredentialStore
+from creator_assistant.infrastructure.publishing_store import PublishingStore
+from creator_assistant.services.publishing.accounts import PublishingAccountService
+from creator_assistant.services.publishing.manager import BackgroundPublishingAgent, PublishingManager
+from creator_assistant.services.publishing.oauth import OAuthService
 
 
 class ServiceContainer:
@@ -63,6 +69,12 @@ class ServiceContainer:
             initial_settings["temp_root"] = str(default_temp_root(Path(initial_settings.get("youtube_root", r"E:\YouTube"))))
         self.logger = configure_logging()
         self.settings_service = SettingsService(self.settings_store, initial_settings, self.logger)
+        self.publishing_store = PublishingStore()
+        self.publishing_credentials = WindowsCredentialStore()
+        self.publishing_oauth = OAuthService(self.publishing_credentials)
+        self.publishing_accounts = PublishingAccountService(self.publishing_store, self.publishing_credentials, self.publishing_oauth)
+        self.publishing_manager = PublishingManager(self.publishing_store, self.publishing_credentials)
+        self.publishing_agent = BackgroundPublishingAgent(self.publishing_manager)
         self.youtube_auth = YtDlpAuthContext.from_settings(self.settings)
         self.runner = ProcessRunner(self.logger)
         self.detector = DependencyDetector(self.runner)
@@ -73,6 +85,8 @@ class ServiceContainer:
         self.settings_store.save(self.settings)
         self.settings_service.mark_current_as_persisted()
         self.rebuild()
+        if os.environ.get("CREATOR_ASSISTANT_AGENT_MODE") != "1":
+            self.publishing_agent.start()
 
     @property
     def settings(self) -> Dict[str, Any]:

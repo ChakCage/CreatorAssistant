@@ -108,16 +108,15 @@ class AutopilotTab(QWidget):
 
         sources_group = QGroupBox("1. Источники")
         sources_layout = QVBoxLayout(sources_group)
-        source_actions = QHBoxLayout()
-        for text, callback in (
+        source_actions = QGridLayout()
+        for index, (text, callback) in enumerate((
             ("Видео", self._add_video), ("Несколько", self._add_videos),
             ("Папка", self._add_folder), ("Удалить", self._remove_source),
             ("Очистить", self.sources_clear),
-        ):
+        )):
             button = QPushButton(text)
             button.clicked.connect(callback)
-            source_actions.addWidget(button)
-        source_actions.addStretch(1)
+            source_actions.addWidget(button, index // 3, index % 3)
         sources_layout.addLayout(source_actions)
         self.sources = QListWidget()
         self.sources.setMaximumHeight(92)
@@ -178,13 +177,16 @@ class AutopilotTab(QWidget):
         self.youtube = QCheckBox("YouTube"); self.youtube.setChecked(True)
         self.tiktok = QCheckBox("TikTok")
         platforms_layout.addWidget(self.youtube); platforms_layout.addWidget(self.tiktok); platforms_layout.addStretch(1)
+        self.platform_status = QLabel()
+        self.platform_status.setWordWrap(True)
+        platforms_layout.addWidget(self.platform_status)
         cards.addWidget(platforms_group, 2, 1)
 
         template_group = QGroupBox("4. Оформление")
         template_group_layout = QHBoxLayout(template_group)
         self.template_summary = QLabel()
-        self.template_summary.setWordWrap(False)
-        self.template_summary.setMaximumWidth(520)
+        self.template_summary.setWordWrap(True)
+        self.template_summary.setMaximumWidth(240)
         self.template_summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
         template_group_layout.addWidget(self.template_summary)
         template_group_layout.addStretch(1)
@@ -226,6 +228,18 @@ class AutopilotTab(QWidget):
         root.addWidget(self.jobs, 1)
         self._refresh_template_summary()
         self._update_score_forecast()
+        self._refresh_platform_status()
+
+    def _refresh_platform_status(self) -> None:
+        if not hasattr(self, "platform_status"):
+            return
+        accounts = self.container.publishing_store.accounts() if hasattr(self.container, "publishing_store") else []
+        parts = []
+        for platform in ("youtube", "tiktok"):
+            connected = [item for item in accounts if item.platform == platform and item.status == "CONNECTED"]
+            parts.append(f"{platform.title()}: {len(connected)} подключено")
+        mode = str(getattr(self.container, "settings", {}).get("publishing", {}).get("mode", "DRY_RUN"))
+        self.platform_status.setText(" · ".join(parts) + f" · {mode}")
 
     def _refresh_template_summary(self) -> None:
         template, source = self._resolved_template()
@@ -442,13 +456,42 @@ class AutopilotTab(QWidget):
         worker = FunctionWorker(lambda _progress: self.engine.resume(job_id) if resume else self.engine.run(job_id))
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.finished.connect(lambda _job: self.refresh_jobs(select_id=job_id))
+        worker.finished.connect(lambda job: self._job_finished(job_id, job))
         worker.finished.connect(thread.quit)
         worker.failed.connect(lambda message, _details: QMessageBox.critical(self, "Автопилот", message))
         worker.failed.connect(thread.quit)
         thread.finished.connect(self._thread_finished)
         self._thread, self._worker = thread, worker
         thread.start()
+
+    def _job_finished(self, job_id: str, job) -> None:
+        self.refresh_jobs(select_id=job_id)
+        if getattr(job, "status", "") == "SCHEDULED":
+            self._sync_publishing(job)
+
+    def _sync_publishing(self, job, network_approved: bool = False) -> None:
+        plan = getattr(job.result, "publishing_plan", None)
+        if not plan:
+            return
+        accounts = self.container.publishing_store.accounts()
+        mode = str(self.container.settings.get("publishing", {}).get("mode", "DRY_RUN"))
+        shorts_by_id = {item.short_id: item for item in job.shorts if item.artifact and item.artifact.validated}
+        for slot in plan.slots:
+            short = shorts_by_id.get(slot.short_id)
+            if not short:
+                continue
+            for platform in slot.platforms:
+                account = next((item for item in accounts if item.platform == platform and item.status == "CONNECTED"), None)
+                metadata = {"title": short.title or short.short_id, "short_id": short.short_id, "network_approved": network_approved}
+                if platform == "tiktok":
+                    metadata.update({"post_mode": "draft", "privacy_level": "SELF_ONLY"})
+                self.container.publishing_manager.create_attempt(
+                    short.short_id, platform, account.account_id if account else "",
+                    short.platform_artifacts.get(platform, short.artifact.output_path), mode=mode, scheduled_at=slot.scheduled_at, metadata=metadata,
+                )
+        queue = getattr(self.window(), "publishing_queue_tab", None)
+        if queue:
+            queue.refresh()
 
     def _thread_finished(self) -> None:
         thread = self._thread
@@ -496,7 +539,19 @@ class AutopilotTab(QWidget):
 
     def approve_job(self) -> None:
         if self.selected_job_id():
-            try: self.engine.approve_and_schedule(self.selected_job_id())
+            publishing_mode = str(getattr(self.container, "settings", {}).get("publishing", {}).get("mode", "DRY_RUN"))
+            approved = publishing_mode == "DRY_RUN"
+            if not approved:
+                approved = QMessageBox.question(
+                    self, "Подтверждение публикации",
+                    f"Создать сетевые задания публикации в режиме {publishing_mode}? Перед отправкой проверьте выбранные аккаунты и приватность.",
+                    QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel,
+                ) == QMessageBox.Yes
+                if not approved:
+                    return
+            try:
+                job = self.engine.approve_and_schedule(self.selected_job_id())
+                self._sync_publishing(job, network_approved=approved)
             except ValueError as exc: QMessageBox.information(self, "Автопилот", str(exc))
             self.refresh_jobs()
 

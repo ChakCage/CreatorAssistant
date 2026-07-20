@@ -10,6 +10,7 @@ from creator_assistant.ui.project_prep_tab import ProjectPrepTab
 from creator_assistant.ui.shorts.shorts_tab import ShortsTab
 from creator_assistant.ui.autopilot_tab import AutopilotTab
 from creator_assistant.ui.settings_dialog import SettingsDialog
+from creator_assistant.ui.publishing_queue import PublishingQueueTab
 from creator_assistant.infrastructure.crash_logging import event as crash_event, safe_call
 from creator_assistant.infrastructure.build_info import current_build_info
 
@@ -45,6 +46,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.shorts_tab, "Shorts")
         self.autopilot_tab = AutopilotTab(container)
         self.tabs.addTab(self.autopilot_tab, "Автопилот")
+        self.publishing_queue_tab = PublishingQueueTab(container)
+        self.tabs.addTab(self.publishing_queue_tab, "Очередь публикаций")
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage(f"Готов к работе · {build.executable}")
         self.statusBar().setToolTip(f"EXE: {build.executable}\nCommit: {build.commit}\nСборка: {build.build_date}")
@@ -59,11 +62,14 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self.container, self)
         if dialog.exec():
             self.prep_tab.reload_authors()
+            self.autopilot_tab._refresh_platform_status()
+            self.publishing_queue_tab.refresh()
 
     def closeEvent(self, event) -> None:
-        if self.prep_tab.shutdown_workers() and self.shorts_tab.shutdown_workers() and self.autopilot_tab.shutdown_workers():
+        if self.prep_tab.shutdown_workers() and self.shorts_tab.shutdown_workers() and self.autopilot_tab.shutdown_workers() and self.publishing_queue_tab.shutdown_workers():
             self.container.settings["window_geometry"] = bytes(self.saveGeometry().toBase64()).decode("ascii")
             self.container.settings_store.save(self.container.settings)
+            self.container.publishing_agent.stop()
             crash_event("Main window closed after all QThreads finished")
             event.accept()
         else:

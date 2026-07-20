@@ -1,7 +1,8 @@
 param(
     [switch]$SkipInstall,
     [switch]$VerifyLaunch,
-    [string]$VerifyUiReport = ""
+    [string]$VerifyUiReport = "",
+    [string]$VerifyPublishingUiReport = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,11 +67,11 @@ if (-not (Test-Path -LiteralPath $StagedExe)) { throw "EXE was not found after b
 if (Test-Path -LiteralPath $Current) { Remove-Item -LiteralPath $Current -Recurse -Force }
 Move-Item -LiteralPath $StagedApp -Destination $Current
 if (Test-Path -LiteralPath $Staging) { Remove-Item -LiteralPath $Staging }
-$LaunchArguments = if ($VerifyUiReport) { '"--verify-template-ui=' + [System.IO.Path]::GetFullPath($VerifyUiReport) + '"' } else { '' }
+$LaunchArguments = if ($VerifyPublishingUiReport) { '"--verify-publishing-ui=' + [System.IO.Path]::GetFullPath($VerifyPublishingUiReport) + '"' } elseif ($VerifyUiReport) { '"--verify-template-ui=' + [System.IO.Path]::GetFullPath($VerifyUiReport) + '"' } else { '' }
 & (Join-Path $PSScriptRoot 'update-desktop-shortcut.ps1') `
     -TargetPath $CurrentExe `
     -CommitHash $Commit `
-    -Launch:($VerifyLaunch -or [bool]$VerifyUiReport) `
+    -Launch:($VerifyLaunch -or [bool]$VerifyUiReport -or [bool]$VerifyPublishingUiReport) `
     -LaunchArguments $LaunchArguments
 if ($LASTEXITCODE -ne 0) { throw 'Desktop shortcut update failed.' }
 if ($VerifyUiReport) {
@@ -82,6 +83,14 @@ if ($VerifyUiReport) {
     $Verification = Get-Content -Raw -LiteralPath $Report | ConvertFrom-Json
     if (-not $Verification.success) { throw "Packaged UI verification failed: $Report" }
     Write-Host "Packaged UI verified: $Report"
+}
+if ($VerifyPublishingUiReport) {
+    $Report = [System.IO.Path]::GetFullPath($VerifyPublishingUiReport)
+    for ($Attempt = 0; $Attempt -lt 60 -and -not (Test-Path -LiteralPath $Report); $Attempt++) { Start-Sleep -Milliseconds 500 }
+    if (-not (Test-Path -LiteralPath $Report)) { throw "Publishing UI verification report was not created: $Report" }
+    $Verification = Get-Content -Raw -LiteralPath $Report | ConvertFrom-Json
+    if (-not $Verification.success) { throw "Publishing UI verification failed: $Report" }
+    Write-Host "Publishing UI verified: $Report"
 }
 Write-Host "Ready: $CurrentExe"
 Write-Host "Commit: $Commit"

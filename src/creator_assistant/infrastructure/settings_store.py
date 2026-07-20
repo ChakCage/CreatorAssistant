@@ -116,6 +116,13 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         },
     },
     "window_geometry": "",
+    "publishing": {
+        "mode": "DRY_RUN",
+        "start_agent_with_windows": False,
+        "google_client_config_id": "",
+        "tiktok_client_config_id": "",
+        "real_publishing_enabled": False,
+    },
     "shorts_ai": {
         "enabled": True,
         "backend": "ollama",

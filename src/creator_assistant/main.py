@@ -13,7 +13,7 @@ from creator_assistant.infrastructure.crash_logging import initialize_early
 initialize_early()
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QGroupBox, QMessageBox, QPushButton
 
 from creator_assistant.app import ServiceContainer
 from creator_assistant.ui.main_window import MainWindow
@@ -190,9 +190,54 @@ def _template_ui_verification(window: MainWindow, report_path: Path) -> None:
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _publishing_ui_verification(window: MainWindow, container: ServiceContainer, report_path: Path) -> None:
+    """Capture actual packaged Autopilot, account settings and publishing queue."""
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    window.tabs.setCurrentWidget(window.autopilot_tab); QApplication.processEvents()
+    autopilot_image = report_path.with_name(report_path.stem + "-autopilot.png")
+    window.grab().save(str(autopilot_image), "PNG")
+    groups = {item.title() for item in window.autopilot_tab.findChildren(QGroupBox)}
+    buttons = {item.text() for item in window.autopilot_tab.findChildren(QPushButton)}
+    settings = SettingsDialog(container, window); settings.show()
+    if hasattr(settings, "publishing_accounts_panel"):
+        settings.scroll_area.ensureWidgetVisible(settings.publishing_accounts_panel, 20, 20)
+    QApplication.processEvents()
+    settings_image = report_path.with_name(report_path.stem + "-accounts.png")
+    settings.grab().save(str(settings_image), "PNG")
+    accounts_visible = bool(hasattr(settings, "publishing_accounts_panel") and settings.publishing_accounts_panel.isVisibleTo(settings))
+    settings.close()
+    window.tabs.setCurrentWidget(window.publishing_queue_tab); QApplication.processEvents()
+    queue_image = report_path.with_name(report_path.stem + "-queue.png")
+    window.grab().save(str(queue_image), "PNG")
+    required_groups = {"1. Источники", "2. Режим и профиль", "3. Отбор Shorts", "4. Оформление", "5. Расписание", "6. Подключённые платформы", "7. Задания — управление", "Результаты"}
+    report = {
+        "success": required_groups <= groups and accounts_visible and "Выбрать всех найденных кандидатов" in buttons,
+        "autopilot_groups": sorted(groups), "account_settings_visible": accounts_visible,
+        "publishing_queue_columns": window.publishing_queue_tab.table.columnCount(),
+        "screenshots": {"autopilot": str(autopilot_image), "accounts": str(settings_image), "queue": str(queue_image)},
+        "build": current_build_info().__dict__,
+    }
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Settings diagnostics may still own a worker. The verification process has
+    # already persisted its report and must not keep build.ps1 waiting.
+    QTimer.singleShot(5000, lambda: os._exit(0))
+
+
 def main() -> int:
     multiprocessing.freeze_support()
     install_qt_message_handler()
+    if "--publishing-agent" in sys.argv[1:]:
+        _prepare_headless_console()
+        try:
+            os.environ["CREATOR_ASSISTANT_AGENT_MODE"] = "1"
+            container = ServiceContainer()
+            container.publishing_agent.run()
+            return 0
+        except KeyboardInterrupt:
+            return 0
+        except Exception as exc:
+            log_exception("Background publishing agent failed", exc)
+            return 1
     automation_args = {"--run-job", "--resume-job", "--list-jobs", "--show-job"}
     if any(value in automation_args for value in sys.argv[1:]):
         _prepare_headless_console()
@@ -240,6 +285,19 @@ def main() -> int:
                 500,
                 lambda: (
                     _template_ui_verification(window, Path(template_verification_arg)),
+                    app.quit(),
+                ),
+            )
+        publishing_verification_arg = next(
+            (value.split("=", 1)[1] for value in sys.argv if value.startswith("--verify-publishing-ui=")),
+            "",
+        )
+        if publishing_verification_arg:
+            container.first_run = False
+            QTimer.singleShot(
+                700,
+                lambda: (
+                    _publishing_ui_verification(window, container, Path(publishing_verification_arg)),
                     app.quit(),
                 ),
             )
