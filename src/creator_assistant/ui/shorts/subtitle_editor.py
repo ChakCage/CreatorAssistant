@@ -8,8 +8,8 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QEvent, QPoint, QProcess, QSettings, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QColor, QBrush, QFont, QFontDatabase, QFontMetricsF, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QFileDialog, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
-    QHeaderView, QLabel, QListWidget, QGridLayout, QGroupBox, QLineEdit, QMessageBox, QPushButton,
+    QFileDialog, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
+    QHeaderView, QLabel, QListWidget, QGridLayout, QGroupBox, QInputDialog, QLineEdit, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QSlider, QSplitter, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -87,6 +87,7 @@ class VerticalFramePreview(QWidget):
         self.layout_settings: dict = {}
         self.branding_settings: dict = {}
         self.video_frame = QImage()
+        self.brand_frame = QImage()
         self.exact_frame = QImage()
         self._blur_background = QPixmap()
         self._blur_source_key: object | None = None
@@ -128,6 +129,10 @@ class VerticalFramePreview(QWidget):
         # Composition quality is independent from physical UI pixels.
         self.composition_size = (max(1, int(width)), max(1, int(height)))
         self.resized.emit()
+
+    def set_brand_frame(self, image: QImage) -> None:
+        self.brand_frame = image.copy() if image and not image.isNull() else QImage()
+        self.update()
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
         return QSize(360, 640)
@@ -275,17 +280,22 @@ class VerticalFramePreview(QWidget):
         display.end()
 
     def _banner_source_size(self) -> tuple[int, int] | None:
-        banner = Path(str(self.branding_settings.get("channel_banner_path") or ""))
-        pixmap = QPixmap(str(banner)) if banner.is_file() else QPixmap()
+        pixmap = self._brand_pixmap()
         if pixmap.isNull():
             return None
         return pixmap.width(), pixmap.height()
 
+    def _brand_pixmap(self) -> QPixmap:
+        asset_type = str(self.branding_settings.get("brand_asset_type") or "IMAGE")
+        if asset_type != "IMAGE" and not self.brand_frame.isNull():
+            return QPixmap.fromImage(self.brand_frame)
+        banner = Path(str(self.branding_settings.get("channel_banner_path") or ""))
+        return QPixmap(str(banner)) if banner.is_file() else QPixmap()
+
     def _draw_branding(self, painter: QPainter, scale: float, left: float, top: float) -> None:
         # Banner is below both text layers in preview, exactly as in FFmpeg.
         if bool(self.branding_settings.get("show_channel_card", False)):
-            banner = Path(str(self.branding_settings.get("channel_banner_path") or ""))
-            pixmap = QPixmap(str(banner)) if banner.is_file() else QPixmap()
+            pixmap = self._brand_pixmap()
             if not pixmap.isNull():
                 rect = OverlayLayoutCalculator().banner_rect(pixmap.width(), pixmap.height(), self.branding_settings)
                 scaled = pixmap.scaled(round(rect.width * scale), round(rect.height * scale), Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -411,7 +421,7 @@ class SubtitleEditor(QWidget):
     global_templates_requested = Signal(object)
     subtitle_preset_changed = Signal(str, object)
 
-    def __init__(self, semantic_backend=None, parent=None, subtitle_presets=None) -> None:
+    def __init__(self, semantic_backend=None, parent=None, subtitle_presets=None, assets=None) -> None:
         super().__init__(parent)
         self.service = SubtitleService()
         self.candidate = self.transcript = self.paths = None
@@ -426,7 +436,7 @@ class SubtitleEditor(QWidget):
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(250)
         self._save_timer.timeout.connect(self._apply_configuration)
-        self.assets = ChannelAssetStore()
+        self.assets = assets or ChannelAssetStore()
         self.title_service = ShortTitleService()
         self.semantic_backend = semantic_backend
         self._ai_thread: QThread | None = None
@@ -461,7 +471,7 @@ class SubtitleEditor(QWidget):
         self.settings_scroll.setWidgetResizable(True)
         self.settings_scroll.setWidget(self.settings_content)
         self.vertical = VerticalLayoutPanel()
-        branding_widget = QWidget()
+        branding_widget = QGroupBox("Бренд-баннер / видеовставка")
         branding_form = QFormLayout(branding_widget)
         self.branding_preset = QComboBox()
         for label, value in (("Чистый", "clean"), ("Продвижение канала", "promotion"), ("Только видео", "video")):
@@ -514,13 +524,28 @@ class SubtitleEditor(QWidget):
         self.show_channel_card = QCheckBox("Показывать карточку канала")
         self.channel_profile = QComboBox()
         self.channel_profile.addItem("Не выбрано", "")
-        self.banner_import = QPushButton("Импорт / замена баннера")
-        self.banner_preview = QLabel("Баннер не выбран")
+        self.banner_import = QPushButton("Добавить изображение")
+        self.banner_import_video = QPushButton("Добавить видео / GIF")
+        self.banner_select = QPushButton("Выбрать из библиотеки")
+        self.banner_replace = QPushButton("Заменить материал")
+        self.banner_delete = QPushButton("Удалить профиль")
+        self.banner_verify = QPushButton("Проверить материал")
+        self.banner_refresh = QPushButton("Обновить библиотеку бренд-материалов")
+        self.banner_import_developer = QPushButton("Импортировать материалы из Developer Edition")
+        self.banner_preview = QLabel("Материал не выбран")
         self.banner_preview.setWordWrap(True)
         self.banner_scale = QSpinBox(); self.banner_scale.setRange(20, 200); self.banner_scale.setSuffix("%"); self.banner_scale.setValue(100)
         self.banner_x = QSpinBox(); self.banner_x.setRange(-480, 480); self.banner_x.setSuffix(" px"); self.banner_x.setValue(0)
         self.banner_y = QSpinBox(); self.banner_y.setRange(-720, 240); self.banner_y.setSuffix(" px"); self.banner_y.setValue(0)
         self.banner_opacity = QSpinBox(); self.banner_opacity.setRange(0, 100); self.banner_opacity.setSuffix("%"); self.banner_opacity.setValue(100)
+        self.banner_start_offset = QDoubleSpinBox(); self.banner_start_offset.setRange(0.0, 86400.0); self.banner_start_offset.setDecimals(2); self.banner_start_offset.setSuffix(" с")
+        self.banner_display_duration = QDoubleSpinBox(); self.banner_display_duration.setRange(0.0, 86400.0); self.banner_display_duration.setDecimals(2); self.banner_display_duration.setSuffix(" с")
+        self.banner_display_duration.setSpecialValueText("Весь Short")
+        self.banner_loop = QCheckBox("Повторять до конца показа"); self.banner_loop.setChecked(True)
+        self.banner_trim_to_short = QCheckBox("Обрезать по длительности Short"); self.banner_trim_to_short.setChecked(True)
+        self.banner_freeze_last = QCheckBox("Оставить последний кадр")
+        self.banner_audio_enabled = QCheckBox("Использовать звук материала"); self.banner_audio_enabled.setChecked(False)
+        self.banner_audio_volume = QSpinBox(); self.banner_audio_volume.setRange(0, 100); self.banner_audio_volume.setSuffix("%"); self.banner_audio_volume.setValue(100)
         self.banner_reset_position = QPushButton("Сбросить положение")
         self.banner_save_profile = QPushButton("Сохранить как настройки профиля канала")
         self._refresh_profiles()
@@ -543,17 +568,24 @@ class SubtitleEditor(QWidget):
         branding_form.addRow("X заголовка", self.title_offset_x)
         branding_form.addRow(self.show_channel_card)
         branding_form.addRow("Профиль канала", self.channel_profile)
-        banner_actions = self._row(self.banner_import)
-        self.banner_open_file = QPushButton("Открыть файл")
-        self.banner_open_folder = QPushButton("Открыть папку")
-        banner_actions.layout().addWidget(self.banner_open_file)
-        banner_actions.layout().addWidget(self.banner_open_folder)
-        branding_form.addRow(banner_actions)
-        branding_form.addRow("Баннер", self.banner_preview)
+        self.banner_open_file = QPushButton("Открыть материал")
+        self.banner_open_folder = QPushButton("Открыть расположение файла")
+        branding_form.addRow(self._row(self.banner_import, self.banner_import_video))
+        branding_form.addRow(self._row(self.banner_select, self.banner_replace, self.banner_delete))
+        branding_form.addRow(self._row(self.banner_open_file, self.banner_open_folder, self.banner_verify))
+        branding_form.addRow(self._row(self.banner_refresh, self.banner_import_developer))
+        branding_form.addRow("Материал", self.banner_preview)
         branding_form.addRow("Масштаб баннера", self.banner_scale)
         branding_form.addRow("Смещение по горизонтали", self.banner_x)
         branding_form.addRow("Смещение по вертикали", self.banner_y)
         branding_form.addRow("Прозрачность", self.banner_opacity)
+        branding_form.addRow("Начало материала", self.banner_start_offset)
+        branding_form.addRow("Длительность показа", self.banner_display_duration)
+        branding_form.addRow(self.banner_loop)
+        branding_form.addRow(self.banner_trim_to_short)
+        branding_form.addRow(self.banner_freeze_last)
+        branding_form.addRow(self.banner_audio_enabled)
+        branding_form.addRow("Громкость материала", self.banner_audio_volume)
         branding_form.addRow(self.banner_reset_position)
         branding_form.addRow(self.banner_save_profile)
         style_widget = QWidget()
@@ -684,6 +716,9 @@ class SubtitleEditor(QWidget):
         self.player = None
         self.audio = None
         self.video_sink = None
+        self.brand_player = None
+        self.brand_video_sink = None
+        self._brand_source = ""
         if VERTICAL_MULTIMEDIA_AVAILABLE:
             self.audio = QAudioOutput(self)
             self.video_sink = QVideoSink(self)
@@ -693,6 +728,10 @@ class SubtitleEditor(QWidget):
             self.video_sink.videoFrameChanged.connect(self._video_frame_changed)
             self.player.positionChanged.connect(self._player_position_changed)
             self.player.playbackStateChanged.connect(self._playback_state_changed)
+            self.brand_video_sink = QVideoSink(self)
+            self.brand_player = QMediaPlayer(self)
+            self.brand_player.setVideoSink(self.brand_video_sink)
+            self.brand_video_sink.videoFrameChanged.connect(self._brand_video_frame_changed)
         self.timeline = SeekSlider(Qt.Horizontal)
         self.timeline.setRange(0, 0)
         self.timeline.seek_requested.connect(self._seek_relative)
@@ -780,6 +819,13 @@ class SubtitleEditor(QWidget):
         self.title_hook.clicked.connect(self._title_hook_clicked)
         self.title_reset.clicked.connect(self._title_reset_clicked)
         self.banner_import.clicked.connect(self._import_banner)
+        self.banner_import_video.clicked.connect(self._import_banner_video)
+        self.banner_select.clicked.connect(self._select_library_profile)
+        self.banner_replace.clicked.connect(self._replace_brand_asset)
+        self.banner_delete.clicked.connect(self._delete_brand_profile)
+        self.banner_verify.clicked.connect(self._verify_brand_asset)
+        self.banner_refresh.clicked.connect(lambda: self._refresh_brand_library(False))
+        self.banner_import_developer.clicked.connect(lambda: self._refresh_brand_library(True))
         self.banner_open_file.clicked.connect(self._open_banner_file)
         self.banner_open_folder.clicked.connect(self._open_banner_folder)
         self.banner_reset_position.clicked.connect(self._reset_banner_position)
@@ -788,10 +834,10 @@ class SubtitleEditor(QWidget):
         for control in (self.position, self.subtitle_alignment, self.subtitle_offset_x, self.subtitle_font, self.size, self.maximum, self.lines, self.outline, self.shadow, self.margin, self.offset, self.line_anchor_mode, self.banner_gap):
             signal = control.currentIndexChanged if isinstance(control, QComboBox) else control.valueChanged
             signal.connect(self._mark_dirty)
-        for control in (self.branding_preset, self.title_font, self.title_alignment, self.title_offset_x, self.title_size, self.title_outline, self.title_shadow, self.title_y, self.channel_profile, self.banner_scale, self.banner_x, self.banner_y, self.banner_opacity):
+        for control in (self.branding_preset, self.title_font, self.title_alignment, self.title_offset_x, self.title_size, self.title_outline, self.title_shadow, self.title_y, self.channel_profile, self.banner_scale, self.banner_x, self.banner_y, self.banner_opacity, self.banner_start_offset, self.banner_display_duration, self.banner_audio_volume):
             signal = control.currentIndexChanged if isinstance(control, QComboBox) else control.valueChanged
             signal.connect(self._mark_dirty)
-        for checkbox in (self.show_subtitles, self.show_title, self.use_subtitle_font_for_title, self.title_bold, self.show_channel_card, self.auto_above_banner):
+        for checkbox in (self.show_subtitles, self.show_title, self.use_subtitle_font_for_title, self.title_bold, self.show_channel_card, self.auto_above_banner, self.banner_loop, self.banner_trim_to_short, self.banner_freeze_last, self.banner_audio_enabled):
             checkbox.toggled.connect(self._mark_dirty)
         self.use_subtitle_font_for_title.toggled.connect(self.title_font.setDisabled)
         self.title_font.setDisabled(self.use_subtitle_font_for_title.isChecked())
@@ -1048,6 +1094,10 @@ class SubtitleEditor(QWidget):
             return
         if state == QMediaPlayer.PlayingState:
             self._return_to_interactive_preview()
+            if self.brand_player and self._brand_source:
+                self.brand_player.play()
+        elif self.brand_player:
+            self.brand_player.pause()
 
     def _seek_relative(self, relative_ms: int) -> None:
         if not self.candidate:
@@ -1086,6 +1136,40 @@ class SubtitleEditor(QWidget):
                 self._preview_state = "Быстрый предпросмотр"
             self.preview.set_video_frame(image, preserve_exact=not playing)
             self._update_technical_info()
+
+    @Slot(object)
+    def _brand_video_frame_changed(self, frame) -> None:
+        if frame and frame.isValid():
+            self.preview.set_brand_frame(frame.toImage())
+
+    def _sync_brand_preview(self, relative_ms: int, branding: dict) -> None:
+        if not self.brand_player:
+            return
+        asset_type = str(branding.get("brand_asset_type") or "IMAGE")
+        path = Path(str(branding.get("channel_banner_path") or ""))
+        if asset_type == "IMAGE" or not path.is_file() or not bool(branding.get("show_channel_card", False)):
+            if self._brand_source:
+                self.brand_player.stop()
+                self.brand_player.setSource(QUrl())
+                self._brand_source = ""
+            self.preview.set_brand_frame(QImage())
+            return
+        source = str(path.resolve())
+        if source != self._brand_source:
+            self.brand_player.setSource(QUrl.fromLocalFile(source))
+            self._brand_source = source
+        media_ms = round(float(branding.get("banner_start_offset", 0) or 0) * 1000) + relative_ms
+        duration_ms = round(float(branding.get("brand_asset_duration", 0) or 0) * 1000)
+        if duration_ms > 0 and bool(branding.get("banner_loop", True)):
+            media_ms %= duration_ms
+        elif duration_ms > 0:
+            media_ms = min(media_ms, max(0, duration_ms - 40))
+        if abs(self.brand_player.position() - media_ms) > 250:
+            self.brand_player.setPosition(media_ms)
+        if self.player and self.player.playbackState() == QMediaPlayer.PlayingState:
+            self.brand_player.play()
+        else:
+            self.brand_player.pause()
 
     def _schedule_exact_preview(self) -> None:
         # Kept as a compatibility hook: exact FFmpeg preview is explicit-only.
@@ -1146,7 +1230,19 @@ class SubtitleEditor(QWidget):
         target.unlink(missing_ok=True)
         args = ["-hide_banner", "-loglevel", "error", "-y", "-ss", f"{self.candidate.start + self._preview_position_ms / 1000:.3f}", "-i", str(self._source_info.path)]
         if has_banner:
-            args += ["-loop", "1", "-i", str(banner)]
+            asset_type = str(branding.get("brand_asset_type") or "IMAGE")
+            if asset_type == "IMAGE":
+                args += ["-loop", "1"]
+            else:
+                media_time = max(0.0, float(branding.get("banner_start_offset", 0) or 0) + self._preview_position_ms / 1000)
+                duration = float(branding.get("brand_asset_duration", 0) or 0)
+                if duration > 0 and bool(branding.get("banner_loop", True)):
+                    media_time %= duration
+                elif duration > 0 and bool(branding.get("banner_freeze_last_frame", False)):
+                    media_time = min(media_time, max(0.0, duration - 0.04))
+                if media_time:
+                    args += ["-ss", f"{media_time:.3f}"]
+            args += ["-i", str(banner)]
         args += ["-filter_complex", graph, "-map", "[v]", "-frames:v", "1", str(target)]
         process = QProcess(self)
         process.setWorkingDirectory(str(cache))
@@ -1202,9 +1298,10 @@ class SubtitleEditor(QWidget):
             self.table.blockSignals(True)
             self.table.selectRow(active_row)
             self.table.blockSignals(False)
+        branding = self.current_branding_settings()
+        self._sync_brand_preview(relative_ms, branding)
         self.preview.set_preview(
-            self.candidate, self.current_settings(), self.vertical.value(), cue_text,
-            self.current_branding_settings(),
+            self.candidate, self.current_settings(), self.vertical.value(), cue_text, branding,
         )
 
     def _subtitle_row_clicked(self, row: int, _column: int) -> None:
@@ -1258,6 +1355,13 @@ class SubtitleEditor(QWidget):
         self.banner_x.setValue(int(settings.get("banner_offset_x", 0)))
         self.banner_y.setValue(int(settings.get("banner_offset_y", int(settings.get("banner_y", 1600)) - 1600 if "banner_y" in settings else 0)))
         self.banner_opacity.setValue(int(settings.get("banner_opacity", 100)))
+        self.banner_start_offset.setValue(float(settings.get("banner_start_offset", 0.0) or 0.0))
+        self.banner_display_duration.setValue(float(settings.get("banner_display_duration", 0.0) or 0.0))
+        self.banner_loop.setChecked(bool(settings.get("banner_loop", True)))
+        self.banner_trim_to_short.setChecked(bool(settings.get("banner_trim_to_short", True)))
+        self.banner_freeze_last.setChecked(bool(settings.get("banner_freeze_last_frame", False)))
+        self.banner_audio_enabled.setChecked(bool(settings.get("banner_audio_enabled", False)))
+        self.banner_audio_volume.setValue(int(settings.get("banner_audio_volume", 100) or 100))
         self._update_banner_label()
 
     def _profile_selected(self) -> None:
@@ -1267,7 +1371,17 @@ class SubtitleEditor(QWidget):
     def _update_banner_label(self) -> None:
         profile_id = str(self.channel_profile.currentData() or "")
         path = self.assets.banner_path(profile_id)
-        self.banner_preview.setText(f"{path.name}\nБаннер загружен ✓" if path else "Баннер не выбран")
+        asset = self.assets.asset(profile_id)
+        if asset and path:
+            duration = f" · {asset.duration:.2f} с" if asset.duration > 0 else ""
+            alpha = " · alpha" if asset.has_alpha else ""
+            audio = " · звук" if asset.has_audio else " · без звука"
+            self.banner_preview.setText(
+                f"{path.name}\n{asset.asset_type} · {asset.width}×{asset.height}{duration}\n"
+                f"{asset.codec or 'image'}{alpha}{audio} · {asset.size_bytes / 1024 / 1024:.2f} МБ"
+            )
+        else:
+            self.banner_preview.setText("Материал не выбран")
         self.banner_preview.setToolTip(str(path or ""))
 
     def _branding_preset_selected(self) -> None:
@@ -1471,8 +1585,31 @@ class SubtitleEditor(QWidget):
         )
         if not selected:
             return
-        profile_id = str(self.channel_profile.currentData() or "").strip() or Path(selected).stem.replace("_subscribe", "")
-        profile = self.assets.import_banner(profile_id, Path(selected), {
+        self._import_brand_asset(Path(selected))
+
+    def _import_banner_video(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите видеовставку или анимацию",
+            str(Path.home()),
+            "Видео и анимация (*.mp4 *.mov *.webm *.gif);;Все поддерживаемые (*.png *.jpg *.jpeg *.webp *.gif *.mp4 *.mov *.webm)",
+        )
+        if selected:
+            self._import_brand_asset(Path(selected))
+
+    def _replace_brand_asset(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Заменить бренд-материал",
+            str(Path.home()),
+            "Бренд-материалы (*.png *.jpg *.jpeg *.webp *.gif *.mp4 *.mov *.webm)",
+        )
+        if selected:
+            self._import_brand_asset(Path(selected))
+
+    def _import_brand_asset(self, selected: Path) -> None:
+        profile_id = str(self.channel_profile.currentData() or "").strip() or selected.stem.replace("_subscribe", "")
+        profile = self.assets.import_brand_asset(profile_id, selected, {
             "display_name": profile_id,
             "source_author": profile_id,
             "aliases": [profile_id],
@@ -1480,6 +1617,56 @@ class SubtitleEditor(QWidget):
         self._refresh_profiles()
         self.channel_profile.setCurrentIndex(max(0, self.channel_profile.findData(profile.id)))
         self.show_channel_card.setChecked(True)
+        self._update_banner_label()
+        self._mark_dirty()
+
+    def _select_library_profile(self) -> None:
+        profiles = self.assets.profiles()
+        if not profiles:
+            QMessageBox.information(self, "Библиотека", "В библиотеке пока нет бренд-материалов.")
+            return
+        labels = [f"{profile.display_name} ({profile.id})" for profile in profiles]
+        selected, accepted = QInputDialog.getItem(self, "Библиотека бренд-материалов", "Профиль:", labels, 0, False)
+        if accepted and selected:
+            profile = profiles[labels.index(selected)]
+            self.channel_profile.setCurrentIndex(max(0, self.channel_profile.findData(profile.id)))
+            self.show_channel_card.setChecked(True)
+
+    def _verify_brand_asset(self) -> None:
+        asset = self.assets.asset(str(self.channel_profile.currentData() or ""))
+        if not asset:
+            QMessageBox.warning(self, "Проверка материала", "Материал не выбран или отсутствует.")
+            return
+        valid, message = self.assets.library.verify(asset.asset_id)
+        title = "Материал исправен" if valid else "Материал требует внимания"
+        QMessageBox.information(self, "Проверка материала", f"{title}\n\n{message}")
+        self._update_banner_label()
+
+    def _refresh_brand_library(self, developer_only: bool) -> None:
+        result = self.assets.refresh_library(developer_only=developer_only)
+        self._refresh_profiles()
+        imported = len(result.get("imported_assets") or [])
+        deduplicated = len(result.get("deduplicated_assets") or [])
+        errors = len(result.get("errors") or [])
+        QMessageBox.information(
+            self,
+            "Библиотека обновлена",
+            f"Импортировано: {imported}\nУже было в библиотеке: {deduplicated}\nОшибок: {errors}\n\nОтчёт: {self.assets.library.migration_report_path}",
+        )
+
+    def _delete_brand_profile(self) -> None:
+        profile_id = str(self.channel_profile.currentData() or "")
+        if not profile_id:
+            return
+        if QMessageBox.question(
+            self,
+            "Удалить профиль",
+            "Удалить профиль из библиотеки? Исходный файл и общий материал не будут удалены.",
+        ) != QMessageBox.Yes:
+            return
+        self.assets.delete_profile(profile_id)
+        self._refresh_profiles()
+        self.show_channel_card.setChecked(False)
         self._update_banner_label()
         self._mark_dirty()
 
@@ -1618,6 +1805,7 @@ class SubtitleEditor(QWidget):
     def current_branding_settings(self) -> dict:
         profile_id = str(self.channel_profile.currentData() or "")
         banner = self.assets.banner_path(profile_id)
+        asset = self.assets.asset(profile_id)
         existing = dict(self.candidate.branding_settings or {}) if self.candidate else {}
         title_suggestions = dict(existing.get("title_suggestions") or {})
         final_title = self.title_text.text().strip()
@@ -1656,12 +1844,28 @@ class SubtitleEditor(QWidget):
             "show_channel_card": self.show_channel_card.isChecked(),
             "channel_profile_id": profile_id,
             "channel_banner_path": str(banner or ""),
+            "brand_asset_id": asset.asset_id if asset else "",
+            "brand_asset_hash": asset.content_hash if asset else "",
+            "brand_asset_type": asset.asset_type if asset else "IMAGE",
+            "brand_asset_has_alpha": bool(asset.has_alpha) if asset else False,
+            "brand_asset_has_audio": bool(asset.has_audio) if asset else False,
+            "brand_asset_width": int(asset.width) if asset else 0,
+            "brand_asset_height": int(asset.height) if asset else 0,
+            "brand_asset_duration": float(asset.duration) if asset else 0.0,
+            "brand_asset_codec": str(asset.codec) if asset else "",
             "banner_scale": self.banner_scale.value(),
             "banner_anchor": "bottom_center",
             "banner_fit_mode": "contain",
             "banner_offset_x": self.banner_x.value(),
             "banner_offset_y": self.banner_y.value(),
             "banner_opacity": self.banner_opacity.value(),
+            "banner_start_offset": self.banner_start_offset.value(),
+            "banner_display_duration": self.banner_display_duration.value(),
+            "banner_loop": self.banner_loop.isChecked(),
+            "banner_trim_to_short": self.banner_trim_to_short.isChecked(),
+            "banner_freeze_last_frame": self.banner_freeze_last.isChecked(),
+            "banner_audio_enabled": self.banner_audio_enabled.isChecked(),
+            "banner_audio_volume": self.banner_audio_volume.value(),
             "safe_margin": 80,
         }
 

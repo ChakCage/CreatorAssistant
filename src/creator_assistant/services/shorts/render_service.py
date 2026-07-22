@@ -62,7 +62,16 @@ class ShortsRenderService:
             self.ffmpeg_path, "-hide_banner", "-y", "-ss", f"{candidate.start:.3f}", "-i", source.path,
         ]
         if has_banner:
-            command.extend(["-loop", "1", "-i", str(banner)])
+            asset_type = str(branding.get("brand_asset_type") or "IMAGE")
+            if asset_type == "IMAGE":
+                command.extend(["-loop", "1"])
+            else:
+                start_offset = max(0.0, float(branding.get("banner_start_offset", 0) or 0))
+                if start_offset:
+                    command.extend(["-ss", f"{start_offset:.3f}"])
+                if bool(branding.get("banner_loop", True)):
+                    command.extend(["-stream_loop", "-1"])
+            command.extend(["-i", str(banner)])
         command.extend([
             "-t", f"{candidate.duration:.3f}", "-filter_complex_threads", "0", "-filter_complex", graph,
             "-map", "[v]", "-map", "[a]", *video, "-pix_fmt", "yuv420p",

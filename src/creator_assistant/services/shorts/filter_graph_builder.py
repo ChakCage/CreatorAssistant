@@ -45,13 +45,30 @@ class ShortsFilterGraphBuilder:
         if subtitle_file:
             safe_name = Path(subtitle_file).name.replace("'", r"\'").replace(":", r"\:")
             subtitle = f"subtitles=filename='{safe_name}'{fonts_dir_option()}:charenc=UTF-8"
+        branding = candidate.branding_settings or {}
+        brand_audio = (
+            has_channel_banner
+            and bool(branding.get("banner_audio_enabled", False))
+            and bool(branding.get("brand_asset_has_audio", False))
+        )
         if input_clipped:
             video_prefix = "[0:v:0]setpts=PTS-STARTPTS,"
-            audio_chain = "[0:a:0]asetpts=PTS-STARTPTS[a]"
+            main_audio = "[0:a:0]asetpts=PTS-STARTPTS[maina]" if brand_audio else "[0:a:0]asetpts=PTS-STARTPTS[a]"
         else:
             video_prefix = f"[0:v:0]trim=start={candidate.start:.3f}:end={candidate.end:.3f},setpts=PTS-STARTPTS,"
-            audio_chain = f"[0:a:0]atrim=start={candidate.start:.3f}:end={candidate.end:.3f},asetpts=PTS-STARTPTS[a]"
-        branding = candidate.branding_settings or {}
+            main_audio = (
+                f"[0:a:0]atrim=start={candidate.start:.3f}:end={candidate.end:.3f},asetpts=PTS-STARTPTS[maina]"
+                if brand_audio else
+                f"[0:a:0]atrim=start={candidate.start:.3f}:end={candidate.end:.3f},asetpts=PTS-STARTPTS[a]"
+            )
+        if brand_audio:
+            volume = max(0.0, min(4.0, float(branding.get("banner_audio_volume", 100) or 100) / 100))
+            audio_chain = (
+                f"{main_audio};[1:a:0]atrim=duration={candidate.duration:.3f},asetpts=PTS-STARTPTS,"
+                f"volume={volume:.3f}[branda];[maina][branda]amix=inputs=2:duration=first:dropout_transition=0[a]"
+            )
+        else:
+            audio_chain = main_audio
         show_title = bool(branding.get("show_title", False)) and str(branding.get("final_title_text", "")).strip()
         show_banner = bool(branding.get("show_channel_card", False)) and has_channel_banner
         if not show_title and not show_banner:
@@ -73,13 +90,25 @@ class ShortsFilterGraphBuilder:
             if "banner_y" in branding and "banner_offset_y" not in branding:
                 offset_y = int(branding.get("banner_y", 1600) or 1600) - 1600
             max_width = max(120, int(1080 * 0.90) - safe * 2)
+            display_duration = float(branding.get("banner_display_duration", 0) or 0)
+            display_duration = candidate.duration if display_duration <= 0 else min(candidate.duration, display_duration)
+            asset_type = str(branding.get("brand_asset_type") or "IMAGE")
+            freeze = bool(branding.get("banner_freeze_last_frame", False))
+            media_timing = ""
+            if asset_type != "IMAGE":
+                if freeze and not bool(branding.get("banner_loop", True)):
+                    media_timing += f"tpad=stop_mode=clone:stop_duration={candidate.duration:.3f},"
+                media_timing += f"trim=duration={display_duration:.3f},setpts=PTS-STARTPTS,"
             filters.append(
-                f"[1:v]scale=w='min(iw*{scale:.3f},{max_width})':h=-1,"
+                f"[1:v]{media_timing}scale=w='min(iw*{scale:.3f},{max_width})':h=-1:flags=lanczos,"
                 f"format=rgba,colorchannelmixer=aa={opacity:.3f}[banner]"
             )
             x_expr = f"max({safe},min(W-w-{safe},(W-w)/2+{offset_x}))"
             y_expr = f"max({safe},min(H-h-{safe},H-h-{safe}+{offset_y}))"
-            filters.append(f"[{current}][banner]overlay=x='{x_expr}':y='{y_expr}':format=auto[overlayed]")
+            filters.append(
+                f"[{current}][banner]overlay=x='{x_expr}':y='{y_expr}':format=auto:"
+                f"eof_action={'repeat' if freeze else 'pass'}:shortest=0[overlayed]"
+            )
             current = "overlayed"
         if show_title:
             raw_title = str(branding.get("final_title_text", "")).strip()
