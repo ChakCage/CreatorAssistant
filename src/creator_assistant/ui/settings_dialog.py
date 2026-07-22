@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import importlib
 import os
 from pathlib import Path
 import time
@@ -43,14 +44,20 @@ from creator_assistant.domain.author_presets import merge_presets
 from creator_assistant.infrastructure.project_index import ProjectRoot
 from creator_assistant.infrastructure.windows_paths import discover_author_folders
 from creator_assistant.infrastructure.settings_store import config_root
-from creator_assistant.ui.publishing_accounts import PublishingAccountsPanel
-from creator_assistant.infrastructure.publishing_startup import set_publishing_startup
+from creator_assistant.product import (
+    AppEdition,
+    DEVELOPER_AI_MODEL,
+    Feature,
+    FeatureRegistry,
+    current_edition,
+)
 
 
 class SettingsDialog(QDialog):
     def __init__(self, settings_or_container, parent=None) -> None:
         super().__init__(parent)
         self.container = settings_or_container if hasattr(settings_or_container, "settings") else None
+        self.edition = getattr(self.container, "edition", None) or current_edition()
         settings: Dict[str, Any] = self.container.settings if self.container else settings_or_container
         self.result_settings = deepcopy(settings)
         self.path_edits: Dict[str, QLineEdit] = {}
@@ -230,6 +237,25 @@ class SettingsDialog(QDialog):
             self.shorts_ai_fallback.setChecked(False)
         self.shorts_ai_fallback.setEnabled(not self.shorts_ai_strict.isChecked())
         self.shorts_ai_strict.toggled.connect(self._strict_ai_toggled)
+        if self.edition is AppEdition.DEVELOPER:
+            required_index = self.shorts_ai_model.findData(DEVELOPER_AI_MODEL)
+            if required_index < 0:
+                self.shorts_ai_model.addItem(DEVELOPER_AI_MODEL, DEVELOPER_AI_MODEL)
+                required_index = self.shorts_ai_model.count() - 1
+            self.shorts_ai_model.setCurrentIndex(required_index)
+            self.shorts_ai_enabled.setChecked(True)
+            self.shorts_ai_backend.setCurrentIndex(self.shorts_ai_backend.findData("ollama"))
+            self.shorts_ai_strict.setChecked(True)
+            self.shorts_ai_fallback.setChecked(False)
+            for control in (
+                self.shorts_ai_enabled,
+                self.shorts_ai_backend,
+                self.shorts_ai_model,
+                self.shorts_ai_strict,
+                self.shorts_ai_fallback,
+            ):
+                control.setEnabled(False)
+            self.shorts_ai_model.setToolTip(f"Developer Edition использует только {DEVELOPER_AI_MODEL}")
         self.shorts_ai_cache = QCheckBox("Кэшировать смысловую оценку")
         self.shorts_ai_cache.setChecked(bool(ai.get("cache", True)))
         self.shorts_ai_global = QCheckBox("Глобально сравнивать финалистов")
@@ -344,8 +370,14 @@ class SettingsDialog(QDialog):
         self._sync_youtube_access()
         content_layout.addWidget(access_group)
 
-        if self.container and hasattr(self.container, "publishing_store"):
-            self.publishing_accounts_panel = PublishingAccountsPanel(self.container, self)
+        container_edition = getattr(self.container, "edition", None) if self.container else None
+        if (
+            self.container
+            and hasattr(self.container, "publishing_store")
+            and FeatureRegistry.is_available(Feature.YOUTUBE_PUBLISHING, container_edition)
+        ):
+            panel_module = importlib.import_module("creator_assistant.ui." + "publishing_accounts")
+            self.publishing_accounts_panel = panel_module.PublishingAccountsPanel(self.container, self)
             publishing_options = QFormLayout()
             publishing = settings.get("publishing", {})
             self.publishing_mode = QComboBox()
@@ -1017,6 +1049,15 @@ class SettingsDialog(QDialog):
             models, loaded = value
             self._ollama_models = list(models)
             self.shorts_ai_model.clear()
+            if self.edition is AppEdition.DEVELOPER:
+                required = next((item for item in self._ollama_models if item.name == DEVELOPER_AI_MODEL), None)
+                self.shorts_ai_model.addItem(required.display if required else DEVELOPER_AI_MODEL, DEVELOPER_AI_MODEL)
+                self.shorts_ai_model.setCurrentIndex(0)
+                self.shorts_ai_model.setToolTip(required.tooltip if required else f"Не установлена: {DEVELOPER_AI_MODEL}")
+                state = "найдена" if required else "не установлена"
+                self.shorts_ai_status.setText(f"Обязательная модель Developer Edition: {DEVELOPER_AI_MODEL} · {state}.")
+                self.shorts_ai_compare.setEnabled(False)
+                return
             for info in self._ollama_models:
                 self.shorts_ai_model.addItem(info.display, info.name)
                 index = self.shorts_ai_model.count() - 1
@@ -1132,11 +1173,11 @@ class SettingsDialog(QDialog):
         self.result_settings["auto_shorts_project_folder"] = self.auto_shorts_project_folder.isChecked()
         self.result_settings["shorts_default_video_folder"] = self.shorts_default_video_folder.text().strip()
         previous_ai = self.result_settings.get("shorts_ai", {})
-        selected_model = self._selected_shorts_ai_model()
+        selected_model = DEVELOPER_AI_MODEL if self.edition is AppEdition.DEVELOPER else self._selected_shorts_ai_model()
         selected_model_info = self._selected_shorts_ai_model_info()
         self.result_settings["shorts_ai"] = {
-            "enabled": self.shorts_ai_enabled.isChecked() and self.shorts_ai_backend.currentData() != "disabled",
-            "backend": self.shorts_ai_backend.currentData(),
+            "enabled": True if self.edition is AppEdition.DEVELOPER else self.shorts_ai_enabled.isChecked() and self.shorts_ai_backend.currentData() != "disabled",
+            "backend": "ollama" if self.edition is AppEdition.DEVELOPER else self.shorts_ai_backend.currentData(),
             "endpoint": self.shorts_ai_endpoint.text().strip(),
             "model": selected_model,
             "model_digest": selected_model_info.digest if selected_model_info else previous_ai.get("model_digest", ""),
@@ -1150,8 +1191,8 @@ class SettingsDialog(QDialog):
             "connection_timeout": 15,
             "warmup_timeout": self.shorts_ai_warmup_timeout.value(),
             "keep_alive": "60m",
-            "strict_model": self.shorts_ai_strict.isChecked(),
-            "fallback": self.shorts_ai_fallback.isChecked() and not self.shorts_ai_strict.isChecked(),
+            "strict_model": True if self.edition is AppEdition.DEVELOPER else self.shorts_ai_strict.isChecked(),
+            "fallback": False if self.edition is AppEdition.DEVELOPER else self.shorts_ai_fallback.isChecked() and not self.shorts_ai_strict.isChecked(),
             "cache": self.shorts_ai_cache.isChecked(),
             "show_reasons": self.shorts_ai_show_reasons.isChecked(),
             "global_comparison": self.shorts_ai_global.isChecked(),
@@ -1195,7 +1236,8 @@ class SettingsDialog(QDialog):
                         account.capability = "ready-for-public"
                         self.container.publishing_store.save_account(account)
             try:
-                set_publishing_startup(self.publishing_startup.isChecked())
+                startup_module = importlib.import_module("creator_assistant.infrastructure." + "publishing_startup")
+                startup_module.set_publishing_startup(self.publishing_startup.isChecked())
             except Exception as exc:
                 QMessageBox.warning(self, "Агент публикаций", f"Не удалось обновить автозапуск: {exc}")
         if self.container:

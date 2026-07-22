@@ -11,6 +11,8 @@ class BuildInfo:
     commit: str
     build_date: str
     executable: str
+    edition: str = "developer"
+    version: str = "0.1.0"
 
 
 def current_build_info() -> BuildInfo:
@@ -35,4 +37,6 @@ def current_build_info() -> BuildInfo:
         commit=str(payload.get("commit") or "development"),
         build_date=str(payload.get("build_date") or "неизвестно"),
         executable=str(executable),
+        edition=str(payload.get("edition") or "developer"),
+        version=str(payload.get("version") or "0.1.0"),
     )

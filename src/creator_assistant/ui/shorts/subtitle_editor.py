@@ -833,7 +833,7 @@ class SubtitleEditor(QWidget):
         combo.setCurrentIndex(max(0, combo.findData(preferred or DEFAULT_FONT_FAMILY)))
 
     def _restore_preview_quality(self) -> None:
-        settings = QSettings("CreatorAssistant", "CreatorAssistant")
+        settings = self._edition_qsettings()
         stored = str(settings.value("shorts/vertical_editor/preview_quality", "540x960") or "540x960")
         mapping = {"360x640": 0, "540x960": 1, "720x1280": 2, "1080x1920": 3}
         self.preview_quality.setCurrentIndex(mapping.get(stored, 1))
@@ -842,7 +842,7 @@ class SubtitleEditor(QWidget):
     def _preview_quality_changed(self) -> None:
         self._apply_preview_quality()
         size = self.preview_quality.currentData() or (540, 960)
-        settings = QSettings("CreatorAssistant", "CreatorAssistant")
+        settings = self._edition_qsettings()
         settings.setValue("shorts/vertical_editor/preview_quality", f"{int(size[0])}x{int(size[1])}")
         self._preview_generation_id += 1
         self._sync_preview_time(self._preview_position_ms)
@@ -857,7 +857,7 @@ class SubtitleEditor(QWidget):
             self._apply_preview_zoom()
 
     def _restore_preview_zoom(self) -> None:
-        settings = QSettings("CreatorAssistant", "CreatorAssistant")
+        settings = self._edition_qsettings()
         stored = str(settings.value("shorts/vertical_editor/preview_zoom", "fit") or "fit")
         value = "fit" if stored == "fit" else int(stored) if stored.isdigit() else "fit"
         index = self.preview_zoom.findData(value)
@@ -868,7 +868,7 @@ class SubtitleEditor(QWidget):
 
     def _preview_zoom_changed(self) -> None:
         value = self.preview_zoom.currentData() or "fit"
-        QSettings("CreatorAssistant", "CreatorAssistant").setValue("shorts/vertical_editor/preview_zoom", value)
+        self._edition_qsettings().setValue("shorts/vertical_editor/preview_zoom", value)
         self._apply_preview_zoom()
 
     def _zoom_preview_by(self, delta: int) -> None:
@@ -900,7 +900,7 @@ class SubtitleEditor(QWidget):
         self._update_technical_info()
 
     def _restore_splitters(self) -> None:
-        settings = QSettings("CreatorAssistant", "CreatorAssistant")
+        settings = self._edition_qsettings()
         main = settings.value("shorts/vertical_editor/main_splitter")
         top = settings.value("shorts/vertical_editor/top_splitter")
         if isinstance(main, list) and all(str(item).isdigit() for item in main):
@@ -914,9 +914,15 @@ class SubtitleEditor(QWidget):
             self.top_splitter.setSizes([420, 720])
 
     def _save_splitters(self) -> None:
-        settings = QSettings("CreatorAssistant", "CreatorAssistant")
+        settings = self._edition_qsettings()
         settings.setValue("shorts/vertical_editor/main_splitter", self.main_splitter.sizes())
         settings.setValue("shorts/vertical_editor/top_splitter", self.top_splitter.sizes())
+
+    @staticmethod
+    def _edition_qsettings() -> QSettings:
+        from creator_assistant.product import qsettings_application_name
+
+        return QSettings("CreatorAssistant", qsettings_application_name())
 
     def _open_big_preview(self) -> None:
         dialog = QDialog(self)

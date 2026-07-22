@@ -118,7 +118,7 @@ def test_backend_rejects_non_flac_result(monkeypatch, tmp_path: Path):
 
 def test_runtime_uses_managed_localappdata_and_short_venv(monkeypatch, tmp_path: Path):
     local_root = tmp_path / "CreatorAssistant"
-    monkeypatch.setattr(runtime_module, "local_data_root", lambda: local_root)
+    monkeypatch.setattr(runtime_module, "shared_data_root", lambda: local_root)
     source_model = tmp_path / "UVR-MDX-NET-Inst_HQ_3.onnx"
     source_model.write_bytes(b"model bytes")
     manager = AudioSeparatorRuntimeManager(SimpleNamespace(), source_model)

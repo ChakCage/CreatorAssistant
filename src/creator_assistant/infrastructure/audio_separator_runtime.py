@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from creator_assistant.infrastructure.process_runner import ProcessRunner
-from creator_assistant.infrastructure.settings_store import local_data_root
+from creator_assistant.infrastructure.settings_store import shared_data_root
 from creator_assistant.domain.errors import ProcessExecutionError
 
 
@@ -22,17 +22,17 @@ class AudioSeparatorRuntimeManager:
     def __init__(self, runner: ProcessRunner, source_model: Path, root: Optional[Path] = None) -> None:
         self.runner = runner
         self.source_model = source_model
-        self.root = root or (local_data_root() / "runtimes" / "audio-separator")
+        self.root = root or (shared_data_root() / "runtimes" / "audio-separator")
         # PyTorch wheels contain very deep license paths. Keep the physical venv
         # short to avoid WinError 206, while all runtime metadata stays in the
         # documented CreatorAssistant runtime directory above.
-        self.venv_root = root or (local_data_root().parent / "CA" / "as")
-        self.base_python_dir = local_data_root() / "runtimes" / "audio-separator" / "python"
+        self.venv_root = root or (shared_data_root().parent / "CA" / "as")
+        self.base_python_dir = shared_data_root() / "runtimes" / "audio-separator" / "python"
         self.base_python_executable = self.base_python_dir / "python.exe"
         self.python_executable = self.venv_root / "Scripts" / "python.exe"
         self.scripts_dir = self.venv_root / "Scripts"
         self.cli_executable = self.scripts_dir / "audio-separator.exe"
-        self.model_dir = local_data_root() / "models"
+        self.model_dir = shared_data_root() / "models"
         self.model_path = self.model_dir / "UVR-MDX-NET-Inst_HQ_3.onnx"
         self.worker_path = self.root / "worker" / "audio_separator_worker.py"
         self.marker_path = self.root / "runtime.json"
@@ -67,7 +67,7 @@ class AudioSeparatorRuntimeManager:
         emit = on_progress or (lambda _message: None)
         self.root.mkdir(parents=True, exist_ok=True)
         self.venv_root.mkdir(parents=True, exist_ok=True)
-        downloads = local_data_root() / "downloads"
+        downloads = shared_data_root() / "downloads"
         downloads.mkdir(parents=True, exist_ok=True)
         installer = downloads / f"python-{PYTHON_VERSION}-amd64.exe"
         if not self.base_python_executable.is_file():

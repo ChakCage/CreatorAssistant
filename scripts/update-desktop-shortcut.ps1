@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$TargetPath,
     [string]$CommitHash = "",
+    [string]$ShortcutName = "Creator Assistant",
     [switch]$Launch,
     [string]$LaunchArguments = ""
 )
@@ -14,7 +15,7 @@ $WorkingDirectory = Split-Path -Parent $TargetPath
 $Desktop = [Environment]::GetFolderPath('Desktop')
 if (-not $Desktop) { throw 'Windows Desktop folder was not found.' }
 $Desktop = [System.IO.Path]::GetFullPath($Desktop)
-$ShortcutPath = Join-Path $Desktop 'Creator Assistant.lnk'
+$ShortcutPath = Join-Path $Desktop ($ShortcutName + '.lnk')
 
 $CandidateFolders = @($Desktop)
 if ($env:USERPROFILE) { $CandidateFolders += (Join-Path $env:USERPROFILE 'Desktop') }
@@ -31,7 +32,7 @@ $Shortcut.Save()
 
 foreach ($Folder in $CandidateFolders) {
     if (-not (Test-Path -LiteralPath $Folder -PathType Container)) { continue }
-    $Duplicate = Join-Path $Folder 'Creator Assistant.lnk'
+    $Duplicate = Join-Path $Folder ($ShortcutName + '.lnk')
     if ([System.IO.Path]::GetFullPath($Duplicate) -ne [System.IO.Path]::GetFullPath($ShortcutPath) -and (Test-Path -LiteralPath $Duplicate)) {
         Remove-Item -LiteralPath $Duplicate
     }

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, TextIO
 
 from creator_assistant import __version__
+from creator_assistant.infrastructure.settings_store import local_data_root
 
 
 _lock = threading.RLock()
@@ -30,8 +31,7 @@ _context: Dict[str, Any] = {
 
 
 def crash_log_path() -> Path:
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / "CreatorAssistant" / "logs" / "crash.log"
+    return local_data_root() / "logs" / "crash.log"
 
 
 def _write(kind: str, message: str, *, exception: str = "") -> None:

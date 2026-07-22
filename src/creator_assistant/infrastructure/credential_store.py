@@ -14,11 +14,17 @@ class CredentialStoreError(RuntimeError):
 class WindowsCredentialStore:
     """Small generic-credential wrapper; secrets never touch project/settings JSON."""
 
-    prefix = "CreatorAssistant/Publishing"
+    legacy_prefix = "CreatorAssistant/Publishing"
     _test_memory: dict[str, str] = {}
 
-    def __init__(self, allow_test_memory: bool = False) -> None:
+    def __init__(self, allow_test_memory: bool = False, namespace: str | None = None) -> None:
         self.allow_test_memory = allow_test_memory
+        if namespace:
+            self.prefix = namespace.rstrip("/")
+        else:
+            from creator_assistant.product import current_edition
+
+            self.prefix = f"CreatorAssistant/{current_edition().value.title()}/Publishing"
 
     def target(self, account_id: str, kind: str = "oauth") -> str:
         safe = "".join(ch for ch in str(account_id) if ch.isalnum() or ch in "-_.")
@@ -32,6 +38,12 @@ class WindowsCredentialStore:
 
     def read_json(self, account_id: str, kind: str = "oauth") -> dict[str, Any]:
         payload = self._read(self.target(account_id, kind))
+        if not payload and self.prefix.endswith("/Developer/Publishing"):
+            safe = "".join(ch for ch in str(account_id) if ch.isalnum() or ch in "-_.")
+            legacy_target = f"{self.legacy_prefix}/{safe}/{kind}"
+            payload = self._read(legacy_target)
+            if payload:
+                self._write(self.target(account_id, kind), payload)
         if not payload:
             return {}
         try:

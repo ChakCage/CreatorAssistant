@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import importlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,33 +50,40 @@ from creator_assistant.services.shorts.transcription.faster_whisper import Faste
 from creator_assistant.services.shorts.transcription.managed_whisper import ManagedWhisperBackend
 from creator_assistant.services.shorts.transcription.runtime_manager import WhisperRuntimeManager
 from creator_assistant.services.shorts.transcription_service import TranscriptionService
-from creator_assistant.infrastructure.automation_job_store import AutomationJobStore
-from creator_assistant.services.automation.engine import AutomationEngine
-from creator_assistant.services.automation.shorts_pipeline import ExistingShortsAutomationPipeline
 from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
 from creator_assistant.services.shorts.global_template_library import GlobalShortsTemplateLibrary
-from creator_assistant.infrastructure.credential_store import WindowsCredentialStore
-from creator_assistant.infrastructure.publishing_store import PublishingStore
-from creator_assistant.services.publishing.accounts import PublishingAccountService
-from creator_assistant.services.publishing.manager import BackgroundPublishingAgent, PublishingManager
-from creator_assistant.services.publishing.oauth import OAuthService
+from creator_assistant.product import AppEdition, DEVELOPER_AI_MODEL, Feature, FeatureRegistry, current_edition
 
 
 class ServiceContainer:
     def __init__(self, settings_store: SettingsStore = None) -> None:
+        self.edition = current_edition()
+        self.features = FeatureRegistry
         self.settings_store = settings_store or SettingsStore()
         self.first_run = not self.settings_store.path.exists()
         initial_settings: Dict[str, Any] = self.settings_store.load()
+        if self.edition is AppEdition.DEVELOPER:
+            ai = initial_settings.setdefault("shorts_ai", {})
+            ai.update({"enabled": True, "backend": "ollama", "model": DEVELOPER_AI_MODEL, "strict_model": True, "fallback": False})
         if not initial_settings.get("temp_root"):
             initial_settings["temp_root"] = str(default_temp_root(Path(initial_settings.get("youtube_root", r"E:\YouTube"))))
         self.logger = configure_logging()
         self.settings_service = SettingsService(self.settings_store, initial_settings, self.logger)
-        self.publishing_store = PublishingStore()
-        self.publishing_credentials = WindowsCredentialStore()
-        self.publishing_oauth = OAuthService(self.publishing_credentials)
-        self.publishing_accounts = PublishingAccountService(self.publishing_store, self.publishing_credentials, self.publishing_oauth)
-        self.publishing_manager = PublishingManager(self.publishing_store, self.publishing_credentials)
-        self.publishing_agent = BackgroundPublishingAgent(self.publishing_manager)
+        if FeatureRegistry.is_available(Feature.YOUTUBE_PUBLISHING, self.edition):
+            store_module = importlib.import_module("creator_assistant.infrastructure." + "publishing_store")
+            credentials_module = importlib.import_module("creator_assistant.infrastructure." + "credential_store")
+            accounts_module = importlib.import_module("creator_assistant.services." + "publishing.accounts")
+            manager_module = importlib.import_module("creator_assistant.services." + "publishing.manager")
+            oauth_module = importlib.import_module("creator_assistant.services." + "publishing.oauth")
+            self.publishing_store = store_module.PublishingStore()
+            self.publishing_credentials = credentials_module.WindowsCredentialStore()
+            self.publishing_oauth = oauth_module.OAuthService(self.publishing_credentials)
+            self.publishing_accounts = accounts_module.PublishingAccountService(self.publishing_store, self.publishing_credentials, self.publishing_oauth)
+            self.publishing_manager = manager_module.PublishingManager(self.publishing_store, self.publishing_credentials)
+            self.publishing_agent = manager_module.BackgroundPublishingAgent(self.publishing_manager)
+        if FeatureRegistry.is_available(Feature.LICENSING, self.edition):
+            licensing_module = importlib.import_module("creator_assistant.services." + "licensing")
+            self.licensing = licensing_module.LicenseService()
         self.global_shorts_templates = GlobalShortsTemplateLibrary()
         self.youtube_auth = YtDlpAuthContext.from_settings(self.settings)
         self.runner = ProcessRunner(self.logger)
@@ -87,7 +95,7 @@ class ServiceContainer:
         self.settings_store.save(self.settings)
         self.settings_service.mark_current_as_persisted()
         self.rebuild()
-        if os.environ.get("CREATOR_ASSISTANT_AGENT_MODE") != "1":
+        if hasattr(self, "publishing_agent") and os.environ.get("CREATOR_ASSISTANT_AGENT_MODE") != "1":
             self.publishing_agent.start()
 
     @property
@@ -207,9 +215,13 @@ class ServiceContainer:
             int(float(self.settings.get("disk_reserve_gb", 5)) * 1024**3),
         )
         self.channel_assets = ChannelAssetStore()
-        self.automation_engine = AutomationEngine(
-            ExistingShortsAutomationPipeline(self), AutomationJobStore()
-        )
+        if FeatureRegistry.is_available(Feature.AUTOPILOT, self.edition):
+            store_module = importlib.import_module("creator_assistant.infrastructure." + "automation_job_store")
+            engine_module = importlib.import_module("creator_assistant.services." + "automation.engine")
+            pipeline_module = importlib.import_module("creator_assistant.services." + "automation.shorts_pipeline")
+            self.automation_engine = engine_module.AutomationEngine(
+                pipeline_module.ExistingShortsAutomationPipeline(self), store_module.AutomationJobStore()
+            )
 
     def save_settings(self, settings: Dict[str, Any], started_at: float | None = None) -> None:
         candidate = deepcopy(settings)

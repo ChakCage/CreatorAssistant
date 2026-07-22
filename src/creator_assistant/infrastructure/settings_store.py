@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -167,18 +168,79 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
 }
 
 
-def config_root() -> Path:
+def _config_base() -> Path:
     base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
     return Path(base) / "CreatorAssistant"
 
 
-def local_data_root() -> Path:
+def _local_base() -> Path:
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
     return Path(base) / "CreatorAssistant"
 
 
+def config_root(edition=None) -> Path:
+    from creator_assistant.product import current_edition
+
+    selected = edition or current_edition()
+    return _config_base() / ("Developer" if selected.value == "developer" else "Commercial")
+
+
+def local_data_root(edition=None) -> Path:
+    from creator_assistant.product import current_edition
+
+    selected = edition or current_edition()
+    return _local_base() / ("Developer" if selected.value == "developer" else "Commercial")
+
+
+def shared_data_root() -> Path:
+    """Edition-neutral model/runtime storage; keeps existing downloads in place."""
+    return _local_base()
+
+
+def migrate_legacy_developer_data() -> list[str]:
+    from creator_assistant.product import AppEdition, current_edition
+
+    if current_edition() is not AppEdition.DEVELOPER:
+        return []
+    destination = config_root(AppEdition.DEVELOPER)
+    marker = destination / ".legacy-migration-v1.json"
+    if marker.exists():
+        try:
+            return list(json.loads(marker.read_text(encoding="utf-8")).get("copied", []))
+        except (OSError, ValueError, TypeError):
+            return []
+    copied: list[str] = []
+    legacy_config = _config_base()
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in ("settings.json", "publishing", "user_assets", "shorts"):
+        source, target = legacy_config / name, destination / name
+        if not source.exists() or target.exists():
+            continue
+        if source.is_dir():
+            shutil.copytree(source, target)
+        else:
+            shutil.copy2(source, target)
+        copied.append(str(source))
+    legacy_local = _local_base()
+    local_destination = local_data_root(AppEdition.DEVELOPER)
+    local_destination.mkdir(parents=True, exist_ok=True)
+    for name in ("jobs", "automation", "logs", "project_index.json"):
+        source, target = legacy_local / name, local_destination / name
+        if not source.exists() or target.exists():
+            continue
+        if source.is_dir():
+            shutil.copytree(source, target)
+        else:
+            shutil.copy2(source, target)
+        copied.append(str(source))
+    marker.write_text(json.dumps({"copied": copied}, ensure_ascii=False, indent=2), encoding="utf-8")
+    return copied
+
+
 class SettingsStore:
     def __init__(self, path: Optional[Path] = None) -> None:
+        if path is None:
+            migrate_legacy_developer_data()
         self.path = path or (config_root() / "settings.json")
 
     def load(self) -> Dict[str, Any]:

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from creator_assistant.infrastructure.process_runner import ProcessRunner
-from creator_assistant.infrastructure.settings_store import local_data_root
+from creator_assistant.infrastructure.settings_store import shared_data_root
 
 
 class WhisperRuntimeManager:
@@ -12,8 +12,8 @@ class WhisperRuntimeManager:
 
     def __init__(self, runner: ProcessRunner) -> None:
         self.runner = runner
-        self.root = local_data_root() / "runtimes" / "whisper"
-        self.models = local_data_root() / "models" / "whisper"
+        self.root = shared_data_root() / "runtimes" / "whisper"
+        self.models = shared_data_root() / "models" / "whisper"
 
     @property
     def python(self) -> Path:

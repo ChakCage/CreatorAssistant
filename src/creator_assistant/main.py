@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import importlib
 import sys
 import json
 import time
@@ -17,6 +18,13 @@ from PySide6.QtWidgets import QApplication, QGroupBox, QMessageBox, QPushButton
 
 from creator_assistant.app import ServiceContainer
 from creator_assistant.ui.main_window import MainWindow
+from creator_assistant.product import (
+    AppEdition,
+    Feature,
+    FeatureRegistry,
+    current_edition,
+    qsettings_application_name,
+)
 from creator_assistant.ui.settings_dialog import SettingsDialog
 from creator_assistant.domain.stages import JobStage, ORDERED_STAGES
 from creator_assistant.infrastructure.crash_logging import exception as log_exception, install_qt_message_handler
@@ -253,10 +261,55 @@ def _publishing_ui_verification(window: MainWindow, container: ServiceContainer,
     QTimer.singleShot(5000, lambda: os._exit(0))
 
 
+def _edition_verification(window: MainWindow, container: ServiceContainer, report_path: Path) -> None:
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    QApplication.processEvents()
+    image_path = report_path.with_suffix(".png")
+    window.grab().save(str(image_path), "PNG")
+    tabs = [window.tabs.tabText(index) for index in range(window.tabs.count())]
+    edition = container.edition
+    forbidden_prefixes = (
+        "creator_assistant.ui.autopilot_tab",
+        "creator_assistant.ui.publishing_queue",
+        "creator_assistant.ui.publishing_accounts",
+        "creator_assistant.services.automation",
+        "creator_assistant.services.publishing",
+        "creator_assistant.infrastructure.publishing_store",
+        "creator_assistant.infrastructure.automation_job_store",
+    )
+    forbidden_loaded = sorted(
+        name for name in sys.modules if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden_prefixes)
+    ) if edition is AppEdition.COMMERCIAL else []
+    expected = (
+        ["Подготовка проекта", "Shorts", "Автопилот", "Очередь публикаций"]
+        if edition is AppEdition.DEVELOPER else ["Подготовка проекта", "Shorts"]
+    )
+    report = {
+        "success": tabs == expected and not forbidden_loaded,
+        "edition": edition.value,
+        "title": window.windowTitle(),
+        "tabs": tabs,
+        "features": sorted(item.value for item in FeatureRegistry.available_features(edition)),
+        "forbidden_modules_loaded": forbidden_loaded,
+        "settings_path": str(container.settings_store.path),
+        "has_automation_engine": hasattr(container, "automation_engine"),
+        "has_publishing_store": hasattr(container, "publishing_store"),
+        "has_licensing": hasattr(container, "licensing"),
+        "build": current_build_info().__dict__,
+        "screenshot": str(image_path),
+    }
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Some multimedia backends keep native worker threads alive after Qt quits.
+    # The edition smoke report is complete, so do not leave a verification EXE running.
+    QTimer.singleShot(1500, lambda: os._exit(0))
+
+
 def main() -> int:
     multiprocessing.freeze_support()
     install_qt_message_handler()
     if "--publishing-agent" in sys.argv[1:]:
+        if not FeatureRegistry.is_available(Feature.YOUTUBE_PUBLISHING):
+            return 2
         _prepare_headless_console()
         try:
             os.environ["CREATOR_ASSISTANT_AGENT_MODE"] = "1"
@@ -272,17 +325,21 @@ def main() -> int:
     if any(value in automation_args for value in sys.argv[1:]):
         _prepare_headless_console()
         try:
-            from creator_assistant.services.automation.cli import run_automation_cli
+            if not FeatureRegistry.is_available(Feature.AUTOPILOT):
+                return 2
+            cli_module = importlib.import_module("creator_assistant.services." + "automation.cli")
             output = (lambda value: print(value)) if sys.stdout is not None else (lambda _value: None)
             container = ServiceContainer()
-            return run_automation_cli(sys.argv[1:], container.automation_engine, output)
+            return cli_module.run_automation_cli(sys.argv[1:], container.automation_engine, output)
         except Exception as exc:
             log_exception("Automation CLI failed", exc)
             if sys.stderr is not None:
                 print(f"Automation CLI error: {exc}", file=sys.stderr)
             return 1
     app = QApplication(sys.argv)
-    app.setApplicationName("Creator Assistant")
+    edition = current_edition()
+    app.setApplicationName(qsettings_application_name(edition))
+    app.setApplicationDisplayName(edition.application_name)
     app.setOrganizationName("CreatorAssistant")
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
@@ -328,6 +385,19 @@ def main() -> int:
                 700,
                 lambda: (
                     _publishing_ui_verification(window, container, Path(publishing_verification_arg)),
+                    app.quit(),
+                ),
+            )
+        edition_verification_arg = next(
+            (value.split("=", 1)[1] for value in sys.argv if value.startswith("--verify-edition=")),
+            "",
+        )
+        if edition_verification_arg:
+            container.first_run = False
+            QTimer.singleShot(
+                700,
+                lambda: (
+                    _edition_verification(window, container, Path(edition_verification_arg)),
                     app.quit(),
                 ),
             )
