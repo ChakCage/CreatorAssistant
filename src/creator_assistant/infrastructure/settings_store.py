@@ -154,6 +154,15 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "global_comparison": True,
         "weights": {"semantic": 0.55, "heuristic": 0.25, "activity": 0.15, "uniqueness": 0.05},
     },
+    "commercial_setup": {
+        "completed": False,
+        "schema_version": 1,
+        "model_profile": "maximum_quality",
+        "projects_folder": "",
+        "renders_folder": "",
+        "temp_folder": "",
+        "last_preflight": {},
+    },
     "last_update_check": "",
     "latest_yt_dlp_version": "",
     "dependency_sources": {},
@@ -332,8 +341,6 @@ class SettingsStore:
         ai.setdefault("warmup_timeout", 900)
         ai.setdefault("keep_alive", "60m")
         ai.setdefault("strict_model", True)
-        if ai.get("model") == "qwen3:14b":
-            ai["model"] = "qwen3.6:35b-a3b"
         if int(ai.get("timeout", 0) or 0) < 600:
             ai["timeout"] = 1800
         if ai.get("strict_model", True):

@@ -5,6 +5,7 @@ import sys
 from enum import Enum
 
 DEVELOPER_AI_MODEL = "qwen3.6:35b-a3b"
+COMMERCIAL_AI_MODELS = ("qwen3:14b", "qwen3.6:35b-a3b")
 
 
 class AppEdition(str, Enum):
@@ -31,6 +32,7 @@ class Feature(str, Enum):
     LICENSING = "licensing"
     HELP = "help"
     UPDATES = "updates"
+    SETUP_WIZARD = "setup_wizard"
 
 
 def current_edition() -> AppEdition:
@@ -63,7 +65,7 @@ class FeatureRegistry:
             Feature.PUBLISHING_QUEUE,
             Feature.YOUTUBE_PUBLISHING,
         },
-        AppEdition.COMMERCIAL: _common | {Feature.LICENSING},
+        AppEdition.COMMERCIAL: _common | {Feature.LICENSING, Feature.DIAGNOSTICS, Feature.SETUP_WIZARD},
     }
 
     @classmethod

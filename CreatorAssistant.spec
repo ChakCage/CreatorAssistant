@@ -39,7 +39,11 @@ if IS_DEVELOPER:
         ]
     )
 else:
-    HIDDEN_IMPORTS += ['creator_assistant.services.licensing']
+    HIDDEN_IMPORTS += [
+        'creator_assistant.services.licensing',
+        'creator_assistant.services.commercial_setup',
+        'creator_assistant.ui.commercial_setup_wizard',
+    ]
     EXCLUDES = [
         'creator_assistant.ui.autopilot_tab',
         'creator_assistant.ui.publishing_queue',

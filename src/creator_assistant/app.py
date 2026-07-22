@@ -91,6 +91,20 @@ class ServiceContainer:
         self.updater = YtDlpUpdater(self.runner)
         self.dependency_resolutions = self.detector.discover(self.settings)
         self.detector.apply_to_settings(self.settings, self.dependency_resolutions)
+        if self.edition is AppEdition.COMMERCIAL:
+            setup_module = importlib.import_module("creator_assistant.services." + "commercial_setup")
+            self.commercial_setup = setup_module.CommercialSetupService(self.settings, self.dependency_resolutions)
+            selected = self.commercial_setup.selected_profile()
+            ai = self.settings.setdefault("shorts_ai", {})
+            if str(ai.get("model", "")) not in {"qwen3:14b", "qwen3.6:35b-a3b"}:
+                self.commercial_setup.apply_profile(selected.id)
+            else:
+                # Commercial model selection is strict and never silently falls back.
+                ai.update({"enabled": True, "backend": "ollama", "strict_model": True, "fallback": False})
+                profile = self.commercial_setup.profile_for_model(str(ai["model"]))
+                ai["model_profile"] = profile.id
+                self.settings.setdefault("commercial_setup", {})["model_profile"] = profile.id
+            self.first_run = not bool(self.settings.get("commercial_setup", {}).get("completed", False))
         # Persist safe schema migrations (notably stale, non-permanent YouTube auth state).
         self.settings_store.save(self.settings)
         self.settings_service.mark_current_as_persisted()
@@ -105,6 +119,8 @@ class ServiceContainer:
     def rebuild(self) -> None:
         self.youtube_auth = YtDlpAuthContext.from_settings(self.settings)
         self.dependency_resolutions = self.detector.discover(self.settings)
+        if self.edition is AppEdition.COMMERCIAL and hasattr(self, "commercial_setup"):
+            self.commercial_setup.resolutions = self.dependency_resolutions
         self.paths = {key: item.path for key, item in self.dependency_resolutions.items()}
         naming_data = self.settings.get("naming", {})
         naming = NamingTemplates(

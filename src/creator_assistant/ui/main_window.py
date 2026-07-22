@@ -32,11 +32,20 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         settings = QAction("Настройки", self)
         settings.triggered.connect(safe_call("open_settings_main", self.open_settings))
+        settings_menu = self.menuBar().addMenu("Настройки")
+        settings_menu.addAction(settings)
         if FeatureRegistry.is_available(Feature.DIAGNOSTICS, edition):
             diagnostics = QAction("Диагностика", self)
             diagnostics.triggered.connect(safe_call("open_diagnostics", self.open_diagnostics))
             toolbar.addAction(diagnostics)
         toolbar.addAction(settings)
+        if FeatureRegistry.is_available(Feature.SETUP_WIZARD, edition):
+            local_ai = QAction("Локальный AI", self)
+            setup_wizard = QAction("Мастер настройки", self)
+            local_ai.triggered.connect(safe_call("open_local_ai", self.open_local_ai))
+            setup_wizard.triggered.connect(safe_call("open_setup_wizard", self.open_setup_wizard))
+            settings_menu.addAction(local_ai); settings_menu.addAction(setup_wizard)
+            toolbar.addAction(local_ai)
         if FeatureRegistry.is_available(Feature.LICENSING, edition):
             license_action = QAction("Лицензия", self)
             license_action.triggered.connect(safe_call("open_license", self.open_license))
@@ -73,7 +82,20 @@ class MainWindow(QMainWindow):
         self.statusBar().setToolTip(f"EXE: {build.executable}\nCommit: {build.commit}\nСборка: {build.build_date}")
         self._restore_or_size_window()
         if self.container.first_run:
-            QTimer.singleShot(500, self.open_diagnostics)
+            callback = self.open_setup_wizard if FeatureRegistry.is_available(Feature.SETUP_WIZARD, edition) else self.open_diagnostics
+            QTimer.singleShot(500, callback)
+
+    def open_setup_wizard(self) -> None:
+        if not FeatureRegistry.is_available(Feature.SETUP_WIZARD, self.container.edition):
+            return
+        module = importlib.import_module("creator_assistant.ui." + "commercial_setup_wizard")
+        module.CommercialSetupWizard(self.container, self).exec()
+
+    def open_local_ai(self) -> None:
+        if not FeatureRegistry.is_available(Feature.SETUP_WIZARD, self.container.edition):
+            return
+        module = importlib.import_module("creator_assistant.ui." + "commercial_setup_wizard")
+        module.LocalAIDialog(self.container, self).exec()
 
     def open_diagnostics(self) -> None:
         module = importlib.import_module("creator_assistant.ui." + "diagnostics_dialog")

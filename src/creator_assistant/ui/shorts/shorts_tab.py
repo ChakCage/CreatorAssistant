@@ -248,11 +248,20 @@ class _AnalysisWorker(QObject):
                 manifest.ai_analysis = {
                     "backend": analysis_result.backend,
                     "model": analysis_result.model,
+                    "model_id": analysis_result.model,
+                    "model_profile": str(ai_settings.get("model_profile") or self.container.settings.get("commercial_setup", {}).get("model_profile", "")),
+                    "model_version": str(getattr(self.container.shorts_semantic_backend, "last_runtime_info", {}).get("version", "")),
                     "model_digest": analysis_result.model_digest,
                     "quantization": analysis_result.quantization,
                     "prompt_version": "shorts-semantic-v1",
                     "mode": analysis_result.analysis_mode,
                     "timestamp": utc_now(),
+                    "analysis_date": utc_now(),
+                    "context": {
+                        "mode": str(ai_settings.get("context_mode", "auto")),
+                        "length": int(ai_settings.get("context_length", 32768) or 32768),
+                    },
+                    "execution": dict(getattr(self.container.shorts_semantic_backend, "last_runtime_info", {}) or {}),
                     "cache_key": analysis_result.cache_key,
                     "cache_hit": analysis_result.cache_hit,
                     "used_ai": analysis_result.used_ai,
@@ -726,6 +735,10 @@ class ShortsTab(QWidget):
         if tails_changed and self.review_service:
             self.review_service.save(candidates)
         result = payload.get("analysis_result")
+        if self.paths:
+            current_manifest = ShortsManifestStore(self.paths.manifest).load()
+            if current_manifest:
+                self.source_panel.show_analysis_provenance(current_manifest.ai_analysis)
         if result and result.used_ai:
             metrics = result.metrics or {}
             context = int(metrics.get("allocated_context") or metrics.get("context_length") or 0)
@@ -1238,6 +1251,8 @@ class ShortsTab(QWidget):
         source_json = self.paths.analysis / "source_info.json"
         source_json.write_text(json.dumps(source.__dict__, ensure_ascii=False, indent=2), encoding="utf-8")
         self.source_panel.show_source(source, self.paths.root)
+        opened_manifest = ShortsManifestStore(self.paths.manifest).load()
+        self.source_panel.show_analysis_provenance(opened_manifest.ai_analysis if opened_manifest else {})
         message = "Manifest и структура проекта сохранены атомарно."
         if applied_global:
             message += f" Будет применён шаблон: {applied_global}."

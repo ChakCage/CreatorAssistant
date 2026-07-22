@@ -46,6 +46,7 @@ from creator_assistant.infrastructure.windows_paths import discover_author_folde
 from creator_assistant.infrastructure.settings_store import config_root
 from creator_assistant.product import (
     AppEdition,
+    COMMERCIAL_AI_MODELS,
     DEVELOPER_AI_MODEL,
     Feature,
     FeatureRegistry,
@@ -203,6 +204,8 @@ class SettingsDialog(QDialog):
         self.shorts_ai_model.setMaxVisibleItems(10)
         self.shorts_ai_model.view().setTextElideMode(Qt.ElideRight)
         saved_model = str(ai.get("model", "qwen3.6:35b-a3b"))
+        if self.edition is AppEdition.COMMERCIAL and saved_model not in COMMERCIAL_AI_MODELS:
+            saved_model = "qwen3.6:35b-a3b"
         self.shorts_ai_model.addItem(saved_model, saved_model)
         self.shorts_ai_model.setToolTip(saved_model)
         self.shorts_ai_mode = QComboBox()
@@ -256,6 +259,11 @@ class SettingsDialog(QDialog):
             ):
                 control.setEnabled(False)
             self.shorts_ai_model.setToolTip(f"Developer Edition использует только {DEVELOPER_AI_MODEL}")
+        else:
+            self.shorts_ai_strict.setChecked(True)
+            self.shorts_ai_strict.setEnabled(False)
+            self.shorts_ai_fallback.setChecked(False)
+            self.shorts_ai_fallback.setEnabled(False)
         self.shorts_ai_cache = QCheckBox("Кэшировать смысловую оценку")
         self.shorts_ai_cache.setChecked(bool(ai.get("cache", True)))
         self.shorts_ai_global = QCheckBox("Глобально сравнивать финалистов")
@@ -1058,6 +1066,18 @@ class SettingsDialog(QDialog):
                 self.shorts_ai_status.setText(f"Обязательная модель Developer Edition: {DEVELOPER_AI_MODEL} · {state}.")
                 self.shorts_ai_compare.setEnabled(False)
                 return
+            elif self.edition is AppEdition.COMMERCIAL:
+                supported = [item for item in self._ollama_models if item.name in COMMERCIAL_AI_MODELS]
+                by_name = {item.name: item for item in supported}
+                for model_id in COMMERCIAL_AI_MODELS:
+                    item = by_name.get(model_id)
+                    self.shorts_ai_model.addItem(item.display if item else model_id, model_id)
+                self.shorts_ai_model.setCurrentIndex(max(0, self.shorts_ai_model.findData(saved)))
+                current = by_name.get(str(self.shorts_ai_model.currentData()))
+                self.shorts_ai_model.setToolTip(current.tooltip if current else f"Не установлена: {self.shorts_ai_model.currentData()}")
+                self.shorts_ai_status.setText(f"Поддерживаемых моделей установлено: {len(supported)}. Скрытый fallback отключён.")
+                self.shorts_ai_compare.setEnabled(len(supported) >= 2)
+                return
             for info in self._ollama_models:
                 self.shorts_ai_model.addItem(info.display, info.name)
                 index = self.shorts_ai_model.count() - 1
@@ -1191,13 +1211,19 @@ class SettingsDialog(QDialog):
             "connection_timeout": 15,
             "warmup_timeout": self.shorts_ai_warmup_timeout.value(),
             "keep_alive": "60m",
-            "strict_model": True if self.edition is AppEdition.DEVELOPER else self.shorts_ai_strict.isChecked(),
-            "fallback": False if self.edition is AppEdition.DEVELOPER else self.shorts_ai_fallback.isChecked() and not self.shorts_ai_strict.isChecked(),
+            "strict_model": True if self.edition in {AppEdition.DEVELOPER, AppEdition.COMMERCIAL} else self.shorts_ai_strict.isChecked(),
+            "fallback": False if self.edition in {AppEdition.DEVELOPER, AppEdition.COMMERCIAL} else self.shorts_ai_fallback.isChecked() and not self.shorts_ai_strict.isChecked(),
             "cache": self.shorts_ai_cache.isChecked(),
             "show_reasons": self.shorts_ai_show_reasons.isChecked(),
             "global_comparison": self.shorts_ai_global.isChecked(),
             "weights": previous_ai.get("weights", {"semantic": 0.55, "heuristic": 0.25, "activity": 0.15, "uniqueness": 0.05}),
         }
+        if self.edition is AppEdition.COMMERCIAL:
+            profile_id = "compact" if selected_model == "qwen3:14b" else "maximum_quality"
+            self.result_settings["shorts_ai"]["model_profile"] = profile_id
+            self.result_settings.setdefault("commercial_setup", {})["model_profile"] = profile_id
+        elif "model_profile" in previous_ai:
+            self.result_settings["shorts_ai"]["model_profile"] = previous_ai["model_profile"]
         if self.container and hasattr(self.container, "global_shorts_templates"):
             for scope, combo in self.global_template_selectors.items():
                 self.container.global_shorts_templates.assign(scope, str(combo.currentData() or ""))

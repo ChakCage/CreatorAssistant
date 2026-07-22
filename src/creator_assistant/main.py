@@ -331,6 +331,48 @@ def _edition_verification(window: MainWindow, container: ServiceContainer, repor
     QTimer.singleShot(1500, lambda: os._exit(0))
 
 
+def _commercial_setup_verification(window: MainWindow, container: ServiceContainer, report_path: Path) -> None:
+    """Inspect the actual packaged first-run wizard without modifying projects or downloading models."""
+    module = importlib.import_module("creator_assistant.ui." + "commercial_setup_wizard")
+    wizard = module.CommercialSetupWizard(container, window)
+    wizard.show(); QApplication.processEvents()
+    image_path = report_path.with_suffix(".png")
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    wizard.grab().save(str(image_path), "PNG")
+    computer = container.commercial_setup.inspect()
+    page_titles = [wizard.page(page_id).title() for page_id in wizard.pageIds()]
+    forbidden = sorted(name for name in sys.modules if name.startswith((
+        "creator_assistant.ui.autopilot_tab", "creator_assistant.ui.publishing_queue",
+        "creator_assistant.services.automation", "creator_assistant.services.publishing",
+    )))
+    report = {
+        "success": (
+            container.edition is AppEdition.COMMERCIAL
+            and not bool(container.settings.get("commercial_setup", {}).get("completed", False))
+            and len(page_titles) == 9
+            and set(wizard.profile_radios) == {"compact", "maximum_quality"}
+            and not forbidden
+        ),
+        "isolated_first_run": not bool(container.settings.get("commercial_setup", {}).get("completed", False)),
+        "pages": page_titles,
+        "profiles": {key: value.model_id for key, value in module.AI_PROFILES.items()},
+        "recommendation": computer.recommendation,
+        "ollama_api": computer.ollama_api,
+        "ollama_version": computer.ollama_version,
+        "installed_supported_models": [
+            str(item.get("name") or item.get("model")) for item in computer.installed_models
+            if str(item.get("name") or item.get("model")) in {"qwen3:14b", "qwen3.6:35b-a3b"}
+        ],
+        "settings_path": str(container.settings_store.path),
+        "forbidden_modules_loaded": forbidden,
+        "screenshot": str(image_path),
+        "build": current_build_info().__dict__,
+    }
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    wizard.close()
+    QTimer.singleShot(250, lambda: os._exit(0))
+
+
 def main() -> int:
     multiprocessing.freeze_support()
     install_qt_message_handler()
@@ -372,6 +414,12 @@ def main() -> int:
     app.setStyleSheet(STYLE)
     try:
         container = ServiceContainer()
+        commercial_setup_verification_arg = next(
+            (value.split("=", 1)[1] for value in sys.argv if value.startswith("--verify-commercial-setup=")),
+            "",
+        )
+        if commercial_setup_verification_arg:
+            container.first_run = False
         if "--smoke-test" in sys.argv:
             container.first_run = False
         window = MainWindow(container)
@@ -427,6 +475,11 @@ def main() -> int:
                     _edition_verification(window, container, Path(edition_verification_arg)),
                     app.quit(),
                 ),
+            )
+        if commercial_setup_verification_arg:
+            QTimer.singleShot(
+                700,
+                lambda: _commercial_setup_verification(window, container, Path(commercial_setup_verification_arg)),
             )
         if "--smoke-test" in sys.argv:
             QTimer.singleShot(250, app.quit)

@@ -47,6 +47,10 @@ class SourcePanel(QGroupBox):
         self.info = QLabel("FFprobe ещё не запускался.")
         self.info.setWordWrap(True)
         layout.addWidget(self.info)
+        self.analysis_info = QLabel("Проект ещё не анализировался локальной AI-моделью.")
+        self.analysis_info.setWordWrap(True)
+        self.analysis_info.setProperty("class", "muted")
+        layout.addWidget(self.analysis_info)
 
     def set_busy(self, busy: bool) -> None:
         self.file_button.setEnabled(not busy)
@@ -64,4 +68,21 @@ class SourcePanel(QGroupBox):
             f"{source.duration / 60:.1f} мин · {source.video_codec} / {source.audio_codec} · "
             f"{source.dynamic_range} · rotation {source.rotation}°\n"
             f"Fingerprint: {source.fingerprint[:16]}…"
+        )
+
+    def show_analysis_provenance(self, ai_analysis: dict) -> None:
+        model = str(ai_analysis.get("model_id") or ai_analysis.get("model") or "")
+        if not model:
+            self.analysis_info.setText("Проект ещё не анализировался локальной AI-моделью.")
+            return
+        profile = str(ai_analysis.get("model_profile") or "—")
+        digest = str(ai_analysis.get("model_digest") or "—")
+        date = str(ai_analysis.get("analysis_date") or ai_analysis.get("timestamp") or "—")
+        context = ai_analysis.get("context") if isinstance(ai_analysis.get("context"), dict) else {}
+        execution = ai_analysis.get("execution") if isinstance(ai_analysis.get("execution"), dict) else {}
+        details = execution.get("details") if isinstance(execution.get("details"), dict) else {}
+        processor = execution.get("processor") or details.get("family") or ""
+        self.analysis_info.setText(
+            f"AI-анализ: {model} · профиль {profile} · context {context.get('length', '—')} · "
+            f"CPU/GPU {processor or 'не сообщено'}\nDigest: {digest} · {date}"
         )
