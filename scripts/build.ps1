@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('all', 'developer', 'commercial')][string]$Edition = 'all',
+    [ValidateSet('all', 'developer', 'commercial', 'commercial-staging')][string]$Edition = 'all',
     [switch]$SkipInstall,
     [switch]$VerifyLaunch,
     [string]$VerifyReportsDirectory = ""
@@ -21,10 +21,15 @@ $Dist = [System.IO.Path]::GetFullPath((Join-Path $Root 'dist'))
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 foreach ($CurrentEdition in $Editions) {
-    $IsDeveloper = $CurrentEdition -eq 'developer'
-    $AppName = if ($IsDeveloper) { 'CreatorAssistant-Developer' } else { 'CreatorAssistant' }
-    $ExeName = if ($IsDeveloper) { 'CreatorAssistant-Developer.exe' } else { 'CreatorAssistant.exe' }
-    $ShortcutName = if ($IsDeveloper) { 'Creator Assistant Developer' } else { 'Creator Assistant' }
+    $IsStaging = $CurrentEdition -eq 'commercial-staging'
+    $PackageEdition = if ($IsStaging) { 'commercial' } else { $CurrentEdition }
+    $IsDeveloper = $PackageEdition -eq 'developer'
+    $AppName = if ($IsDeveloper) { 'CreatorAssistant-Developer' } elseif ($IsStaging) { 'CreatorAssistant-Commercial-Staging' } else { 'CreatorAssistant' }
+    $ExeName = if ($IsDeveloper) { 'CreatorAssistant-Developer.exe' } elseif ($IsStaging) { 'CreatorAssistant-Commercial-Staging.exe' } else { 'CreatorAssistant.exe' }
+    $ShortcutName = if ($IsDeveloper) { 'Creator Assistant Developer' } elseif ($IsStaging) { 'Creator Assistant Commercial Staging' } else { 'Creator Assistant' }
+    if ($IsStaging -and -not $env:CREATOR_ASSISTANT_LICENSE_URL) { throw 'Commercial Staging requires CREATOR_ASSISTANT_LICENSE_URL.' }
+    if ($IsStaging -and -not $env:CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS) { throw 'Commercial Staging requires CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS.' }
+    if (-not $IsStaging -and $env:CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS -match '(?i)staging') { throw 'Production Commercial must not trust a staging signing key.' }
     $Target = [System.IO.Path]::GetFullPath((Join-Path $Dist $AppName))
     $TargetExe = Join-Path $Target $ExeName
     $Staging = [System.IO.Path]::GetFullPath((Join-Path $Dist ('.staging-' + $CurrentEdition)))
@@ -40,16 +45,20 @@ foreach ($CurrentEdition in $Editions) {
     $BuildInfo = [ordered]@{
         commit = $Commit
         build_date = (Get-Date).ToUniversalTime().ToString('o')
-        edition = $CurrentEdition
+        edition = $PackageEdition
         version = '0.1.0'
-        license_backend_profile = if ($env:CREATOR_ASSISTANT_LICENSE_PROFILE) { $env:CREATOR_ASSISTANT_LICENSE_PROFILE } else { 'production' }
+        build_variant = if ($IsStaging) { 'staging' } else { 'production' }
+        license_backend_profile = if ($IsStaging) { 'staging' } elseif ($env:CREATOR_ASSISTANT_LICENSE_PROFILE) { $env:CREATOR_ASSISTANT_LICENSE_PROFILE } else { 'production' }
         license_backend_url = if ($env:CREATOR_ASSISTANT_LICENSE_URL) { $env:CREATOR_ASSISTANT_LICENSE_URL } else { 'https://licensing.creatorassistant.app' }
         license_public_keys = if ($env:CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS) { $env:CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS | ConvertFrom-Json } else { @{} }
+        telegram_bot_url = if ($IsDeveloper) { '' } elseif ($env:CREATOR_ASSISTANT_TELEGRAM_BOT_URL) { $env:CREATOR_ASSISTANT_TELEGRAM_BOT_URL } else { 'https://t.me/CreatorAssistantBot' }
     } | ConvertTo-Json
     [System.IO.File]::WriteAllText((Join-Path $Generated 'build_info.json'), $BuildInfo, $Utf8NoBom)
 
     $PreviousEdition = $env:CREATOR_ASSISTANT_EDITION
-    $env:CREATOR_ASSISTANT_EDITION = $CurrentEdition
+    $PreviousVariant = $env:CREATOR_ASSISTANT_BUILD_VARIANT
+    $env:CREATOR_ASSISTANT_EDITION = $PackageEdition
+    $env:CREATOR_ASSISTANT_BUILD_VARIANT = if ($IsStaging) { 'staging' } else { 'production' }
     Push-Location $Root
     try {
         & $Python -m PyInstaller --noconfirm --clean --distpath $Staging (Join-Path $Root 'CreatorAssistant.spec')
@@ -57,6 +66,7 @@ foreach ($CurrentEdition in $Editions) {
     } finally {
         Pop-Location
         $env:CREATOR_ASSISTANT_EDITION = $PreviousEdition
+        $env:CREATOR_ASSISTANT_BUILD_VARIANT = $PreviousVariant
     }
 
     $StagedApp = Join-Path $Staging $AppName
@@ -66,7 +76,7 @@ foreach ($CurrentEdition in $Editions) {
     Move-Item -LiteralPath $StagedApp -Destination $Target
     if (Test-Path -LiteralPath $Staging) { Remove-Item -LiteralPath $Staging -Recurse -Force }
 
-    & (Join-Path $PSScriptRoot 'verify-package-edition.ps1') -Edition $CurrentEdition `
+    & (Join-Path $PSScriptRoot 'verify-package-edition.ps1') -Edition $PackageEdition `
         -Executable $TargetExe -Python $Python
     if ($LASTEXITCODE -ne 0) { throw "Package boundary verification failed for $CurrentEdition." }
 

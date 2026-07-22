@@ -198,14 +198,24 @@ def config_root(edition=None) -> Path:
     from creator_assistant.product import current_edition
 
     selected = edition or current_edition()
-    return _config_base() / ("Developer" if selected.value == "developer" else "Commercial")
+    if selected.value == "developer":
+        name = "Developer"
+    else:
+        from creator_assistant.infrastructure.build_info import current_build_info
+        name = "CommercialStaging" if current_build_info().license_backend_profile == "staging" else "Commercial"
+    return _config_base() / name
 
 
 def local_data_root(edition=None) -> Path:
     from creator_assistant.product import current_edition
 
     selected = edition or current_edition()
-    return _local_base() / ("Developer" if selected.value == "developer" else "Commercial")
+    if selected.value == "developer":
+        name = "Developer"
+    else:
+        from creator_assistant.infrastructure.build_info import current_build_info
+        name = "CommercialStaging" if current_build_info().license_backend_profile == "staging" else "Commercial"
+    return _local_base() / name
 
 
 def shared_data_root() -> Path:

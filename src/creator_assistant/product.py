@@ -99,4 +99,9 @@ def build_artifact(edition: AppEdition) -> tuple[str, str, str]:
 
 def qsettings_application_name(edition: AppEdition | None = None) -> str:
     resolved = edition or current_edition()
-    return "CreatorAssistantDeveloper" if resolved is AppEdition.DEVELOPER else "CreatorAssistantCommercial"
+    if resolved is AppEdition.DEVELOPER:
+        return "CreatorAssistantDeveloper"
+    from creator_assistant.infrastructure.build_info import current_build_info
+    return ("CreatorAssistantCommercialStaging"
+            if current_build_info().license_backend_profile == "staging"
+            else "CreatorAssistantCommercial")

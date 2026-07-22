@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import json
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from cryptography.hazmat.primitives import serialization
@@ -38,6 +38,37 @@ def secret_hash(value: str, pepper: str) -> str:
 
 def opaque_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def keyed_hash(value: str, secret: str) -> str:
+    return hmac.new(secret.encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def mint_service_token(identity: str, permissions: list[str], product_scope: str, secret: str, ttl_seconds: int = 300) -> str:
+    now = int(datetime.now(timezone.utc).timestamp())
+    payload = {"identity": identity, "permissions": permissions, "product_scope": product_scope,
+               "iat": now, "exp": now + min(max(ttl_seconds, 30), 600), "nonce": secrets.token_urlsafe(12)}
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    signature = hmac.new(secret.encode("utf-8"), raw, hashlib.sha256).digest()
+    return f"bs1.{b64(raw)}.{b64(signature)}"
+
+
+def verify_service_token(token: str, secret: str, permission: str, product_scope: str = "creator_assistant") -> dict[str, Any]:
+    try:
+        prefix, payload_text, signature_text = token.split(".", 2)
+        raw = unb64(payload_text)
+        expected = hmac.new(secret.encode("utf-8"), raw, hashlib.sha256).digest()
+        if prefix != "bs1" or not hmac.compare_digest(expected, unb64(signature_text)):
+            raise ValueError("signature")
+        payload = json.loads(raw)
+        now = int(datetime.now(timezone.utc).timestamp())
+        if payload.get("iat", 0) > now + 30 or payload.get("exp", 0) < now:
+            raise ValueError("expired")
+        if payload.get("product_scope") != product_scope or permission not in payload.get("permissions", []):
+            raise ValueError("permission")
+        return payload
+    except Exception as exc:
+        raise ValueError("INVALID_SERVICE_CREDENTIAL") from exc
 
 
 class EntitlementSigner:

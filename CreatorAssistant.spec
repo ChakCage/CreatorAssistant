@@ -11,7 +11,13 @@ EDITION = os.environ.get('CREATOR_ASSISTANT_EDITION', 'developer').strip().lower
 if EDITION not in {'developer', 'commercial'}:
     raise RuntimeError(f'Unsupported CREATOR_ASSISTANT_EDITION={EDITION!r}')
 IS_DEVELOPER = EDITION == 'developer'
-APP_NAME = 'CreatorAssistant-Developer' if IS_DEVELOPER else 'CreatorAssistant'
+BUILD_VARIANT = os.environ.get('CREATOR_ASSISTANT_BUILD_VARIANT', 'production').strip().lower()
+if BUILD_VARIANT not in {'production', 'staging'}:
+    raise RuntimeError(f'Unsupported CREATOR_ASSISTANT_BUILD_VARIANT={BUILD_VARIANT!r}')
+if IS_DEVELOPER and BUILD_VARIANT == 'staging':
+    raise RuntimeError('Developer staging package is not supported')
+APP_NAME = ('CreatorAssistant-Developer' if IS_DEVELOPER else
+            ('CreatorAssistant-Commercial-Staging' if BUILD_VARIANT == 'staging' else 'CreatorAssistant'))
 SOURCE_ROOT = PROJECT_ROOT / 'src'
 sys.path.insert(0, str(SOURCE_ROOT))
 BUILD_INFO = PROJECT_ROOT / 'build' / 'generated' / 'build_info.json'

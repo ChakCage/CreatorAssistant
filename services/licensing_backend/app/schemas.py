@@ -52,3 +52,49 @@ class AdminCodeRequest(BaseModel):
 
 class DeactivateRequest(BaseModel):
     reason: str = "user_request"
+
+
+class TelegramUserRequest(BaseModel):
+    telegram_user_id: str = Field(min_length=1, max_length=64)
+    username: Optional[str] = Field(default=None, max_length=64)
+    first_name: Optional[str] = Field(default=None, max_length=160)
+    language_code: Optional[str] = Field(default=None, max_length=16)
+
+
+class CheckoutRequest(BaseModel):
+    telegram_user_id: str = Field(min_length=1, max_length=64)
+    plan_id: str
+    price_id: str
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    return_url: Optional[str] = Field(default=None, max_length=600)
+
+
+class BotUserRequest(BaseModel):
+    telegram_user_id: str = Field(min_length=1, max_length=64)
+
+
+class BotDeviceRequest(BotUserRequest):
+    device_id: str
+    confirmed: bool = False
+
+
+class NotificationResultRequest(BaseModel):
+    success: bool
+    error: str = Field(default="", max_length=500)
+
+
+class AdminPriceRequest(BaseModel):
+    plan_code: str = "beta"
+    provider: str = Field(default="fake", max_length=40)
+    amount_minor: int = Field(ge=1, le=1_000_000_000)
+    currency: str = Field(default="RUB", min_length=3, max_length=3)
+
+
+class AdminReleaseRequest(BaseModel):
+    edition: str = "commercial"
+    channel: str = "stable"
+    version: str = Field(max_length=40)
+    download_url: str = Field(max_length=600)
+    sha256: str = Field(min_length=64, max_length=64)
+    release_notes: str = ""
+    minimum_supported_version: str = ""

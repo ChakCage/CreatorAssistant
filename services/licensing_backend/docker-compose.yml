@@ -30,12 +30,33 @@ services:
       LICENSE_SIGNING_KEY_ID: ${LICENSE_SIGNING_KEY_ID:-local-2026-01}
       LICENSE_SIGNING_PRIVATE_KEY: ${LICENSE_SIGNING_PRIVATE_KEY:?set LICENSE_SIGNING_PRIVATE_KEY}
       LICENSE_ADMIN_TOKEN_HASH: ${LICENSE_ADMIN_TOKEN_HASH:?set LICENSE_ADMIN_TOKEN_HASH}
+      LICENSE_PUBLIC_BASE_URL: ${LICENSE_PUBLIC_BASE_URL:-http://127.0.0.1:18080}
+      LICENSE_FAKE_PAYMENT_SECRET: ${LICENSE_FAKE_PAYMENT_SECRET:?set LICENSE_FAKE_PAYMENT_SECRET}
+      LICENSE_BOT_SERVICE_SECRET: ${LICENSE_BOT_SERVICE_SECRET:?set LICENSE_BOT_SERVICE_SECRET}
     ports: ["127.0.0.1:18080:8080"]
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=3)"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+  bot:
+    build: ../creator_assistant_bot
+    environment:
+      CREATOR_BOT_ENVIRONMENT: local
+      CREATOR_BOT_TOKEN: ${CREATOR_BOT_TOKEN:-}
+      CREATOR_BOT_BACKEND_URL: http://api:8080
+      CREATOR_BOT_SERVICE_SECRET: ${LICENSE_BOT_SERVICE_SECRET:?set LICENSE_BOT_SERVICE_SECRET}
+      CREATOR_BOT_MOCK_TELEGRAM: ${CREATOR_BOT_MOCK_TELEGRAM:-true}
+      CREATOR_BOT_HEALTH_PORT: 8081
+      CREATOR_BOT_BIND_HOST: 0.0.0.0
+    ports: ["127.0.0.1:18081:8081"]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/ready', timeout=3)"]
       interval: 5s
       timeout: 4s
       retries: 20

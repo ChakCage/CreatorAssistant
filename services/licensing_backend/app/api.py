@@ -2,29 +2,52 @@ from __future__ import annotations
 
 import hmac
 import hashlib
+import html
+import json
+import logging
 import uuid
 from datetime import timedelta
+from urllib.parse import parse_qs
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from .config import hash_admin_token, load_settings
 from .db import get_db
-from .models import ActivationCode, ActivationCodeStatus, AdminAction, Device, DeviceStatus, LicenseEvent, LicenseSession, Plan, SessionStatus, Subscription, SubscriptionStatus, User, UserStatus, utcnow
+from .billing import BillingService
+from .models import ActivationCode, ActivationCodeStatus, AdminAction, BotNotification, Device, DeviceStatus, LicenseEvent, LicenseSession, Plan, Price, Release, SessionStatus, Subscription, SubscriptionStatus, User, UserStatus, utcnow
 from .rate_limit import RateLimiter
-from .schemas import ActivateRequest, AdminCodeRequest, AdminGrantRequest, AdminUserRequest, DeactivateRequest, RefreshRequest
+from .schemas import (ActivateRequest, AdminCodeRequest, AdminGrantRequest, AdminPriceRequest,
+                      AdminReleaseRequest, AdminUserRequest, BotDeviceRequest, BotUserRequest,
+                      CheckoutRequest, DeactivateRequest, NotificationResultRequest,
+                      RefreshRequest, TelegramUserRequest)
+from .security import verify_service_token
 from .service import LicenseError, LicenseManager, aware, iso
 
 
-settings = load_settings(); manager = LicenseManager(settings); limiter = RateLimiter(settings.redis_url)
+settings = load_settings(); manager = LicenseManager(settings); billing = BillingService(settings, manager); limiter = RateLimiter(settings.redis_url)
 app = FastAPI(title="Creator Assistant Licensing", version="1.0.0")
+audit_log = logging.getLogger("creator_assistant.requests")
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    request_id = str(uuid.uuid4()); request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    route = request.scope.get("route")
+    audit_log.info(json.dumps({"request_id": request_id, "method": request.method,
+                               "route": getattr(route, "path", "unmatched"),
+                               "status": response.status_code}, separators=(",", ":")))
+    return response
 
 
 @app.exception_handler(LicenseError)
-def license_error(_request: Request, exc: LicenseError):
-    return JSONResponse(status_code=exc.status, content={"error": {"code": exc.code, **exc.details}, "request_id": str(uuid.uuid4())})
+def license_error(request: Request, exc: LicenseError):
+    return JSONResponse(status_code=exc.status, content={"error": {"code": exc.code, **exc.details},
+                        "request_id": getattr(request.state, "request_id", str(uuid.uuid4()))})
 
 
 def client_ip(request: Request) -> str:
@@ -40,6 +63,17 @@ def require_admin(x_admin_token: str = Header(default="")) -> str:
     if not settings.admin_token_hash or not hmac.compare_digest(hash_admin_token(x_admin_token), settings.admin_token_hash):
         raise HTTPException(401, "Admin authorization required")
     return "api-admin"
+
+
+def require_service(permission: str):
+    def dependency(authorization: str = Header(default="")) -> dict:
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(401, "Service authorization required")
+        try:
+            return verify_service_token(authorization[7:], settings.bot_service_secret, permission)
+        except ValueError:
+            raise HTTPException(401, "Invalid service credential")
+    return dependency
 
 
 @app.get("/health")
@@ -155,3 +189,134 @@ def revoke_code(code_id: str, admin: str = Depends(require_admin), db: Session =
 def events(limit: int = 100, _admin: str = Depends(require_admin), db: Session = Depends(get_db)):
     values = db.scalars(select(LicenseEvent).order_by(LicenseEvent.created_at.desc()).limit(min(limit, 500))).all()
     return [{"event_type": item.event_type, "result": item.result, "reason_code": item.reason_code, "created_at": iso(item.created_at)} for item in values]
+
+
+@app.post("/v1/bot/users/upsert")
+def bot_user(value: TelegramUserRequest, _identity: dict = Depends(require_service("users:write")), db: Session = Depends(get_db)):
+    user = billing.upsert_telegram_user(db, value); db.commit()
+    return {"id": user.id, "status": user.status.value}
+
+
+@app.get("/v1/bot/plans")
+def bot_plans(_identity: dict = Depends(require_service("plans:read")), db: Session = Depends(get_db)):
+    return {"plans": billing.plans(db)}
+
+
+@app.post("/v1/billing/checkout")
+def checkout(value: CheckoutRequest, _identity: dict = Depends(require_service("checkout:create")), db: Session = Depends(get_db)):
+    if not limiter.allow(f"checkout:{value.telegram_user_id}", 20, 3600):
+        raise LicenseError("TOO_MANY_ATTEMPTS", 429)
+    result = billing.create_checkout(db, value); db.commit(); return result
+
+
+@app.get("/v1/billing/fake/checkout/{token}", response_class=HTMLResponse)
+def fake_checkout(token: str, db: Session = Depends(get_db)):
+    if settings.production:
+        raise HTTPException(404)
+    row = billing.checkout_by_token(db, token); payment = row.payment
+    csrf = billing.checkout_csrf(row)
+    page = f"""<!doctype html><html lang=ru><head><meta charset=utf-8>
+<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'\">
+<title>Тестовая оплата</title><style>body{{font:18px sans-serif;max-width:620px;margin:60px auto}}button{{padding:12px 20px;margin:8px}}</style></head>
+<body><h1>Тестовая оплата</h1><p>{html.escape(payment.description)}</p>
+<p>{payment.amount_minor / 100:.2f} {html.escape(payment.currency)}</p>
+<form method=post><input type=hidden name=csrf value=\"{csrf}\"><button name=action value=success>Успешная оплата</button>
+<button name=action value=cancel>Отмена</button></form></body></html>"""
+    return HTMLResponse(page, headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY",
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"})
+
+
+@app.post("/v1/billing/fake/checkout/{token}", response_class=HTMLResponse)
+async def fake_checkout_action(token: str, request: Request, db: Session = Depends(get_db)):
+    if settings.production:
+        raise HTTPException(404)
+    raw_form = await request.body()
+    if len(raw_form) > 4096:
+        raise HTTPException(413)
+    form = parse_qs(raw_form.decode("utf-8", "strict"))
+    row = billing.checkout_by_token(db, token)
+    if not hmac.compare_digest(form.get("csrf", [""])[0], billing.checkout_csrf(row)):
+        raise HTTPException(403, "Invalid CSRF token")
+    action = form.get("action", [""])[0]
+    if action not in {"success", "cancel"}:
+        raise HTTPException(400, "Invalid action")
+    payment = row.payment
+    provider = billing.provider("fake")
+    body, headers = provider.signed_event(
+        payment_id=payment.id, provider_payment_id=payment.provider_payment_id,
+        event_type="payment.succeeded" if action == "success" else "payment.cancelled",
+        amount_minor=payment.amount_minor, currency=payment.currency,
+    )
+    result = billing.process_webhook(db, "fake", headers, body)
+    row.used_at = utcnow(); db.commit()
+    return HTMLResponse(f"<h1>{'Оплата принята' if action == 'success' else 'Оплата отменена'}</h1><p>{html.escape(result['status'])}</p>")
+
+
+@app.post("/v1/billing/webhooks/{provider}")
+async def payment_webhook(provider: str, request: Request, db: Session = Depends(get_db)):
+    body = await request.body()
+    if len(body) > settings.webhook_max_bytes:
+        raise HTTPException(413, "Webhook body too large")
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    result = billing.process_webhook(db, provider, headers, body)
+    db.commit(); return result
+
+
+@app.get("/v1/bot/subscription/{telegram_user_id}")
+def bot_subscription(telegram_user_id: str, _identity: dict = Depends(require_service("subscription:read")), db: Session = Depends(get_db)):
+    return billing.subscription(db, telegram_user_id)
+
+
+@app.post("/v1/bot/activation-code")
+def bot_activation(value: BotUserRequest, _identity: dict = Depends(require_service("activation:create")), db: Session = Depends(get_db)):
+    result = billing.create_activation_code(db, value.telegram_user_id); db.commit(); return result
+
+
+@app.post("/v1/bot/devices/deactivate")
+def bot_deactivate(value: BotDeviceRequest, _identity: dict = Depends(require_service("devices:write")), db: Session = Depends(get_db)):
+    result = billing.deactivate_device(db, value.telegram_user_id, value.device_id, value.confirmed); db.commit(); return result
+
+
+@app.get("/v1/bot/release")
+def bot_release(_identity: dict = Depends(require_service("release:read")), db: Session = Depends(get_db)):
+    return billing.active_release(db)
+
+
+@app.get("/v1/bot/notifications")
+def bot_notifications(limit: int = 20, _identity: dict = Depends(require_service("notifications:read")), db: Session = Depends(get_db)):
+    rows = billing.claim_notifications(db, limit)
+    result = {"notifications": [{"id": row.id, "telegram_user_id": row.telegram_user_id,
+                                "type": row.notification_type, "payload": row.payload,
+                                "attempts": row.attempts} for row in rows]}
+    db.commit(); return result
+
+
+@app.post("/v1/bot/notifications/{notification_id}/result")
+def bot_notification_result(notification_id: str, value: NotificationResultRequest,
+                            _identity: dict = Depends(require_service("notifications:write")), db: Session = Depends(get_db)):
+    row = db.get(BotNotification, notification_id)
+    if not row: raise HTTPException(404, "Notification not found")
+    billing.finish_notification(row, value.success, value.error); db.commit()
+    return {"status": row.status.value}
+
+
+@app.post("/v1/admin/prices")
+def admin_price(value: AdminPriceRequest, admin: str = Depends(require_admin), db: Session = Depends(get_db)):
+    _, default_plan = manager.bootstrap(db)
+    plan = db.scalar(select(Plan).where(Plan.code == value.plan_code)) or default_plan
+    row = db.scalar(select(Price).where(Price.plan_id == plan.id, Price.provider == value.provider,
+                                        Price.currency == value.currency.upper()))
+    if row is None:
+        row = Price(plan_id=plan.id, provider=value.provider, amount_minor=value.amount_minor,
+                    currency=value.currency.upper()); db.add(row)
+    else:
+        row.amount_minor = value.amount_minor; row.is_active = True
+    db.flush(); db.add(AdminAction(admin_id=admin, action="upsert-price", target_type="price", target_id=row.id)); db.commit()
+    return {"id": row.id}
+
+
+@app.post("/v1/admin/releases")
+def admin_release(value: AdminReleaseRequest, admin: str = Depends(require_admin), db: Session = Depends(get_db)):
+    row = Release(**value.model_dump()); db.add(row); db.flush()
+    db.add(AdminAction(admin_id=admin, action="create-release", target_type="release", target_id=row.id)); db.commit()
+    return {"id": row.id}

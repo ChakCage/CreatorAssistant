@@ -111,7 +111,9 @@ class LicenseService:
                  wall_clock: Callable[[], datetime] | None = None) -> None:
         build = current_build_info()
         if storage is None:
-            namespace = "CreatorAssistant/Commercial/License"
+            namespace = ("CreatorAssistant/CommercialStaging/License"
+                         if build.license_backend_profile == "staging"
+                         else "CreatorAssistant/Commercial/License")
             if build.license_backend_profile == "local":
                 namespace = os.environ.get("CREATOR_ASSISTANT_E2E_CREDENTIAL_NAMESPACE", namespace)
             storage = SecureLicenseStorage(WindowsSecureCredentialStore(namespace=namespace))

@@ -47,7 +47,7 @@ class LicenseManager:
             product = Product(code="creator_assistant", name="Creator Assistant", status=ProductStatus.ACTIVE); db.add(product); db.flush()
         plan = db.scalar(select(Plan).where(Plan.product_id == product.id, Plan.code == "beta"))
         if not plan:
-            plan = Plan(product_id=product.id, code="beta", name="Beta", duration_days=30, device_limit=1, features=FEATURES); db.add(plan); db.flush()
+            plan = Plan(product_id=product.id, code="beta", name="Creator Assistant Beta", duration_days=30, device_limit=1, features=FEATURES); db.add(plan); db.flush()
         return product, plan
 
     def audit(self, db: Session, event_type: str, result: str, *, reason: str = "", user_id: str | None = None,

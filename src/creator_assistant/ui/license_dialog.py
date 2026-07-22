@@ -30,10 +30,14 @@ class LicenseDialog(QDialog):
                                ("Отключить это устройство", self.deactivate)):
             button = QPushButton(text); button.clicked.connect(callback); actions.addWidget(button)
         layout.addLayout(actions)
-        links = QHBoxLayout(); telegram = QPushButton("Получить код в Telegram"); support = QPushButton("Открыть поддержку")
-        telegram.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://t.me/CreatorAssistantSupport")))
+        links = QHBoxLayout(); telegram = QPushButton("Получить код в Telegram"); purchase = QPushButton("Купить или продлить подписку"); open_bot = QPushButton("Открыть Telegram-бота"); support = QPushButton("Открыть поддержку")
+        bot_url = current_build_info().telegram_bot_url
+        telegram.setEnabled(bool(bot_url)); purchase.setEnabled(bool(bot_url)); open_bot.setEnabled(bool(bot_url))
+        telegram.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(bot_url + "?start=activation")))
+        purchase.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(bot_url + "?start=buy")))
+        open_bot.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(bot_url)))
         support.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://t.me/CreatorAssistantSupport")))
-        links.addWidget(telegram); links.addWidget(support); links.addStretch(1); layout.addLayout(links)
+        links.addWidget(telegram); links.addWidget(purchase); links.addWidget(open_bot); links.addWidget(support); links.addStretch(1); layout.addLayout(links)
         self.devices = QTableWidget(0, 4); self.devices.setHorizontalHeaderLabels(("Устройство", "Статус", "Первый вход", "Последняя проверка")); layout.addWidget(self.devices, 1)
         self.technical = QLabel(); self.technical.setWordWrap(True); self.technical.setTextInteractionFlags(self.technical.textInteractionFlags()); layout.addWidget(self.technical)
         close = QPushButton("Закрыть"); close.clicked.connect(self.accept); layout.addWidget(close); self.update_status()

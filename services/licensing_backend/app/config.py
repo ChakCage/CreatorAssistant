@@ -23,6 +23,11 @@ class Settings:
     max_code_attempts: int
     minimum_app_version: str
     recommended_app_version: str
+    public_base_url: str
+    fake_payment_secret: str
+    bot_service_secret: str
+    webhook_max_bytes: int
+    checkout_ttl_minutes: int
 
     @property
     def production(self) -> bool:
@@ -40,15 +45,26 @@ def load_settings() -> Settings:
     database_url = os.getenv("LICENSE_DATABASE_URL", "postgresql+psycopg://creator_assistant:creator_assistant@localhost:5432/creator_assistant")
     pepper = os.getenv("LICENSE_ACTIVATION_PEPPER", "")
     private_key = _decode_key(os.getenv("LICENSE_SIGNING_PRIVATE_KEY", ""))
+    public_base_url = os.getenv("LICENSE_PUBLIC_BASE_URL", "http://127.0.0.1:18080").rstrip("/")
+    fake_payment_secret = os.getenv("LICENSE_FAKE_PAYMENT_SECRET", "")
+    bot_service_secret = os.getenv("LICENSE_BOT_SERVICE_SECRET", "")
     if environment in {"production", "staging"}:
         if not database_url.startswith("postgresql+"):
             raise RuntimeError("Production/staging licensing backend requires PostgreSQL")
         if len(pepper) < 32 or len(private_key) != 32:
             raise RuntimeError("LICENSE_ACTIVATION_PEPPER and a 32-byte Ed25519 private key are required")
+        if not public_base_url.startswith("https://"):
+            raise RuntimeError("Production/staging public URL must use HTTPS")
+        if len(bot_service_secret) < 32:
+            raise RuntimeError("LICENSE_BOT_SERVICE_SECRET is required")
+        if environment == "staging" and len(fake_payment_secret) < 32:
+            raise RuntimeError("LICENSE_FAKE_PAYMENT_SECRET is required in staging")
     else:
         # Ephemeral values are safe for one-process local/test use only and are never persisted.
         pepper = pepper or secrets.token_urlsafe(32)
         private_key = private_key or secrets.token_bytes(32)
+        fake_payment_secret = fake_payment_secret or secrets.token_urlsafe(32)
+        bot_service_secret = bot_service_secret or secrets.token_urlsafe(32)
     return Settings(
         environment=environment, database_url=database_url,
         redis_url=os.getenv("LICENSE_REDIS_URL", ""), activation_pepper=pepper,
@@ -61,6 +77,11 @@ def load_settings() -> Settings:
         max_code_attempts=int(os.getenv("LICENSE_MAX_CODE_ATTEMPTS", "8")),
         minimum_app_version=os.getenv("LICENSE_MINIMUM_APP_VERSION", "0.1.0"),
         recommended_app_version=os.getenv("LICENSE_RECOMMENDED_APP_VERSION", "0.1.0"),
+        public_base_url=public_base_url,
+        fake_payment_secret=fake_payment_secret,
+        bot_service_secret=bot_service_secret,
+        webhook_max_bytes=int(os.getenv("LICENSE_WEBHOOK_MAX_BYTES", "262144")),
+        checkout_ttl_minutes=int(os.getenv("LICENSE_CHECKOUT_TTL_MINUTES", "30")),
     )
 
 

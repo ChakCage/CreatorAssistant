@@ -26,6 +26,10 @@ class SubscriptionSource(str, enum.Enum): ADMIN = "ADMIN"; TRIAL = "TRIAL"; PAYM
 class ActivationCodeStatus(str, enum.Enum): CREATED = "CREATED"; USED = "USED"; EXPIRED = "EXPIRED"; REVOKED = "REVOKED"
 class DeviceStatus(str, enum.Enum): ACTIVE = "ACTIVE"; DEACTIVATED = "DEACTIVATED"; BLOCKED = "BLOCKED"
 class SessionStatus(str, enum.Enum): ACTIVE = "ACTIVE"; REVOKED = "REVOKED"; EXPIRED = "EXPIRED"
+class PaymentStatus(str, enum.Enum): CREATED = "CREATED"; PENDING = "PENDING"; PAID = "PAID"; CANCELLED = "CANCELLED"; EXPIRED = "EXPIRED"; FAILED = "FAILED"; REFUNDED = "REFUNDED"; PARTIALLY_REFUNDED = "PARTIALLY_REFUNDED"
+class PaymentEventStatus(str, enum.Enum): RECEIVED = "RECEIVED"; PROCESSED = "PROCESSED"; DUPLICATE = "DUPLICATE"; REJECTED = "REJECTED"; REVIEW_REQUIRED = "REVIEW_REQUIRED"; FAILED = "FAILED"
+class NotificationStatus(str, enum.Enum): PENDING = "PENDING"; PROCESSING = "PROCESSING"; SENT = "SENT"; FAILED = "FAILED"; CANCELLED = "CANCELLED"
+class PaymentPurpose(str, enum.Enum): DIRECT_SUBSCRIPTION_PURCHASE = "DIRECT_SUBSCRIPTION_PURCHASE"
 
 
 class TimestampMixin:
@@ -37,6 +41,9 @@ class User(TimestampMixin, Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     telegram_user_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
+    telegram_username: Mapped[Optional[str]] = mapped_column(String(64))
+    telegram_first_name: Mapped[Optional[str]] = mapped_column(String(160))
+    telegram_language_code: Mapped[Optional[str]] = mapped_column(String(16))
     email: Mapped[Optional[str]] = mapped_column(String(320), unique=True)
     status: Mapped[UserStatus] = mapped_column(Enum(UserStatus), default=UserStatus.ACTIVE)
 
@@ -150,5 +157,107 @@ class AdminAction(Base):
     reason: Mapped[str] = mapped_column(Text, default="")
     action_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class Price(TimestampMixin, Base):
+    __tablename__ = "prices"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("plans.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    amount_minor: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(3))
+    is_active: Mapped[bool] = mapped_column(default=True)
+    starts_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    plan: Mapped[Plan] = relationship()
+    __table_args__ = (UniqueConstraint("plan_id", "provider", "currency", name="uq_price_plan_provider_currency"),)
+
+
+class Payment(TimestampMixin, Base):
+    __tablename__ = "payments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("plans.id"), index=True)
+    price_id: Mapped[str] = mapped_column(ForeignKey("prices.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    provider_payment_id: Mapped[Optional[str]] = mapped_column(String(120), unique=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120))
+    purpose: Mapped[PaymentPurpose] = mapped_column(Enum(PaymentPurpose), default=PaymentPurpose.DIRECT_SUBSCRIPTION_PURCHASE)
+    amount_minor: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(3))
+    status: Mapped[PaymentStatus] = mapped_column(Enum(PaymentStatus), default=PaymentStatus.CREATED, index=True)
+    checkout_url: Mapped[Optional[str]] = mapped_column(String(600))
+    description: Mapped[str] = mapped_column(String(300))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    refunded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    payment_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
+    user: Mapped[User] = relationship()
+    plan: Mapped[Plan] = relationship()
+    price: Mapped[Price] = relationship()
+    __table_args__ = (UniqueConstraint("user_id", "idempotency_key", name="uq_payment_user_idempotency"),)
+
+
+class PaymentEvent(Base):
+    __tablename__ = "payment_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    payment_id: Mapped[Optional[str]] = mapped_column(ForeignKey("payments.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    provider_event_id: Mapped[str] = mapped_column(String(160))
+    provider_nonce: Mapped[str] = mapped_column(String(160))
+    event_type: Mapped[str] = mapped_column(String(80))
+    signature_valid: Mapped[bool] = mapped_column(default=False)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    processing_status: Mapped[PaymentEventStatus] = mapped_column(Enum(PaymentEventStatus), default=PaymentEventStatus.RECEIVED)
+    error_code: Mapped[Optional[str]] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_event_id", name="uq_payment_event_provider_event"),
+        UniqueConstraint("provider", "provider_nonce", name="uq_payment_event_provider_nonce"),
+    )
+
+
+class CheckoutSession(Base):
+    __tablename__ = "checkout_sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    payment_id: Mapped[str] = mapped_column(ForeignKey("payments.id"), unique=True, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    payment: Mapped[Payment] = relationship()
+
+
+class BotNotification(Base):
+    __tablename__ = "bot_notifications"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    telegram_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    notification_type: Mapped[str] = mapped_column(String(80))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    dedupe_key: Mapped[str] = mapped_column(String(160), unique=True)
+    status: Mapped[NotificationStatus] = mapped_column(Enum(NotificationStatus), default=NotificationStatus.PENDING, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[Optional[str]] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class Release(Base):
+    __tablename__ = "releases"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    edition: Mapped[str] = mapped_column(String(40), index=True)
+    channel: Mapped[str] = mapped_column(String(40), index=True)
+    version: Mapped[str] = mapped_column(String(40))
+    download_url: Mapped[str] = mapped_column(String(600))
+    sha256: Mapped[str] = mapped_column(String(64))
+    release_notes: Mapped[str] = mapped_column(Text, default="")
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    minimum_supported_version: Mapped[str] = mapped_column(String(40), default="")
+    is_active: Mapped[bool] = mapped_column(default=True, index=True)
+    __table_args__ = (UniqueConstraint("edition", "channel", "version", name="uq_release_edition_channel_version"),)
 
 Index("ix_devices_active_subscription", Device.subscription_id, Device.status)

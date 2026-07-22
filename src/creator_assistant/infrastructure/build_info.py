@@ -16,6 +16,8 @@ class BuildInfo:
     license_backend_profile: str = "production"
     license_backend_url: str = "https://licensing.creatorassistant.app"
     license_public_keys: dict[str, str] = None
+    build_variant: str = "production"
+    telegram_bot_url: str = ""
 
     def __post_init__(self):
         if self.license_public_keys is None:
@@ -49,4 +51,6 @@ def current_build_info() -> BuildInfo:
         license_backend_profile=str(payload.get("license_backend_profile") or "production"),
         license_backend_url=str(payload.get("license_backend_url") or "https://licensing.creatorassistant.app"),
         license_public_keys=dict(payload.get("license_public_keys") or {}),
+        build_variant=str(payload.get("build_variant") or "production"),
+        telegram_bot_url=str(payload.get("telegram_bot_url") or ""),
     )
