@@ -74,6 +74,13 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "banner_offset_x": 0,
         "banner_offset_y": 0,
         "banner_opacity": 100,
+        "banner_start_offset": 0.0,
+        "banner_display_duration": 0.0,
+        "banner_loop": True,
+        "banner_trim_to_short": True,
+        "banner_freeze_last_frame": False,
+        "banner_audio_enabled": False,
+        "banner_audio_volume": 100,
         "safe_margin": 80,
         "use_defaults": True,
     },
@@ -195,6 +202,11 @@ def local_data_root(edition=None) -> Path:
 def shared_data_root() -> Path:
     """Edition-neutral model/runtime storage; keeps existing downloads in place."""
     return _local_base()
+
+
+def shared_brand_assets_root() -> Path:
+    """User-managed brand media shared by Developer and Commercial editions."""
+    return shared_data_root() / "Shared" / "BrandAssets"
 
 
 def migrate_legacy_developer_data() -> list[str]:

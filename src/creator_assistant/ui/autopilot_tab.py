@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
 
 from creator_assistant.domain.automation.models import AutomationMode, AutomationProfile, AutomationStatus
 from creator_assistant.domain.shorts.models import Candidate
-from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
 from creator_assistant.services.shorts.manifest import ShortsManifestStore
 from creator_assistant.services.shorts.project_template import ProjectShortsTemplate, composition_snapshot_hash, normalized_scale_percent
 from creator_assistant.services.shorts.render_settings import VerticalRenderSettingsResolver
@@ -318,7 +317,7 @@ class AutopilotTab(QWidget):
         settings_store = getattr(self.container, "settings", {})
         branding = settings_store.get("shorts_branding_defaults", {})
         candidate = Candidate("defaults", 0, 30, 0, "")
-        resolved = VerticalRenderSettingsResolver(settings_store, ChannelAssetStore()).resolve(
+        resolved = VerticalRenderSettingsResolver(settings_store, self.container.channel_assets).resolve(
             candidate,
             selected_profile_id=str(self.profile.currentData() or "") if hasattr(self, "profile") else "",
             use_candidate_override=False,

@@ -97,8 +97,9 @@ class VerticalRenderSettingsResolver:
             selected_profile_id=selected_profile_id,
             saved_profile_id=str(branding_defaults.get("channel_profile_id") or ""),
         )
-        banner = self.assets.banner_path(profile)
-        profile_branding = self._profile_branding(profile, banner)
+        banner = self.assets.banner_path(profile) if hasattr(self.assets, "banner_path") else None
+        asset = self.assets.asset(profile) if profile and hasattr(self.assets, "asset") else None
+        profile_branding = self._profile_branding(profile, banner, asset)
         branding = {**branding_defaults, **profile_branding}
         if template:
             branding.update(template.branding)
@@ -141,8 +142,8 @@ class VerticalRenderSettingsResolver:
         # A profile explicitly selected in Autopilot is authoritative.
         explicit_id = str(selected_profile_id or saved_profile_id or "").strip()
         if explicit_id:
-            explicit = self.assets.get(explicit_id)
-            if explicit and self.assets.banner_path(explicit):
+            explicit = self.assets.get(explicit_id) if hasattr(self.assets, "get") else None
+            if explicit and hasattr(self.assets, "banner_path") and self.assets.banner_path(explicit):
                 return explicit
 
         linked = self.settings.get("shorts_channel_profile_links", {})
@@ -153,6 +154,8 @@ class VerticalRenderSettingsResolver:
                  if value and linked.get(str(value).casefold())),
                 "",
             )
+        if not hasattr(self.assets, "resolve"):
+            return None
         return self.assets.resolve(
             channel_id=channel_id,
             saved_profile_id=linked_id,
@@ -161,16 +164,28 @@ class VerticalRenderSettingsResolver:
         )
 
     @staticmethod
-    def _profile_branding(profile: ChannelProfile | None, banner: Path | None) -> dict[str, Any]:
+    def _profile_branding(profile: ChannelProfile | None, banner: Path | None, asset=None) -> dict[str, Any]:
         if not profile or not banner:
             return {
                 "channel_profile_id": "",
                 "channel_banner_path": "",
+                "brand_asset_id": "",
+                "brand_asset_status": "NEEDS_REVIEW",
                 "show_channel_card": False,
             }
         return {
             "channel_profile_id": profile.id,
             "channel_banner_path": str(banner),
+            "brand_asset_id": asset.asset_id if asset else profile.brand_asset_id,
+            "brand_asset_hash": asset.content_hash if asset else "",
+            "brand_asset_type": asset.asset_type if asset else "IMAGE",
+            "brand_asset_has_alpha": bool(asset.has_alpha) if asset else False,
+            "brand_asset_has_audio": bool(asset.has_audio) if asset else False,
+            "brand_asset_width": int(asset.width) if asset else 0,
+            "brand_asset_height": int(asset.height) if asset else 0,
+            "brand_asset_duration": float(asset.duration) if asset else 0.0,
+            "brand_asset_codec": str(asset.codec) if asset else "",
+            "brand_asset_status": "READY",
             "show_channel_card": True,
             "banner_scale": profile.default_banner_scale,
             "banner_offset_x": profile.default_banner_offset_x,
@@ -178,4 +193,11 @@ class VerticalRenderSettingsResolver:
             "banner_opacity": profile.default_banner_opacity,
             "banner_anchor": profile.default_banner_anchor,
             "banner_fit_mode": profile.default_banner_fit_mode,
+            "banner_start_offset": profile.default_banner_start_offset,
+            "banner_display_duration": profile.default_banner_display_duration,
+            "banner_loop": profile.default_banner_loop,
+            "banner_trim_to_short": profile.default_banner_trim_to_short,
+            "banner_freeze_last_frame": profile.default_banner_freeze_last_frame,
+            "banner_audio_enabled": profile.default_banner_audio_enabled,
+            "banner_audio_volume": profile.default_banner_audio_volume,
         }

@@ -55,6 +55,10 @@ class ProjectShortsTemplate:
             key: value for key, value in candidate.branding_settings.items()
             if key not in {
                 "source_author", "channel_profile_id", "channel_banner_path",
+                "brand_asset_id", "brand_asset_hash", "brand_asset_type",
+                "brand_asset_has_alpha", "brand_asset_has_audio", "brand_asset_width",
+                "brand_asset_height", "brand_asset_duration", "brand_asset_codec",
+                "brand_asset_preview_path", "brand_asset_status",
                 "original_video_title", "original_video_title_source", "translated_video_title",
                 "short_hook_title", "short_hook_suggestions", "title_suggestions", "final_title_text",
             }

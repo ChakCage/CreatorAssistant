@@ -31,7 +31,6 @@ from creator_assistant.services.shorts.manifest import ShortsManifestStore, utc_
 from creator_assistant.services.shorts.review_service import CandidateReviewService
 from creator_assistant.services.shorts.render_service import unique_output_path
 from creator_assistant.services.shorts.semantic_cache import SemanticCache
-from creator_assistant.services.shorts.channel_assets import ChannelAssetStore
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
 from creator_assistant.services.shorts.subtitle_layout import subtitle_preset_value
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectPaths, ShortsProjectStore
@@ -48,6 +47,13 @@ from creator_assistant.ui.shorts.source_panel import SourcePanel
 from creator_assistant.ui.shorts.subtitle_editor import SubtitleEditor
 from creator_assistant.ui.shorts.render_queue import RenderQueue
 from creator_assistant.ui.shorts.project_template_dialog import ProjectTemplateDialog
+
+
+class _EmptyChannelAssets:
+    def resolve(self, **_kwargs): return None
+    def banner_path(self, _profile): return None
+    def asset(self, _profile): return None
+    def profiles(self): return []
 from creator_assistant.ui.shorts.global_template_dialog import GlobalTemplateLibraryDialog
 from creator_assistant.ui.widgets.error_dialog import ErrorDialog
 
@@ -506,6 +512,7 @@ class ShortsTab(QWidget):
         self.subtitle_editor = SubtitleEditor(
             self.container.shorts_semantic_backend,
             subtitle_presets=self.container.settings.get("shorts_subtitle_presets", {}),
+            assets=self.container.channel_assets,
         )
         self.render_queue = RenderQueue()
         self.workspace.addTab(self.candidate_list, "Кандидаты")
@@ -802,7 +809,8 @@ class ShortsTab(QWidget):
         candidate.branding_settings = branding
         source_author = self._source_author_hint()
         aliases = [source_author, Path(self.source.name).stem if self.source else ""]
-        resolved = VerticalRenderSettingsResolver(self.container.settings, ChannelAssetStore()).resolve(
+        assets = getattr(self.container, "channel_assets", None) or _EmptyChannelAssets()
+        resolved = VerticalRenderSettingsResolver(self.container.settings, assets).resolve(
             candidate, source_author=source_author, aliases=aliases,
             project_template=self._project_template(),
         )
@@ -915,7 +923,8 @@ class ShortsTab(QWidget):
         source = getattr(self, "source", None)
         template_resolver = getattr(self, "_project_template", None)
         project_template = template_resolver() if callable(template_resolver) else None
-        resolved = VerticalRenderSettingsResolver(self.container.settings, ChannelAssetStore()).resolve(
+        assets = getattr(self.container, "channel_assets", None) or _EmptyChannelAssets()
+        resolved = VerticalRenderSettingsResolver(self.container.settings, assets).resolve(
             candidate,
             source_author=source_author,
             aliases=[source_author, Path(source.name).stem if source else ""],
@@ -1054,7 +1063,7 @@ class ShortsTab(QWidget):
         if reset_override:
             candidate.settings_override = False
         source_author = self._source_author_hint()
-        resolved = VerticalRenderSettingsResolver(self.container.settings, ChannelAssetStore()).resolve(
+        resolved = VerticalRenderSettingsResolver(self.container.settings, self.container.channel_assets).resolve(
             candidate,
             source_author=source_author,
             aliases=[source_author, Path(self.source.name).stem if self.source else ""],

@@ -214,7 +214,11 @@ class ServiceContainer:
             bool(self.settings.get("prefer_nvenc", True)) and self.detector.nvenc_available(ffmpeg_path),
             int(float(self.settings.get("disk_reserve_gb", 5)) * 1024**3),
         )
-        self.channel_assets = ChannelAssetStore()
+        self.channel_assets = ChannelAssetStore(
+            ffprobe_path=ffprobe_path,
+            ffmpeg_path=ffmpeg_path,
+            project_roots=[Path(self.settings.get("youtube_root", r"E:\YouTube"))],
+        )
         if FeatureRegistry.is_available(Feature.AUTOPILOT, self.edition):
             store_module = importlib.import_module("creator_assistant.infrastructure." + "automation_job_store")
             engine_module = importlib.import_module("creator_assistant.services." + "automation.engine")

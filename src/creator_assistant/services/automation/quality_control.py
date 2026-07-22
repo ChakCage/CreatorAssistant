@@ -52,12 +52,17 @@ class AutomationQualityControl:
             issues.append(AutomationIssue("missing_profile", "Обязательный профиль канала не определён", True, "pre_render", short.short_id))
         banner = str(short.branding_settings.get("channel_banner_path", ""))
         if short.branding_settings.get("show_channel_card") and not Path(banner).is_file():
-            issues.append(AutomationIssue("missing_banner", "Баннер профиля не найден", profile_required, "pre_render", short.short_id))
+            issues.append(AutomationIssue("missing_brand_asset", "Бренд-материал профиля не найден; требуется выбор пользователя", True, "pre_render", short.short_id))
         banner_size = None
         if Path(banner).is_file():
-            size = QImageReader(banner).size()
-            if size.isValid():
-                banner_size = (size.width(), size.height())
+            width = int(short.branding_settings.get("brand_asset_width", 0) or 0)
+            height = int(short.branding_settings.get("brand_asset_height", 0) or 0)
+            if width > 0 and height > 0:
+                banner_size = (width, height)
+            else:
+                size = QImageReader(banner).size()
+                if size.isValid():
+                    banner_size = (size.width(), size.height())
         calculator = OverlayLayoutCalculator()
         for cue in cues:
             layout = calculator.subtitle_layout(
