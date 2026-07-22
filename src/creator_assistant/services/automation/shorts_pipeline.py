@@ -37,7 +37,7 @@ class ExistingShortsAutomationPipeline:
         self.container = container
         self.selector = AutomaticCandidateSelector()
         self.qc = AutomationQualityControl()
-        self.assets = ChannelAssetStore()
+        self.assets = getattr(container, "channel_assets", None) or ChannelAssetStore()
 
     def validate(self, job: AutomationJob) -> None:
         if not job.sources:
@@ -84,16 +84,41 @@ class ExistingShortsAutomationPipeline:
         paths = store.open_or_create(Path(source_job.shorts_project_path), source)
         source_job.shorts_project_path = str(paths.root)
         (paths.analysis / "source_info.json").write_text(json.dumps(asdict(source), ensure_ascii=False, indent=2), encoding="utf-8")
-        proxy = self.container.shorts_proxy.create(source_path, paths.analysis / "analysis_proxy.mp4", token)
-        audio = self.container.shorts_audio.extract(source_path, paths.analysis / "transcription_audio.flac", token)
-        transcript = self.container.shorts_transcription.transcribe(audio, paths.analysis, token)
+        reused: list[str] = []
+        proxy = paths.analysis / "analysis_proxy.mp4"
+        if _valid_cache_file(proxy):
+            reused.append("analysis_proxy")
+        else:
+            proxy = self.container.shorts_proxy.create(source_path, proxy, token)
+        audio = paths.analysis / "transcription_audio.flac"
+        if _valid_cache_file(audio):
+            reused.append("transcription_audio")
+        else:
+            audio = self.container.shorts_audio.extract(source_path, audio, token)
+        transcript_path = paths.analysis / "transcript.json"
+        if _valid_cache_file(transcript_path):
+            transcript = TranscriptionService.load(transcript_path)
+            reused.append("transcript")
+        else:
+            transcript = self.container.shorts_transcription.transcribe(audio, paths.analysis, token)
         scenes_path = paths.analysis / "scenes.json"
-        scenes = self.container.shorts_scenes.detect(proxy, source.duration, scenes_path, token)
-        scenes = self.container.shorts_scenes.generate_thumbnails(proxy, scenes, paths.thumbnails, token)
-        self.container.shorts_scenes.save(scenes_path, scenes)
-        audio_features = self.container.shorts_audio_activity.analyse(
-            audio, source.duration, paths.analysis / "audio_features.json", token,
-        )
+        if _valid_cache_file(scenes_path):
+            scenes = self.container.shorts_scenes.load(scenes_path)
+            reused.append("scenes")
+        else:
+            scenes = self.container.shorts_scenes.detect(proxy, source.duration, scenes_path, token)
+            scenes = self.container.shorts_scenes.generate_thumbnails(proxy, scenes, paths.thumbnails, token)
+            self.container.shorts_scenes.save(scenes_path, scenes)
+        audio_features_path = paths.analysis / "audio_features.json"
+        if _valid_cache_file(audio_features_path):
+            audio_features = self.container.shorts_audio_activity.load(audio_features_path)
+            reused.append("audio_features")
+        else:
+            audio_features = self.container.shorts_audio_activity.analyse(
+                audio, source.duration, audio_features_path, token,
+            )
+        if reused:
+            job.resume_data.setdefault("cache_reused", {})[source_job.source_id] = reused
         maximum_per_source = max(1, int(job.selection_settings.get("maximum_per_source", 10)))
         settings = CandidateSettings(
             minimum=float(job.selection_settings.get("minimum_duration", 25)),
@@ -200,10 +225,20 @@ class ExistingShortsAutomationPipeline:
             short.layout_settings = resolved.layout
             short.branding_settings = resolved.branding
             short.profile_id = resolved.profile_id
-            short.composition_snapshot_hash = job.composition_snapshot_hash
+            composition_identity = {
+                "job_snapshot": job.composition_snapshot_hash,
+                "brand_asset": {
+                    key: resolved.branding.get(key)
+                    for key in (
+                        "brand_asset_id", "brand_asset_hash", "banner_start_offset",
+                        "banner_display_duration", "banner_loop", "banner_freeze_last_frame",
+                        "banner_audio_enabled", "banner_audio_volume", "banner_scale",
+                        "banner_offset_x", "banner_offset_y", "banner_opacity",
+                    )
+                },
+            }
             if candidate.settings_override:
-                short.composition_snapshot_hash = composition_snapshot_hash({
-                    "job_snapshot": job.composition_snapshot_hash,
+                composition_identity.update({
                     "subtitle": {key: value for key, value in resolved.subtitle.items() if key != "cues"},
                     "layout": resolved.layout,
                     "branding": {
@@ -211,6 +246,7 @@ class ExistingShortsAutomationPipeline:
                         if key not in {"final_title_text", "channel_banner_path"}
                     },
                 })
+            short.composition_snapshot_hash = composition_snapshot_hash(composition_identity)
             self._rebuild_subtitles(source, candidate, short)
             short.render_key = render_identity(
                 self._source_fingerprint(source), short.candidate_id, short.start, short.end,
@@ -479,6 +515,13 @@ class ExistingShortsAutomationPipeline:
     @staticmethod
     def _source(job: AutomationJob, source_id: str):
         return next(item for item in job.sources if item.source_id == source_id)
+
+
+def _valid_cache_file(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
 
 
 class _NeverCancelled:

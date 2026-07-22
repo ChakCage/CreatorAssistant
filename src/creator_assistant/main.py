@@ -264,6 +264,11 @@ def _publishing_ui_verification(window: MainWindow, container: ServiceContainer,
 def _edition_verification(window: MainWindow, container: ServiceContainer, report_path: Path) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     QApplication.processEvents()
+    window.tabs.setCurrentWidget(window.shorts_tab)
+    editor = window.shorts_tab.subtitle_editor
+    window.shorts_tab.workspace.setCurrentWidget(editor)
+    editor.settings_scroll.ensureWidgetVisible(editor.branding_group, 20, 20)
+    QApplication.processEvents()
     image_path = report_path.with_suffix(".png")
     window.grab().save(str(image_path), "PNG")
     tabs = [window.tabs.tabText(index) for index in range(window.tabs.count())]
@@ -284,8 +289,23 @@ def _edition_verification(window: MainWindow, container: ServiceContainer, repor
         ["Подготовка проекта", "Shorts", "Автопилот", "Очередь публикаций"]
         if edition is AppEdition.DEVELOPER else ["Подготовка проекта", "Shorts"]
     )
+    profiles = container.channel_assets.profiles()
+    brand_buttons = {
+        "add_image": editor.banner_import,
+        "add_video": editor.banner_import_video,
+        "select": editor.banner_select,
+        "replace": editor.banner_replace,
+        "delete": editor.banner_delete,
+        "verify": editor.banner_verify,
+        "refresh": editor.banner_refresh,
+        "import_developer": editor.banner_import_developer,
+    }
+    brand_library_visible = (
+        editor.branding_group.isVisibleTo(window)
+        and all(button.isVisibleTo(window) and button.isEnabled() for button in brand_buttons.values())
+    )
     report = {
-        "success": tabs == expected and not forbidden_loaded,
+        "success": tabs == expected and not forbidden_loaded and brand_library_visible,
         "edition": edition.value,
         "title": window.windowTitle(),
         "tabs": tabs,
@@ -295,6 +315,13 @@ def _edition_verification(window: MainWindow, container: ServiceContainer, repor
         "has_automation_engine": hasattr(container, "automation_engine"),
         "has_publishing_store": hasattr(container, "publishing_store"),
         "has_licensing": hasattr(container, "licensing"),
+        "brand_library": {
+            "root": str(container.channel_assets.library.root),
+            "visible": brand_library_visible,
+            "profile_count": len(profiles),
+            "profiles": [profile.id for profile in profiles],
+            "buttons": {name: button.text() for name, button in brand_buttons.items()},
+        },
         "build": current_build_info().__dict__,
         "screenshot": str(image_path),
     }

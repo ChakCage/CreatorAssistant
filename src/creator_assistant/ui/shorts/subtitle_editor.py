@@ -472,6 +472,7 @@ class SubtitleEditor(QWidget):
         self.settings_scroll.setWidget(self.settings_content)
         self.vertical = VerticalLayoutPanel()
         branding_widget = QGroupBox("Бренд-баннер / видеовставка")
+        self.branding_group = branding_widget
         branding_form = QFormLayout(branding_widget)
         self.branding_preset = QComboBox()
         for label, value in (("Чистый", "clean"), ("Продвижение канала", "promotion"), ("Только видео", "video")):
