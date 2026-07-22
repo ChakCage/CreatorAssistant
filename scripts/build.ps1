@@ -42,6 +42,9 @@ foreach ($CurrentEdition in $Editions) {
         build_date = (Get-Date).ToUniversalTime().ToString('o')
         edition = $CurrentEdition
         version = '0.1.0'
+        license_backend_profile = if ($env:CREATOR_ASSISTANT_LICENSE_PROFILE) { $env:CREATOR_ASSISTANT_LICENSE_PROFILE } else { 'production' }
+        license_backend_url = if ($env:CREATOR_ASSISTANT_LICENSE_URL) { $env:CREATOR_ASSISTANT_LICENSE_URL } else { 'https://licensing.creatorassistant.app' }
+        license_public_keys = if ($env:CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS) { $env:CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS | ConvertFrom-Json } else { @{} }
     } | ConvertTo-Json
     [System.IO.File]::WriteAllText((Join-Path $Generated 'build_info.json'), $BuildInfo, $Utf8NoBom)
 

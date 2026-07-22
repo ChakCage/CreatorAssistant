@@ -41,6 +41,8 @@ if IS_DEVELOPER:
 else:
     HIDDEN_IMPORTS += [
         'creator_assistant.services.licensing',
+        'creator_assistant.ui.license_dialog',
+        'creator_assistant.infrastructure.secure_credential_store',
         'creator_assistant.services.commercial_setup',
         'creator_assistant.ui.commercial_setup_wizard',
     ]

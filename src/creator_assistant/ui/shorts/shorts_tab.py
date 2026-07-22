@@ -116,6 +116,9 @@ class _AnalysisWorker(QObject):
             return
         _ACTIVE_ANALYSIS_PROJECTS.add(lock_key)
         try:
+            require_entitlement = getattr(self.container, "require_entitlement", None)
+            if require_entitlement is not None:
+                require_entitlement("shorts_analysis")
             store = ShortsManifestStore(self.paths.manifest)
             manifest = store.load()
             if manifest is None:
@@ -366,6 +369,9 @@ class _RenderWorker(QObject):
         jobs: list[RenderJob] = []
         subtitle_service = SubtitleService()
         try:
+            require_entitlement = getattr(self.container, "require_entitlement", None)
+            if require_entitlement is not None:
+                require_entitlement("batch_render")
             for candidate in self.candidates:
                 self.token.raise_if_cancelled()
                 try:
@@ -436,6 +442,9 @@ class _PreviewRenderWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
+            require_entitlement = getattr(self.container, "require_entitlement", None)
+            if require_entitlement is not None:
+                require_entitlement("vertical_editor")
             settings = self.candidate.subtitle_settings or {"style": "clean", "position": "lower", "size": 58}
             stored = settings.get("cues") or []
             cues = (
@@ -674,12 +683,24 @@ class ShortsTab(QWidget):
     def start_analysis(self) -> None:
         self._start_analysis_worker(False)
 
+    def _require_paid(self, feature: str) -> bool:
+        try:
+            require_entitlement = getattr(self.container, "require_entitlement", None)
+            if require_entitlement is not None:
+                require_entitlement(feature)
+            return True
+        except Exception as exc:
+            QMessageBox.warning(self, "Подписка", str(exc))
+            return False
+
     @Slot()
     def rebuild_candidates_from_cache(self) -> None:
         self._start_analysis_worker(True)
 
     def _start_analysis_worker(self, rebuild_candidates: bool) -> None:
         if not self.source or not self.paths or (self._thread and self._thread.isRunning()):
+            return
+        if not self._require_paid("shorts_analysis"):
             return
         self.candidate_editor.release_media()
         self._token = CancellationToken()
@@ -842,6 +863,8 @@ class ShortsTab(QWidget):
     @Slot(object)
     def _start_render(self, candidates) -> None:
         if not self.source or not self.paths or not self.transcript or (self._thread and self._thread.isRunning()):
+            return
+        if not self._require_paid("batch_render"):
             return
         for candidate in candidates:
             self._apply_subtitle_defaults(candidate)
@@ -1155,6 +1178,8 @@ class ShortsTab(QWidget):
     def _start_test_render(self, candidate) -> None:
         if not self.source or not self.paths or not self.transcript or (self._thread and self._thread.isRunning()):
             return
+        if not self._require_paid("vertical_editor"):
+            return
         self._token = CancellationToken()
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
@@ -1244,6 +1269,12 @@ class ShortsTab(QWidget):
     @Slot(object)
     def _probe_finished(self, source: SourceInfo) -> None:
         assert self._pending_root is not None
+        candidate_paths = self.project_store.paths(self._pending_root)
+        existing_manifest = ShortsManifestStore(candidate_paths.manifest).load() if candidate_paths.manifest.is_file() else None
+        is_existing = bool(existing_manifest and existing_manifest.source_fingerprint == source.fingerprint)
+        if not is_existing and not self._require_paid("shorts_analysis"):
+            self.progress_panel.update_state("Требуется подписка", "Существующие проекты доступны; создание нового проекта заблокировано.", 0)
+            return
         self.source = source
         self.paths = self.project_store.open_or_create(self._pending_root, source)
         applied_global = self._ensure_global_project_template()

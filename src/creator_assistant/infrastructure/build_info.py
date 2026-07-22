@@ -13,6 +13,13 @@ class BuildInfo:
     executable: str
     edition: str = "developer"
     version: str = "0.1.0"
+    license_backend_profile: str = "production"
+    license_backend_url: str = "https://licensing.creatorassistant.app"
+    license_public_keys: dict[str, str] = None
+
+    def __post_init__(self):
+        if self.license_public_keys is None:
+            object.__setattr__(self, "license_public_keys", {})
 
 
 def current_build_info() -> BuildInfo:
@@ -39,4 +46,7 @@ def current_build_info() -> BuildInfo:
         executable=str(executable),
         edition=str(payload.get("edition") or "developer"),
         version=str(payload.get("version") or "0.1.0"),
+        license_backend_profile=str(payload.get("license_backend_profile") or "production"),
+        license_backend_url=str(payload.get("license_backend_url") or "https://licensing.creatorassistant.app"),
+        license_public_keys=dict(payload.get("license_public_keys") or {}),
     )

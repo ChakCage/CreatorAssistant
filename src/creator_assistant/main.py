@@ -6,6 +6,7 @@ import sys
 import json
 import time
 import os
+from datetime import datetime, timedelta, timezone
 from copy import deepcopy
 from pathlib import Path
 
@@ -373,6 +374,51 @@ def _commercial_setup_verification(window: MainWindow, container: ServiceContain
     QTimer.singleShot(250, lambda: os._exit(0))
 
 
+def _commercial_license_verification(container: ServiceContainer, report_path: Path) -> None:
+    """Exercise the real packaged Commercial client against its sealed backend profile."""
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    code = os.environ.get("CREATOR_ASSISTANT_E2E_ACTIVATION_CODE", "")
+    report = {"success": False, "build": current_build_info().__dict__}
+    try:
+        if container.edition is not AppEdition.COMMERCIAL or not code:
+            raise RuntimeError("Commercial edition and CREATOR_ASSISTANT_E2E_ACTIVATION_CODE are required")
+        before = container.feature_gate.status()
+        activated = container.licensing.activate(code, device_name="Packaged E2E")
+        container.require_entitlement("shorts_analysis")
+        # A new service instance reads the same Credential Manager entries,
+        # proving that activation survives application restart.
+        restarted_service = type(container.licensing)()
+        restarted = restarted_service.status()
+        refreshed = restarted_service.refresh()
+        offline_clock = datetime.now(timezone.utc) + timedelta(hours=49)
+        offline_service = type(container.licensing)(wall_clock=lambda: offline_clock)
+        offline = offline_service.status(server_available=False)
+        restarted_service.deactivate_device(refreshed.device_id)
+        after_deactivate = restarted_service.status()
+        if os.environ.get("CREATOR_ASSISTANT_E2E_CREDENTIAL_NAMESPACE"):
+            restarted_service.storage.credentials.delete("installation", kind="id")
+        report.update({
+            "success": (
+                not before.active and activated.active and restarted.active and refreshed.active
+                and offline.active and offline.state.value == "OFFLINE_GRACE"
+                and not after_deactivate.active
+            ),
+            "before": before.state.value,
+            "activated": {"state": activated.state.value, "plan": activated.plan, "expires_at": activated.expires_at},
+            "restart": restarted.state.value,
+            "refresh": refreshed.state.value,
+            "offline_49h": offline.state.value,
+            "after_deactivate": after_deactivate.state.value,
+            "backend": restarted_service.endpoint,
+            "installation_stable": container.licensing.installation_id == restarted_service.installation_id,
+        })
+    except Exception as exc:
+        report["error_code"] = getattr(exc, "code", type(exc).__name__)
+        report["request_id"] = getattr(exc, "request_id", "")
+        report["message"] = str(exc)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def main() -> int:
     multiprocessing.freeze_support()
     install_qt_message_handler()
@@ -419,6 +465,12 @@ def main() -> int:
             "",
         )
         if commercial_setup_verification_arg:
+            container.first_run = False
+        commercial_license_verification_arg = next(
+            (value.split("=", 1)[1] for value in sys.argv if value.startswith("--verify-commercial-license=")),
+            "",
+        )
+        if commercial_license_verification_arg:
             container.first_run = False
         if "--smoke-test" in sys.argv:
             container.first_run = False
@@ -480,6 +532,14 @@ def main() -> int:
             QTimer.singleShot(
                 700,
                 lambda: _commercial_setup_verification(window, container, Path(commercial_setup_verification_arg)),
+            )
+        if commercial_license_verification_arg:
+            QTimer.singleShot(
+                500,
+                lambda: (
+                    _commercial_license_verification(container, Path(commercial_license_verification_arg)),
+                    app.quit(),
+                ),
             )
         if "--smoke-test" in sys.argv:
             QTimer.singleShot(250, app.quit)

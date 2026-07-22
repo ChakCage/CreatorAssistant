@@ -1,0 +1,1 @@
+"""Creator Assistant licensing backend."""

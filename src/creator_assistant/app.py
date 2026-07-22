@@ -55,6 +55,12 @@ from creator_assistant.services.shorts.global_template_library import GlobalShor
 from creator_assistant.product import AppEdition, DEVELOPER_AI_MODEL, Feature, FeatureRegistry, current_edition
 
 
+class _DeveloperFeatureGate:
+    def require(self, _feature: str) -> None: return
+    def status(self):
+        return type("DeveloperLicenseStatus", (), {"active": True, "state": "ACTIVE", "features": ("*",)})()
+
+
 class ServiceContainer:
     def __init__(self, settings_store: SettingsStore = None) -> None:
         self.edition = current_edition()
@@ -84,6 +90,9 @@ class ServiceContainer:
         if FeatureRegistry.is_available(Feature.LICENSING, self.edition):
             licensing_module = importlib.import_module("creator_assistant.services." + "licensing")
             self.licensing = licensing_module.LicenseService()
+            self.feature_gate = licensing_module.FeatureGate(self.edition, self.licensing)
+        else:
+            self.feature_gate = _DeveloperFeatureGate()
         self.global_shorts_templates = GlobalShortsTemplateLibrary()
         self.youtube_auth = YtDlpAuthContext.from_settings(self.settings)
         self.runner = ProcessRunner(self.logger)
@@ -115,6 +124,9 @@ class ServiceContainer:
     @property
     def settings(self) -> Dict[str, Any]:
         return self.settings_service.settings
+
+    def require_entitlement(self, feature: str) -> None:
+        self.feature_gate.require(feature)
 
     def rebuild(self) -> None:
         self.youtube_auth = YtDlpAuthContext.from_settings(self.settings)

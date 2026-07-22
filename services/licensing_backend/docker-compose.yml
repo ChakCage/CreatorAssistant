@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: creator_assistant
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-only-change-me}
+      POSTGRES_DB: creator_assistant
+    volumes:
+      - licensing-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U creator_assistant -d creator_assistant"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  api:
+    build: .
+    environment:
+      LICENSE_ENV: local
+      LICENSE_DATABASE_URL: postgresql+psycopg://creator_assistant:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/creator_assistant
+      LICENSE_REDIS_URL: redis://redis:6379/0
+      LICENSE_ACTIVATION_PEPPER: ${LICENSE_ACTIVATION_PEPPER:?set LICENSE_ACTIVATION_PEPPER}
+      LICENSE_SIGNING_KEY_ID: ${LICENSE_SIGNING_KEY_ID:-local-2026-01}
+      LICENSE_SIGNING_PRIVATE_KEY: ${LICENSE_SIGNING_PRIVATE_KEY:?set LICENSE_SIGNING_PRIVATE_KEY}
+      LICENSE_ADMIN_TOKEN_HASH: ${LICENSE_ADMIN_TOKEN_HASH:?set LICENSE_ADMIN_TOKEN_HASH}
+    ports: ["127.0.0.1:18080:8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=3)"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+volumes:
+  licensing-postgres:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import threading
 
 from PySide6.QtCore import QByteArray, QTimer
 from PySide6.QtGui import QAction
@@ -81,9 +82,30 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Готов к работе · {build.executable}")
         self.statusBar().setToolTip(f"EXE: {build.executable}\nCommit: {build.commit}\nСборка: {build.build_date}")
         self._restore_or_size_window()
+        if hasattr(self.container, "licensing"):
+            self._license_refresh_timer = QTimer(self)
+            self._license_refresh_timer.setInterval(6 * 60 * 60 * 1000)
+            self._license_refresh_timer.timeout.connect(self._refresh_license_in_background)
+            self._license_refresh_timer.start()
+            QTimer.singleShot(10_000, self._refresh_license_in_background)
         if self.container.first_run:
             callback = self.open_setup_wizard if FeatureRegistry.is_available(Feature.SETUP_WIZARD, edition) else self.open_diagnostics
             QTimer.singleShot(500, callback)
+
+    def _refresh_license_in_background(self) -> None:
+        service = getattr(self.container, "licensing", None)
+        if service is None:
+            return
+        threading.Thread(target=self._try_refresh_license, args=(service,), daemon=True, name="license-refresh").start()
+
+    @staticmethod
+    def _try_refresh_license(service) -> None:
+        try:
+            service.refresh_if_due()
+        except Exception:
+            # The signed entitlement and offline-grace policy remain authoritative
+            # while the backend is temporarily unavailable.
+            return
 
     def open_setup_wizard(self) -> None:
         if not FeatureRegistry.is_available(Feature.SETUP_WIZARD, self.container.edition):
@@ -126,16 +148,8 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Обновления", f"Текущая версия: {build.version}\nРедакция: {self.container.edition.display_name}")
 
     def open_license(self) -> None:
-        status = self.container.licensing.status()
-        prompt = "Лицензия активна." if status.active else "Введите лицензионный ключ:"
-        key, accepted = QInputDialog.getText(self, "Лицензия", prompt)
-        if not accepted or (status.active and not key):
-            return
-        try:
-            updated = self.container.licensing.activate(key)
-        except ValueError as exc:
-            QMessageBox.warning(self, "Лицензия", str(exc)); return
-        QMessageBox.information(self, "Лицензия", f"Лицензия активирована · {updated.fingerprint}")
+        module = importlib.import_module("creator_assistant.ui." + "license_dialog")
+        module.LicenseDialog(self.container, self).exec()
 
     def closeEvent(self, event) -> None:
         workers = [self.prep_tab.shutdown_workers(), self.shorts_tab.shutdown_workers()]

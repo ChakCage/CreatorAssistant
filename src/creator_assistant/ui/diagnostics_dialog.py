@@ -62,6 +62,17 @@ class DiagnosticsDialog(QDialog):
         self.build_info.setWordWrap(True)
         self.build_info.setTextInteractionFlags(self.build_info.textInteractionFlags())
         layout.addWidget(self.build_info)
+        if hasattr(self.container, "licensing"):
+            status = self.container.feature_gate.status()
+            state = status.state.value if hasattr(status.state, "value") else str(status.state)
+            self.license_info = QLabel(
+                f"Лицензия: {state} · тариф {status.plan or '—'} · до {status.expires_at or '—'}\n"
+                f"Последняя проверка: {status.last_refresh or '—'} · offline grace: {status.offline_grace_until or '—'}\n"
+                f"Backend: {self.container.licensing.endpoint} · Error code: {self.container.licensing.last_error_code or '—'} · "
+                f"Request ID: {status.request_id or '—'}"
+            )
+            self.license_info.setWordWrap(True)
+            layout.addWidget(self.license_info)
         self.summary = QLabel("Нажмите «Проверить», чтобы обновить сведения.")
         layout.addWidget(self.summary)
         self.table = QTableWidget(0, 7)

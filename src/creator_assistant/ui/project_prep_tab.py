@@ -1636,6 +1636,13 @@ class ProjectPrepTab(QWidget):
         if self.project_selection == "resume" and self.plan_status == PlanStatus.ALREADY_COMPLETE:
             self.progress_label.setText("Проект готов — повторный workflow не запускался.")
             return
+        try:
+            require_entitlement = getattr(self.container, "require_entitlement", None)
+            if require_entitlement is not None:
+                require_entitlement("project_preparation")
+        except Exception as exc:
+            QMessageBox.warning(self, "Подписка", str(exc))
+            return
         assert self.metadata is not None
         destination = self.current_destination()
         assert destination is not None
