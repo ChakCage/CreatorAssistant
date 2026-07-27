@@ -11,7 +11,7 @@ import time
 BOT_PERMISSIONS = [
     "users:write", "plans:read", "checkout:create", "subscription:read",
     "activation:create", "devices:write", "release:read",
-    "notifications:read", "notifications:write",
+    "notifications:read", "notifications:write", "beta:redeem",
 ]
 
 

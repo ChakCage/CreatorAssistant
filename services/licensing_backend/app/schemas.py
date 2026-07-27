@@ -73,6 +73,10 @@ class BotUserRequest(BaseModel):
     telegram_user_id: str = Field(min_length=1, max_length=64)
 
 
+class BetaRedeemRequest(BotUserRequest):
+    invite_code: str = Field(min_length=10, max_length=32)
+
+
 class BotDeviceRequest(BotUserRequest):
     device_id: str
     confirmed: bool = False

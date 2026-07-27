@@ -5,9 +5,10 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 def main_menu() -> InlineKeyboardMarkup:
     labels = [
-        ("💳 Тарифы и покупка", "plans"), ("📅 Моя подписка", "subscription"),
+        ("🎟 Получить тестовый доступ", "beta_access"), ("📅 Моя подписка", "subscription"),
         ("🔑 Код активации", "activation"), ("💻 Мои устройства", "devices"),
-        ("⬇️ Скачать", "download"), ("📖 Инструкция", "help"), ("🛟 Поддержка", "support"),
+        ("⬇️ Скачать Creator Assistant", "download"), ("📖 Инструкция", "help"),
+        ("🐞 Сообщить об ошибке", "feedback"), ("🛟 Поддержка", "support"),
     ]
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=text, callback_data=data)] for text, data in labels])
 

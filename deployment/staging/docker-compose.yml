@@ -1,0 +1,205 @@
+name: creator-assistant-staging
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-backend-env: &backend-env
+  LICENSE_ENV: staging
+  LICENSE_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  LICENSE_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+  LICENSE_ACTIVATION_PEPPER: ${LICENSE_ACTIVATION_PEPPER}
+  LICENSE_SIGNING_KEY_ID: ${LICENSE_SIGNING_KEY_ID}
+  LICENSE_SIGNING_PRIVATE_KEY: ${LICENSE_SIGNING_PRIVATE_KEY}
+  LICENSE_ADMIN_TOKEN_HASH: ${LICENSE_ADMIN_TOKEN_HASH}
+  LICENSE_BOT_SERVICE_SECRET: ${LICENSE_BOT_SERVICE_SECRET}
+  LICENSE_PUBLIC_BASE_URL: https://${STAGING_API_DOMAIN}
+  LICENSE_MINIMUM_APP_VERSION: ${LICENSE_MINIMUM_APP_VERSION:-0.3.0}
+  LICENSE_RECOMMENDED_APP_VERSION: ${LICENSE_RECOMMENDED_APP_VERSION:-0.3.0}
+  LICENSE_PAYMENTS_ENABLED: "false"
+
+x-bot-env: &bot-env
+  CREATOR_BOT_ENVIRONMENT: production
+  CREATOR_BOT_TOKEN: ${CREATOR_BOT_TOKEN}
+  CREATOR_BOT_BACKEND_URL: http://api:8080
+  CREATOR_BOT_ALLOW_INTERNAL_BACKEND_HTTP: "true"
+  CREATOR_BOT_SERVICE_SECRET: ${LICENSE_BOT_SERVICE_SECRET}
+  CREATOR_BOT_PUBLIC_URL: https://${STAGING_BOT_DOMAIN}
+  CREATOR_BOT_WEBHOOK_SECRET: ${CREATOR_BOT_WEBHOOK_SECRET}
+  CREATOR_BOT_WEBHOOK_PATH: /telegram/webhook
+  CREATOR_BOT_BIND_HOST: 0.0.0.0
+  CREATOR_BOT_HEALTH_PORT: "8081"
+  CREATOR_BOT_MANAGE_WEBHOOK: "false"
+  CREATOR_BOT_SUPPORT_URL: ${CREATOR_BOT_SUPPORT_URL}
+  CREATOR_BOT_HELP_URL: ${CREATOR_BOT_HELP_URL}
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    environment:
+      STAGING_API_DOMAIN: ${STAGING_API_DOMAIN}
+      STAGING_BOT_DOMAIN: ${STAGING_BOT_DOMAIN}
+      STAGING_DOWNLOAD_DOMAIN: ${STAGING_DOWNLOAD_DOMAIN}
+      TLS_EMAIL: ${TLS_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - releases:/srv/releases:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [edge, internal]
+    logging: *default-logging
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["sh", "-ec", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+
+  migrate:
+    build:
+      context: ../../services/licensing_backend
+    environment: *backend-env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [internal]
+    restart: "no"
+    logging: *default-logging
+
+  api:
+    build:
+      context: ../../services/licensing_backend
+    restart: unless-stopped
+    environment: *backend-env
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+
+  bot:
+    build:
+      context: ../../services/creator_assistant_bot
+    restart: unless-stopped
+    environment: *bot-env
+    depends_on:
+      api: {condition: service_healthy}
+    networks: [internal, egress]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+
+  notification-worker:
+    build:
+      context: ../../services/creator_assistant_bot
+    restart: unless-stopped
+    environment: *bot-env
+    command: ["python", "-m", "bot.worker"]
+    depends_on:
+      api: {condition: service_healthy}
+    networks: [internal, egress]
+    logging: *default-logging
+
+  backup:
+    build:
+      context: ./ops
+      dockerfile: Dockerfile.backup
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+    command: ["/ops/backup-loop.sh"]
+    volumes:
+      - backups:/backups
+      - ./ops:/ops:ro
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    networks: [internal]
+    logging: *default-logging
+
+  health-monitor:
+    build:
+      context: ./ops
+      dockerfile: Dockerfile.monitor
+    restart: unless-stopped
+    environment:
+      API_URL: http://api:8080
+      BOT_URL: http://bot:8081
+      PUBLIC_API_URL: https://${STAGING_API_DOMAIN}
+      PUBLIC_BOT_URL: https://${STAGING_BOT_DOMAIN}
+      STAGING_API_DOMAIN: ${STAGING_API_DOMAIN}
+      CREATOR_BOT_TOKEN: ${CREATOR_BOT_TOKEN}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL}
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command: ["/ops/monitor-loop.sh"]
+    volumes:
+      - backups:/backups:ro
+      - ./ops:/ops:ro
+    depends_on:
+      api: {condition: service_healthy}
+      bot: {condition: service_healthy}
+    networks: [internal, egress]
+    logging: *default-logging
+
+networks:
+  edge:
+  egress:
+  internal:
+    internal: true
+
+volumes:
+  postgres-data:
+  redis-data:
+  releases:
+  backups:
+  caddy-data:
+  caddy-config:

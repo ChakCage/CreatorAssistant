@@ -267,4 +267,33 @@ class Release(Base):
     is_active: Mapped[bool] = mapped_column(default=True, index=True)
     __table_args__ = (UniqueConstraint("edition", "channel", "version", name="uq_release_edition_channel_version"),)
 
+
+class BetaInvite(Base):
+    __tablename__ = "beta_invites"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    code_last4: Mapped[str] = mapped_column(String(4))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    max_uses: Mapped[int] = mapped_column(Integer, default=1)
+    used_count: Mapped[int] = mapped_column(Integer, default=0)
+    subscription_days: Mapped[int] = mapped_column(Integer, default=14)
+    device_limit: Mapped[int] = mapped_column(Integer, default=1)
+    group_description: Mapped[str] = mapped_column(String(200), default="")
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BetaInviteUse(Base):
+    __tablename__ = "beta_invite_uses"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    invite_id: Mapped[str] = mapped_column(ForeignKey("beta_invites.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    telegram_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    subscription_id: Mapped[str] = mapped_column(ForeignKey("subscriptions.id"))
+    redeemed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (
+        UniqueConstraint("invite_id", "user_id", name="uq_beta_invite_user"),
+        UniqueConstraint("telegram_user_id", name="uq_beta_single_subscription"),
+    )
+
 Index("ix_devices_active_subscription", Device.subscription_id, Device.status)

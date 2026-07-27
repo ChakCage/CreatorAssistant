@@ -26,9 +26,14 @@ class BackendClient:
         })
 
     async def plans(self): return await self._request("GET", "/v1/bot/plans")
+    async def ready(self): return await self._request("GET", "/ready")
     async def subscription(self, telegram_user_id: int): return await self._request("GET", f"/v1/bot/subscription/{telegram_user_id}")
     async def activation_code(self, telegram_user_id: int):
         return await self._request("POST", "/v1/bot/activation-code", json={"telegram_user_id": str(telegram_user_id)})
+    async def redeem_beta(self, telegram_user_id: int, invite_code: str):
+        return await self._request("POST", "/v1/bot/beta/redeem", json={
+            "telegram_user_id": str(telegram_user_id), "invite_code": invite_code,
+        })
     async def create_checkout(self, telegram_user_id: int, plan_id: str, price_id: str, idempotency_key: str):
         return await self._request("POST", "/v1/billing/checkout", json={
             "telegram_user_id": str(telegram_user_id), "plan_id": plan_id,

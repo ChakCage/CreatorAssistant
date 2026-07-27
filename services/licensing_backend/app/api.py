@@ -20,24 +20,38 @@ from .billing import BillingService
 from .models import ActivationCode, ActivationCodeStatus, AdminAction, BotNotification, Device, DeviceStatus, LicenseEvent, LicenseSession, Plan, Price, Release, SessionStatus, Subscription, SubscriptionStatus, User, UserStatus, utcnow
 from .rate_limit import RateLimiter
 from .schemas import (ActivateRequest, AdminCodeRequest, AdminGrantRequest, AdminPriceRequest,
-                      AdminReleaseRequest, AdminUserRequest, BotDeviceRequest, BotUserRequest,
+                      AdminReleaseRequest, AdminUserRequest, BetaRedeemRequest, BotDeviceRequest, BotUserRequest,
                       CheckoutRequest, DeactivateRequest, NotificationResultRequest,
                       RefreshRequest, TelegramUserRequest)
 from .security import verify_service_token
 from .service import LicenseError, LicenseManager, aware, iso
 from .release_signing import release_manifest
+from .beta_access import BetaAccessService
+from .redaction import SecretRedactionFilter
 
 
-settings = load_settings(); manager = LicenseManager(settings); billing = BillingService(settings, manager); limiter = RateLimiter(settings.redis_url)
+settings = load_settings(); manager = LicenseManager(settings); billing = BillingService(settings, manager); beta_access = BetaAccessService(manager); limiter = RateLimiter(settings.redis_url)
 app = FastAPI(title="Creator Assistant Licensing", version="1.0.0")
 audit_log = logging.getLogger("creator_assistant.requests")
+audit_log.addFilter(SecretRedactionFilter())
 
 
 @app.middleware("http")
 async def request_context(request: Request, call_next):
     request_id = str(uuid.uuid4()); request.state.request_id = request_id
+    raw_content_length = request.headers.get("content-length", "0") or "0"
+    if not raw_content_length.isdigit():
+        return JSONResponse(status_code=400, content={"error": {"code": "INVALID_CONTENT_LENGTH"}, "request_id": request_id})
+    content_length = int(raw_content_length)
+    if content_length > settings.webhook_max_bytes:
+        return JSONResponse(status_code=413, content={"error": {"code": "REQUEST_TOO_LARGE"}, "request_id": request_id})
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    if settings.public_base_url.startswith("https://"):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     route = request.scope.get("route")
     audit_log.info(json.dumps({"request_id": request_id, "method": request.method,
                                "route": getattr(route, "path", "unmatched"),
@@ -141,6 +155,8 @@ def activate(value: ActivateRequest, request: Request, db: Session = Depends(get
 
 @app.post("/v1/licenses/refresh")
 def refresh(value: RefreshRequest, request: Request, db: Session = Depends(get_db)):
+    if not limiter.allow(f"refresh:{client_ip(request)}:{value.installation_id[:16]}", 60, 3600):
+        raise LicenseError("TOO_MANY_ATTEMPTS", 429)
     result = manager.refresh(db, value, ip=client_ip(request), user_agent=request.headers.get("user-agent", "")); db.commit(); return result
 
 
@@ -159,7 +175,9 @@ def status(session: LicenseSession = Depends(refresh_session), db: Session = Dep
 
 
 @app.get("/v1/licenses/devices")
-def devices(session: LicenseSession = Depends(refresh_session), db: Session = Depends(get_db)):
+def devices(request: Request, session: LicenseSession = Depends(refresh_session), db: Session = Depends(get_db)):
+    if not limiter.allow(f"devices:{session.device.user_id}:{client_ip(request)}", 120, 3600):
+        raise LicenseError("TOO_MANY_ATTEMPTS", 429)
     return {"devices": manager.devices(db, session), "server_time": iso(utcnow())}
 
 
@@ -239,6 +257,8 @@ def bot_plans(_identity: dict = Depends(require_service("plans:read")), db: Sess
 
 @app.post("/v1/billing/checkout")
 def checkout(value: CheckoutRequest, _identity: dict = Depends(require_service("checkout:create")), db: Session = Depends(get_db)):
+    if not settings.payments_enabled:
+        raise HTTPException(404)
     if not limiter.allow(f"checkout:{value.telegram_user_id}", 20, 3600):
         raise LicenseError("TOO_MANY_ATTEMPTS", 429)
     result = billing.create_checkout(db, value); db.commit(); return result
@@ -246,7 +266,7 @@ def checkout(value: CheckoutRequest, _identity: dict = Depends(require_service("
 
 @app.get("/v1/billing/fake/checkout/{token}", response_class=HTMLResponse)
 def fake_checkout(token: str, db: Session = Depends(get_db)):
-    if settings.production:
+    if not settings.payments_enabled:
         raise HTTPException(404)
     row = billing.checkout_by_token(db, token); payment = row.payment
     csrf = billing.checkout_csrf(row)
@@ -263,7 +283,7 @@ def fake_checkout(token: str, db: Session = Depends(get_db)):
 
 @app.post("/v1/billing/fake/checkout/{token}", response_class=HTMLResponse)
 async def fake_checkout_action(token: str, request: Request, db: Session = Depends(get_db)):
-    if settings.production:
+    if not settings.payments_enabled:
         raise HTTPException(404)
     raw_form = await request.body()
     if len(raw_form) > 4096:
@@ -289,6 +309,8 @@ async def fake_checkout_action(token: str, request: Request, db: Session = Depen
 
 @app.post("/v1/billing/webhooks/{provider}")
 async def payment_webhook(provider: str, request: Request, db: Session = Depends(get_db)):
+    if not settings.payments_enabled:
+        raise HTTPException(404)
     body = await request.body()
     if len(body) > settings.webhook_max_bytes:
         raise HTTPException(413, "Webhook body too large")
@@ -304,7 +326,18 @@ def bot_subscription(telegram_user_id: str, _identity: dict = Depends(require_se
 
 @app.post("/v1/bot/activation-code")
 def bot_activation(value: BotUserRequest, _identity: dict = Depends(require_service("activation:create")), db: Session = Depends(get_db)):
+    if not limiter.allow(f"activation-code:{value.telegram_user_id}", 5, 3600):
+        raise HTTPException(429, "Activation code rate limit exceeded")
     result = billing.create_activation_code(db, value.telegram_user_id); db.commit(); return result
+
+
+@app.post("/v1/bot/beta/redeem")
+def bot_beta_redeem(value: BetaRedeemRequest, _identity: dict = Depends(require_service("beta:redeem")), db: Session = Depends(get_db)):
+    if not limiter.allow(f"beta-redeem:{value.telegram_user_id}", 8, 3600):
+        raise HTTPException(429, "Invite redemption rate limit exceeded")
+    subscription = beta_access.redeem(db, value.telegram_user_id, value.invite_code)
+    db.commit()
+    return {"status": subscription.status.value, "expires_at": iso(subscription.expires_at)}
 
 
 @app.post("/v1/bot/devices/deactivate")
@@ -313,8 +346,21 @@ def bot_deactivate(value: BotDeviceRequest, _identity: dict = Depends(require_se
 
 
 @app.get("/v1/bot/release")
-def bot_release(_identity: dict = Depends(require_service("release:read")), db: Session = Depends(get_db)):
-    return billing.active_release(db)
+def bot_release(request: Request, _identity: dict = Depends(require_service("release:read")), db: Session = Depends(get_db)):
+    if not limiter.allow(f"bot-release:{client_ip(request)}", 60, 60):
+        raise HTTPException(429, "Release lookup rate limit exceeded")
+    row = db.scalar(select(Release).where(
+        Release.edition == "commercial", Release.channel == "beta",
+        Release.is_active.is_(True), Release.signature.is_not(None),
+    ).order_by(Release.published_at.desc()))
+    if not row:
+        raise LicenseError("RELEASE_NOT_FOUND", 404)
+    return {
+        "version": row.version, "download_url": row.download_url, "sha256": row.sha256,
+        "file_size": row.file_size, "release_notes": row.release_notes,
+        "published_at": iso(row.published_at), "unsigned_beta": True,
+        "edition": row.edition, "channel": row.channel,
+    }
 
 
 @app.get("/v1/bot/notifications")

@@ -28,6 +28,7 @@ class Settings:
     bot_service_secret: str
     webhook_max_bytes: int
     checkout_ttl_minutes: int
+    payments_enabled: bool
 
     @property
     def production(self) -> bool:
@@ -48,6 +49,7 @@ def load_settings() -> Settings:
     public_base_url = os.getenv("LICENSE_PUBLIC_BASE_URL", "http://127.0.0.1:18080").rstrip("/")
     fake_payment_secret = os.getenv("LICENSE_FAKE_PAYMENT_SECRET", "")
     bot_service_secret = os.getenv("LICENSE_BOT_SERVICE_SECRET", "")
+    payments_enabled = os.getenv("LICENSE_PAYMENTS_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
     if environment in {"production", "staging"}:
         if not database_url.startswith("postgresql+"):
             raise RuntimeError("Production/staging licensing backend requires PostgreSQL")
@@ -57,8 +59,12 @@ def load_settings() -> Settings:
             raise RuntimeError("Production/staging public URL must use HTTPS")
         if len(bot_service_secret) < 32:
             raise RuntimeError("LICENSE_BOT_SERVICE_SECRET is required")
-        if environment == "staging" and len(fake_payment_secret) < 32:
-            raise RuntimeError("LICENSE_FAKE_PAYMENT_SECRET is required in staging")
+        forbidden = ("change-me", "changeme", "placeholder", "example", "default")
+        secret_values = (pepper, bot_service_secret, os.getenv("LICENSE_ADMIN_TOKEN_HASH", ""))
+        if any(any(marker in value.casefold() for marker in forbidden) for value in secret_values):
+            raise RuntimeError("Production/staging refuses placeholder secrets")
+        if environment == "staging" and payments_enabled:
+            raise RuntimeError("Payments must remain disabled in staging")
     else:
         # Ephemeral values are safe for one-process local/test use only and are never persisted.
         pepper = pepper or secrets.token_urlsafe(32)
@@ -82,6 +88,7 @@ def load_settings() -> Settings:
         bot_service_secret=bot_service_secret,
         webhook_max_bytes=int(os.getenv("LICENSE_WEBHOOK_MAX_BYTES", "262144")),
         checkout_ttl_minutes=int(os.getenv("LICENSE_CHECKOUT_TTL_MINUTES", "30")),
+        payments_enabled=payments_enabled,
     )
 
 

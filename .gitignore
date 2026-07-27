@@ -27,6 +27,7 @@ dist/
 # Secrets and per-user configuration
 .env
 .env.*
+!deployment/staging/.env.staging.example
 settings.json
 user_settings.json
 cookies.txt

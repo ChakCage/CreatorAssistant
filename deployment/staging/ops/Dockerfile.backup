@@ -1,0 +1,3 @@
+FROM postgres:16
+COPY . /ops
+RUN command -v pg_dump && command -v pg_restore && command -v openssl && chmod 0555 /ops/*.sh

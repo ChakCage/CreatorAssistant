@@ -11,6 +11,7 @@ os.environ["LICENSE_ACTIVATION_PEPPER"] = "test-pepper-that-is-long-and-never-pr
 os.environ["LICENSE_SIGNING_KEY_ID"] = "test-key"
 os.environ["LICENSE_SIGNING_PRIVATE_KEY"] = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
 os.environ["LICENSE_ADMIN_TOKEN_HASH"] = hashlib.sha256(b"test-admin-token").hexdigest()
+os.environ["LICENSE_PAYMENTS_ENABLED"] = "true"
 
 import pytest
 from fastapi.testclient import TestClient

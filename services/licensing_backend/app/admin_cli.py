@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
+import os
 from pathlib import Path
-from datetime import timedelta
 
 from sqlalchemy import select, update
 
 from .config import hash_admin_token, load_settings
 from .billing import BillingService
 from .db import SessionLocal
-from .models import (ActivationCode, ActivationCodeStatus, AdminAction, BotNotification, Device,
+from .models import (ActivationCode, ActivationCodeStatus, AdminAction, BetaInvite, BotNotification, Device,
                      DeviceStatus, LicenseEvent, LicenseSession, NotificationStatus, Payment,
                      PaymentEvent, PaymentEventStatus, PaymentStatus, Plan, Price, SessionStatus,
                      Release, Subscription, SubscriptionStatus, User, UserStatus, utcnow)
 from .service import LicenseManager, iso
+from .beta_access import BetaAccessService
 
 
 def parser() -> argparse.ArgumentParser:
@@ -53,6 +55,21 @@ def parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name); p.add_argument("--payment", required=True); p.add_argument("--reason", default="")
     p = sub.add_parser("retry-notification"); p.add_argument("--notification", required=True)
     p = sub.add_parser("list-payment-events"); p.add_argument("--limit", type=int, default=100)
+    p = sub.add_parser("create-beta-invite")
+    p.add_argument("--days", type=int, default=14); p.add_argument("--uses", type=int, default=1)
+    p.add_argument("--subscription-days", type=int, default=14); p.add_argument("--device-limit", type=int, default=1)
+    p.add_argument("--description", default="")
+    p = sub.add_parser("list-beta-invites")
+    p = sub.add_parser("show-beta-invite"); p.add_argument("--invite", required=True)
+    p = sub.add_parser("revoke-beta-invite"); p.add_argument("--invite", required=True)
+    for name in ("grant-beta-subscription", "extend-beta-subscription"):
+        p = sub.add_parser(name); p.add_argument("--telegram-user-id", required=True)
+        p.add_argument("--days", type=int, default=14); p.add_argument("--device-limit", type=int, default=1)
+    p = sub.add_parser("list-beta-users")
+    p = sub.add_parser("show-beta-user"); p.add_argument("--telegram-user-id", required=True)
+    p = sub.add_parser("revoke-beta-access"); p.add_argument("--telegram-user-id", required=True)
+    p = sub.add_parser("reset-beta-device"); p.add_argument("--device", required=True)
+    p = sub.add_parser("export-beta-report"); p.add_argument("--output", required=True)
     p = sub.add_parser("fake-payment-event"); p.add_argument("--payment", required=True); p.add_argument("--event", choices=("success", "cancel", "refund"), required=True); p.add_argument("--event-id"); p.add_argument("--invalid-signature", action="store_true")
     p = sub.add_parser("mark-payment-for-review"); p.add_argument("--payment", required=True); p.add_argument("--reason", required=True)
     for name in ("simulate-payment-success", "simulate-payment-cancel", "simulate-refund", "simulate-duplicate-webhook", "simulate-invalid-signature"):
@@ -61,9 +78,12 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
-    args = parser().parse_args(argv); settings = load_settings(); manager = LicenseManager(settings); billing = BillingService(settings, manager)
+    args = parser().parse_args(argv); settings = load_settings(); manager = LicenseManager(settings); billing = BillingService(settings, manager); beta_access = BetaAccessService(manager)
     if args.command == "create-admin":
         print("LICENSE_ADMIN_TOKEN_HASH=" + hash_admin_token(args.token)); return 0
+    admin_token = os.getenv("LICENSE_CLI_ADMIN_TOKEN", "")
+    if not settings.admin_token_hash or not hmac.compare_digest(hash_admin_token(admin_token), settings.admin_token_hash):
+        raise SystemExit("Admin authorization required: set LICENSE_CLI_ADMIN_TOKEN in the protected shell")
     with SessionLocal() as db:
         product, beta = manager.bootstrap(db)
         if args.command == "create-user":
@@ -99,6 +119,87 @@ def main(argv=None) -> int:
             plan = db.scalar(select(Plan).where(Plan.code == args.plan)) or beta
             row = Price(plan_id=plan.id, provider=args.provider, amount_minor=args.amount_minor, currency=args.currency.upper())
             db.add(row); db.flush(); result = {"id": row.id}
+        elif args.command == "create-beta-invite":
+            if min(args.days, args.uses, args.subscription_days, args.device_limit) < 1:
+                raise SystemExit("Beta invite limits must be positive")
+            row, code = beta_access.create_invite(
+                db, valid_days=args.days, max_uses=args.uses,
+                subscription_days=args.subscription_days, device_limit=args.device_limit,
+                description=args.description,
+            )
+            result = {"id": row.id, "invite_code": code, "note": "Invite code is shown once"}
+        elif args.command == "list-beta-invites":
+            rows = db.scalars(select(BetaInvite).order_by(BetaInvite.created_at.desc())).all()
+            result = [_invite_json(row) for row in rows]
+        elif args.command == "show-beta-invite":
+            row = db.get(BetaInvite, args.invite); result = _invite_json(row) if row else {}
+        elif args.command == "revoke-beta-invite":
+            row = db.get(BetaInvite, args.invite)
+            if not row: raise SystemExit("Beta invite not found")
+            beta_access.revoke(db, row); result = _invite_json(row)
+        elif args.command in {"grant-beta-subscription", "extend-beta-subscription"}:
+            user = db.scalar(select(User).where(User.telegram_user_id == args.telegram_user_id))
+            if not user:
+                user = User(telegram_user_id=args.telegram_user_id); db.add(user); db.flush()
+            product, _ = manager.bootstrap(db); code = f"beta-device-{args.device_limit}"
+            plan = db.scalar(select(Plan).where(Plan.product_id == product.id, Plan.code == code))
+            if not plan:
+                plan = Plan(product_id=product.id, code=code, name="Closed Beta", duration_days=args.days,
+                            device_limit=args.device_limit, features=["project_preparation", "shorts_analysis", "shorts_render"])
+                db.add(plan); db.flush()
+            subscription = manager.grant(db, user, plan, args.days)
+            db.add(AdminAction(admin_id="cli", action=args.command, target_type="subscription", target_id=subscription.id))
+            result = {"subscription_id": subscription.id, "expires_at": iso(subscription.expires_at)}
+        elif args.command in {"list-beta-users", "export-beta-report"}:
+            subscriptions = db.scalars(
+                select(Subscription).join(Plan, Subscription.plan_id == Plan.id)
+                .where(Plan.code.like("beta-device-%"))
+                .order_by(Subscription.created_at.desc())
+            ).all()
+            result = [{
+                "telegram_user_id": row.user.telegram_user_id,
+                "subscription_id": row.id,
+                "status": row.status.value,
+                "expires_at": iso(row.expires_at),
+                "device_limit": row.plan.device_limit,
+            } for row in subscriptions]
+            if args.command == "export-beta-report":
+                output = Path(args.output); output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+                result = {"output": str(output), "users": len(result)}
+        elif args.command == "show-beta-user":
+            user = db.scalar(select(User).where(User.telegram_user_id == args.telegram_user_id))
+            if user:
+                subscriptions = db.scalars(
+                    select(Subscription).join(Plan, Subscription.plan_id == Plan.id)
+                    .where(Subscription.user_id == user.id, Plan.code.like("beta-device-%"))
+                ).all()
+                result = {
+                    "id": user.id, "telegram_user_id": user.telegram_user_id,
+                    "status": user.status.value,
+                    "subscriptions": [{"id": row.id, "status": row.status.value,
+                                       "expires_at": iso(row.expires_at)} for row in subscriptions],
+                    "devices": [{"id": row.id, "status": row.status.value}
+                                for row in db.scalars(select(Device).where(Device.user_id == user.id)).all()],
+                }
+            else:
+                result = {}
+        elif args.command == "revoke-beta-access":
+            user = db.scalar(select(User).where(User.telegram_user_id == args.telegram_user_id))
+            if not user: raise SystemExit("Beta user not found")
+            rows = db.scalars(
+                select(Subscription).join(Plan, Subscription.plan_id == Plan.id)
+                .where(Subscription.user_id == user.id, Plan.code.like("beta-device-%"))
+            ).all()
+            for row in rows: row.status = SubscriptionStatus.CANCELLED; row.cancelled_at = utcnow()
+            db.add(AdminAction(admin_id="cli", action=args.command, target_type="user", target_id=user.id))
+            result = {"revoked": len(rows)}
+        elif args.command == "reset-beta-device":
+            device = db.get(Device, args.device)
+            if not device: raise SystemExit("Device not found")
+            device.status = DeviceStatus.DEACTIVATED; device.deactivated_at = utcnow()
+            db.add(AdminAction(admin_id="cli", action=args.command, target_type="device", target_id=device.id))
+            result = {"id": device.id, "status": device.status.value}
         elif args.command == "create-release":
             if not args.download_url.startswith(("https://", "http://127.0.0.1:", "http://localhost:")):
                 raise SystemExit("Release URL must use HTTPS (localhost is allowed for staging tests)")
@@ -186,6 +287,15 @@ def _payment_json(row: Payment) -> dict:
             "provider_payment_id": row.provider_payment_id, "status": row.status.value,
             "amount_minor": row.amount_minor, "currency": row.currency,
             "expires_at": iso(row.expires_at)}
+
+
+def _invite_json(row: BetaInvite) -> dict:
+    return {
+        "id": row.id, "code_last4": row.code_last4, "expires_at": iso(row.expires_at),
+        "max_uses": row.max_uses, "used_count": row.used_count,
+        "subscription_days": row.subscription_days, "device_limit": row.device_limit,
+        "description": row.group_description, "revoked": bool(row.revoked_at),
+    }
 
 
 if __name__ == "__main__": raise SystemExit(main())

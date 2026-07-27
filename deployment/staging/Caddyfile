@@ -1,0 +1,48 @@
+{
+	email {$TLS_EMAIL}
+	admin off
+}
+
+{$STAGING_API_DOMAIN} {
+	encode zstd gzip
+	request_body {
+		max_size 256KB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	@admin path /v1/admin/*
+	respond @admin 404
+	reverse_proxy api:8080
+}
+
+{$STAGING_BOT_DOMAIN} {
+	request_body {
+		max_size 256KB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+	@allowed path /telegram/webhook /health /ready
+	reverse_proxy @allowed bot:8081
+	respond 404
+}
+
+{$STAGING_DOWNLOAD_DOMAIN} {
+	root * /srv/releases
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Content-Security-Policy "default-src 'none'"
+		-Server
+	}
+	@installer path_regexp installer ^/CreatorAssistant-Commercial-Staging-[0-9A-Za-z._-]+\.exe$
+	file_server @installer
+	respond 404
+}
