@@ -87,6 +87,7 @@ class ProjectPrepTab(QWidget):
         self.progress_tracker: Optional[WeightedProgressTracker] = None
         self._last_progress_paint = 0.0
         self._last_painted_stage = ""
+        self._last_log_key = None
         self.metadata_request_in_progress = False
         self.current_request_id: Optional[str] = None
         self.metadata_thread: Optional[QThread] = None
@@ -277,6 +278,43 @@ class ProjectPrepTab(QWidget):
         options_layout.addWidget(self.backend_label, 3, 0, 1, 2)
         self._refresh_backend_label()
         left_layout.addWidget(options_group)
+        proxy_group = QGroupBox("Proxy для REAPER")
+        proxy_layout = QVBoxLayout(proxy_group)
+        self.proxy_status_label = QLabel("Файл ещё не проверен")
+        self.proxy_status_label.setWordWrap(True)
+        self.proxy_status_label.setProperty("class", "muted")
+        proxy_layout.addWidget(self.proxy_status_label)
+        proxy_actions = QHBoxLayout()
+        self.check_proxy_button = QPushButton("Проверить")
+        self.use_proxy_button = QPushButton("Использовать существующий")
+        self.recreate_proxy_button = QPushButton("Пересоздать")
+        self.open_proxy_button = QPushButton("Открыть файл")
+        self.recover_dependencies_button = QPushButton("Восстановить готовые зависимости")
+        self.check_proxy_button.clicked.connect(
+            self._safe_ui_action("check_proxy_artifact", self.check_proxy_artifact)
+        )
+        self.use_proxy_button.clicked.connect(
+            self._safe_ui_action("use_existing_proxy", self.use_existing_proxy)
+        )
+        self.recreate_proxy_button.clicked.connect(
+            self._safe_ui_action("recreate_proxy", self.recreate_proxy)
+        )
+        self.open_proxy_button.clicked.connect(
+            self._safe_ui_action("open_proxy_artifact", self.open_proxy_artifact)
+        )
+        self.recover_dependencies_button.clicked.connect(
+            self._safe_ui_action("recover_ready_dependencies", self.recover_ready_dependencies)
+        )
+        for button in (
+            self.check_proxy_button,
+            self.use_proxy_button,
+            self.recreate_proxy_button,
+            self.open_proxy_button,
+            self.recover_dependencies_button,
+        ):
+            proxy_actions.addWidget(button)
+        proxy_layout.addLayout(proxy_actions)
+        left_layout.addWidget(proxy_group)
         actions = QHBoxLayout()
         self.create_button = QPushButton("Создать проект")
         self.create_button.setObjectName("primaryButton")
@@ -293,6 +331,7 @@ class ProjectPrepTab(QWidget):
         self.open_vegas_button.setEnabled(False)
         self.open_folder_button.setEnabled(False)
         self.rebuild_index_button.setEnabled(False)
+        self.recover_dependencies_button.setEnabled(False)
         self.create_button.clicked.connect(self._safe_ui_action("continue_or_create_project", self.create_project))
         self.cancel_button.clicked.connect(self._safe_ui_action("cancel", self.cancel_job))
         self.new_project_button.clicked.connect(self._safe_ui_action("new_project", self.new_project))
@@ -1177,6 +1216,7 @@ class ProjectPrepTab(QWidget):
         """Recalculate the plan from cached Preflight states; never scans or starts a Job."""
         if not self.metadata or not self.selected_project_path or not self._resume_states:
             return
+        self._refresh_proxy_card()
         options = self.options()
         projects = self.container.projects
         selected = projects.selected_output_roles(options)
@@ -1451,6 +1491,13 @@ class ProjectPrepTab(QWidget):
         )
         self.open_folder_button.setEnabled(project_ok and not busy)
         self.rebuild_index_button.setEnabled(project_ok and not busy)
+        self.recover_dependencies_button.setEnabled(project_ok and not busy and bool(self.metadata))
+        proxy_path = str(self._resume_states.get("proxy", {}).get("path") or "")
+        proxy_exists = bool(proxy_path and Path(proxy_path).is_file())
+        self.check_proxy_button.setEnabled(project_ok and not busy and bool(self.metadata))
+        self.use_proxy_button.setEnabled(proxy_exists and not busy)
+        self.recreate_proxy_button.setEnabled(project_ok and not busy and bool(self.metadata))
+        self.open_proxy_button.setEnabled(proxy_exists and not busy)
         self.open_rpp_button.setEnabled(rpp_ok and not busy)
         self.open_vegas_button.setEnabled(vegas_ok and not busy)
 
@@ -1470,6 +1517,116 @@ class ProjectPrepTab(QWidget):
             self._sync_project_actions()
             return
         os.startfile(str(path))
+
+    def recover_ready_dependencies(self) -> None:
+        if not self.metadata or not self.selected_project_path:
+            return
+        options = self.options()
+        states = self.container.projects.inspect_existing(
+            self.metadata,
+            options,
+            self.selected_project_path,
+            CancellationToken(),
+        )
+        use_existing = False
+        proxy = states.get("proxy", {})
+        if proxy.get("status") == "INVALID" and proxy.get("path"):
+            box = QMessageBox(self)
+            box.setWindowTitle("Proxy найден, но не зарегистрирован")
+            box.setIcon(QMessageBox.Warning)
+            box.setText(
+                "Файл proxy найден, но не зарегистрирован как готовый.\n"
+                f"Причина: {proxy.get('reason') or 'файл не соответствует текущему профилю'}\n\n"
+                "Можно использовать существующий файл без перекодирования "
+                "или продолжить для создания оптимизированного proxy."
+            )
+            reuse = box.addButton("Использовать существующий", QMessageBox.AcceptRole)
+            recreate = box.addButton("Создать proxy 30 FPS", QMessageBox.ActionRole)
+            box.addButton("Отмена", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() == reuse:
+                use_existing = True
+            elif box.clickedButton() == recreate:
+                self.proxy_check.setChecked(True)
+                self.create_project()
+                return
+            else:
+                return
+        self._resume_states = self.container.projects.recover_ready_dependencies(
+            self.metadata,
+            options,
+            self.selected_project_path,
+            CancellationToken(),
+            use_existing_proxy=use_existing,
+        )
+        ready = sum(
+            1 for details in self._resume_states.values()
+            if isinstance(details, dict) and details.get("status") == "VALID"
+        )
+        self.log.appendPlainText(
+            f"Восстановление завершено: зарегистрировано готовых зависимостей — {ready}."
+        )
+        self._refresh_preflight_plan()
+        self._sync_project_actions()
+
+    def check_proxy_artifact(self) -> None:
+        if not self.metadata or not self.selected_project_path:
+            return
+        self._resume_states = self.container.projects.inspect_existing(
+            self.metadata,
+            self.options(),
+            self.selected_project_path,
+            CancellationToken(),
+        )
+        self._refresh_proxy_card()
+        self._refresh_preflight_plan()
+        self._sync_project_actions()
+
+    def use_existing_proxy(self) -> None:
+        if not self.metadata or not self.selected_project_path:
+            return
+        self._resume_states = self.container.projects.recover_ready_dependencies(
+            self.metadata,
+            self.options(),
+            self.selected_project_path,
+            CancellationToken(),
+            use_existing_proxy=True,
+        )
+        self._refresh_proxy_card()
+        self._refresh_preflight_plan()
+        self._sync_project_actions()
+
+    def recreate_proxy(self) -> None:
+        self.proxy_check.setChecked(True)
+        self.create_project()
+
+    def open_proxy_artifact(self) -> None:
+        raw = self._resume_states.get("proxy", {}).get("path")
+        path = Path(str(raw)) if raw else None
+        if path and path.is_file():
+            os.startfile(str(path))
+
+    def _refresh_proxy_card(self) -> None:
+        details = self._resume_states.get("proxy", {})
+        status = str(details.get("status") or "MISSING")
+        path = str(details.get("path") or "—")
+        resolution = (
+            f"{details.get('width') or '?'}×{details.get('height') or '?'}"
+            if details.get("width") or details.get("height")
+            else "—"
+        )
+        fps = details.get("fps")
+        self.proxy_status_label.setText(
+            f"Путь: {path}\n"
+            f"Статус: {status} · Источник: {details.get('source') or '—'}\n"
+            f"Видео: {resolution} · {details.get('codec') or '—'} · "
+            f"{float(fps):.3f} FPS\n"
+            f"Проверка: {details.get('validation_result') or details.get('reason') or '—'}"
+            if fps is not None
+            else
+            f"Путь: {path}\nСтатус: {status}\n"
+            f"Проверка: {details.get('reason') or 'файл не найден'}"
+        )
 
     def rebuild_media_index(self) -> None:
         path = self.current_project_path
@@ -1784,6 +1941,17 @@ class ProjectPrepTab(QWidget):
             and not producers[key]
         ]
         if missing_unproducible:
+            proxy_state = self._resume_states.get("proxy", {})
+            if "proxy" in missing_unproducible and proxy_state.get("path"):
+                QMessageBox.warning(
+                    self,
+                    "Proxy найден, но не готов",
+                    "Файл proxy найден, но не зарегистрирован как готовый.\n"
+                    f"Причина: {proxy_state.get('reason') or 'проверка не пройдена'}\n\n"
+                    "Используйте «Восстановить готовые зависимости», чтобы "
+                    "принять существующий файл, пересоздать его или выбрать другой.",
+                )
+                return False
             QMessageBox.warning(
                 self,
                 "Неполный план",
@@ -1937,7 +2105,10 @@ class ProjectPrepTab(QWidget):
                 self.stage_list.setCurrentRow(index)
             elif self.progress_tracker and stage in self.progress_tracker.completed:
                 item.setText("✓  " + self._stage_name(stage))
-        self.log.appendPlainText(f"[{display_stage}] {info.message}")
+        log_key = (info.stage, info.message)
+        if log_key != self._last_log_key or info.percent in (0, 100):
+            self.log.appendPlainText(f"[{display_stage}] {info.message}")
+            self._last_log_key = log_key
 
     def _reset_progress(self, options: ProjectOptions) -> None:
         active = [

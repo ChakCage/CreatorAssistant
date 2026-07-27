@@ -1,26 +1,49 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from creator_assistant.domain.job import CancellationToken
-from creator_assistant.domain.models import ProgressInfo
+from creator_assistant.domain.models import ProgressInfo, ProxyFpsPolicy
 from creator_assistant.domain.progress import format_bytes
 from creator_assistant.infrastructure.process_runner import ProcessRunner
 
 
 class FfmpegService:
+    _proxy_lock = threading.Lock()
+    _active_proxy_keys: set[str] = set()
+
     def __init__(self, runner: ProcessRunner, ffmpeg_path: str, nvenc_available: bool = False, ffprobe_path: str = "") -> None:
         self.runner = runner
         self.ffmpeg_path = ffmpeg_path
         self.nvenc_available = nvenc_available
         self.ffprobe_path = ffprobe_path
 
-    def build_proxy_command(self, source: Path, target: Path, transcode_video: bool = True, maximum_height: int = 720) -> List[str]:
+    def build_proxy_command(
+        self,
+        source: Path,
+        target: Path,
+        transcode_video: bool = True,
+        maximum_height: int = 720,
+        fps_policy: ProxyFpsPolicy = ProxyFpsPolicy.PRESERVE,
+        source_fps: Optional[float] = None,
+    ) -> List[str]:
         command = [self.ffmpeg_path, "-hide_banner", "-y", "-i", str(source), "-map", "0:v:0", "-map", "0:a:0?"]
         if transcode_video:
-            command.extend(["-vf", f"scale=-2:min({maximum_height}\\,ih)"])
+            filters = [f"scale=-2:min({maximum_height}\\,ih)"]
+            if fps_policy == ProxyFpsPolicy.EXACT_30:
+                filters.append("fps=30")
+            elif fps_policy == ProxyFpsPolicy.CAP_30 and source_fps and source_fps > 30.05:
+                target_rate = (
+                    "30000/1001"
+                    if abs(source_fps - (60000 / 1001)) < 0.01
+                    else "30"
+                )
+                filters.append(f"fps={target_rate}")
+            command.extend(["-vf", ",".join(filters)])
             if self.nvenc_available:
                 command.extend(["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "20", "-b:v", "0"])
             else:
@@ -31,7 +54,8 @@ class FfmpegService:
             command.extend(["-c:a", "aac", "-b:a", "192k"])
         else:
             command.extend(["-c:a", "copy"])
-        command.extend(["-fps_mode", "passthrough", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(target)])
+        fps_mode = "passthrough" if fps_policy == ProxyFpsPolicy.PRESERVE else "cfr"
+        command.extend(["-fps_mode", fps_mode, "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(target)])
         return command
 
     def create_proxy(
@@ -43,12 +67,20 @@ class FfmpegService:
         on_progress: Optional[Callable[[ProgressInfo], None]] = None,
         stage: str = "Создание видео-прокси",
         maximum_height: int = 720,
+        fps_policy: ProxyFpsPolicy = ProxyFpsPolicy.PRESERVE,
+        source_fps: Optional[float] = None,
         environment: Optional[Dict[str, str]] = None,
         cwd: Optional[Path] = None,
     ) -> Path:
         temporary = target.with_name(target.stem + ".tmp" + target.suffix)
         duration = self._duration(source)
         values = {}
+        proxy_key = self.proxy_key(
+            source,
+            maximum_height,
+            fps_policy,
+            source_fps,
+        )
 
         def parse(line: str) -> None:
             if "=" not in line:
@@ -79,15 +111,54 @@ class FfmpegService:
                 )
             )
 
-        self.runner.run(
-            self.build_proxy_command(source, temporary, transcode_video, maximum_height),
-            cancellation=cancellation,
-            on_line=parse,
-            environment=environment,
-            cwd=cwd,
-        )
-        os.replace(str(temporary), str(target))
+        with self._proxy_lock:
+            if proxy_key in self._active_proxy_keys:
+                raise RuntimeError(
+                    "Создание этого proxy уже выполняется; повторный job не запущен."
+                )
+            self._active_proxy_keys.add(proxy_key)
+        try:
+            self.runner.run(
+                self.build_proxy_command(
+                    source,
+                    temporary,
+                    transcode_video,
+                    maximum_height,
+                    fps_policy,
+                    source_fps,
+                ),
+                cancellation=cancellation,
+                on_line=parse,
+                environment=environment,
+                cwd=cwd,
+            )
+            os.replace(str(temporary), str(target))
+        finally:
+            with self._proxy_lock:
+                self._active_proxy_keys.discard(proxy_key)
         return target
+
+    @staticmethod
+    def proxy_key(
+        source: Path,
+        maximum_height: int,
+        fps_policy: ProxyFpsPolicy,
+        source_fps: Optional[float],
+        *,
+        codec_policy: str = "h264-reaper",
+        pixel_format: str = "auto",
+        profile_version: int = 1,
+    ) -> str:
+        try:
+            stat = source.stat()
+            fingerprint = f"{source.resolve()}|{stat.st_size}|{stat.st_mtime_ns}"
+        except OSError:
+            fingerprint = str(source.resolve())
+        payload = (
+            f"{fingerprint}|{maximum_height}|{codec_policy}|{fps_policy.value}|"
+            f"{source_fps or 0:.6f}|{pixel_format}|{profile_version}"
+        )
+        return hashlib.sha256(payload.encode("utf-8", errors="surrogatepass")).hexdigest()
 
     def remux_maximum_to_mp4(
         self,

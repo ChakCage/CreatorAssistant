@@ -6,7 +6,7 @@ import pytest
 from creator_assistant.domain.job import CancellationToken
 from creator_assistant.domain.errors import JobCancelledError
 from creator_assistant.domain.errors import DiskSpaceError
-from creator_assistant.domain.models import ProjectOptions, VideoFormat, VideoMetadata
+from creator_assistant.domain.models import ProjectOptions, ProxyFpsPolicy, VideoFormat, VideoMetadata
 from creator_assistant.infrastructure.job_store import JobStore
 from creator_assistant.infrastructure.windows_paths import NamingTemplates, safe_file_name
 from creator_assistant.services.project_service import ProjectService
@@ -14,6 +14,7 @@ from creator_assistant.services.reaper_service import ReaperService
 from creator_assistant.services.storage_service import GIB, StoragePolicy, StorageService
 from creator_assistant.services.vegas_service import VegasProjectResult
 from creator_assistant.infrastructure.manifest_store import LEGACY_MANIFEST_NAME, MANIFEST_NAME, ManifestLoader, ManifestStatus
+from creator_assistant.domain.errors import ValidationError
 
 
 class FakeYtDlp:
@@ -733,3 +734,149 @@ def test_proxy_profile_change_creates_480_from_existing_max_and_preserves_720(tm
     assert manifest.reaper_proxies["720"]["path"] == str(proxy720)
     repeated = service.inspect_existing(metadata, options, project, CancellationToken())
     assert repeated["proxy"]["status"] == "VALID"
+
+
+def test_recovery_registers_existing_60fps_proxy_without_transcode(tmp_path: Path):
+    yt = tmp_path / "yt-dlp.exe"
+    ffmpeg_exe = tmp_path / "ffmpeg.exe"
+    ffprobe = tmp_path / "ffprobe.exe"
+    for executable in (yt, ffmpeg_exe, ffprobe):
+        executable.write_bytes(b"exe")
+
+    class StrictProxyValidator(ProxyProfileValidator):
+        def validate_expected_video(self, path, cancellation, **kwargs):
+            data = self.probe(path, cancellation)
+            video = next(item for item in data["streams"] if item["codec_type"] == "video")
+            if kwargs.get("fps_policy") == ProxyFpsPolicy.CAP_30:
+                raise ValidationError(
+                    "Proxy создан с 60 FPS, но текущий профиль требует не более 30 FPS"
+                )
+            if kwargs.get("height") is not None:
+                assert video["height"] == kwargs["height"]
+            return data
+
+    downloader = FakeYtDlp(yt)
+    ffmpeg = RecordingFfmpeg(ffmpeg_exe)
+    service = ProjectService(
+        downloader,
+        ffmpeg,
+        StrictProxyValidator(ffprobe),
+        FakeThumbnail(),
+        ReaperService(),
+        FakeSeparator(),
+        FakeSeparator(),
+        JobStore(tmp_path / "jobs"),
+        NamingTemplates(),
+        vegas=FakeVegas(),
+    )
+    project = tmp_path / "Кириллица и длинный путь" / "Recovery Project"
+    materials = project / "Материалы"
+    materials.mkdir(parents=True)
+    metadata = VideoMetadata(
+        "recover-proxy",
+        project.name,
+        12,
+        "https://youtu.be/recover",
+        formats=[
+            VideoFormat("max", "mp4", width=1920, height=1080, fps=60, vcodec="h264", acodec="aac"),
+            VideoFormat("proxy", "mp4", width=854, height=480, fps=60, vcodec="h264", acodec="aac"),
+            VideoFormat("audio", "m4a", acodec="aac"),
+        ],
+    )
+    proxy = materials / safe_file_name(
+        project.name, service.naming.proxy, "mp4", proxy_height=480
+    )
+    proxy.write_bytes(b"existing-60fps-proxy")
+    options = ProjectOptions(
+        download_maximum=False,
+        create_proxy=True,
+        download_audio=False,
+        create_instrumental=False,
+        create_reaper_project=False,
+        reaper_proxy_height=480,
+    )
+
+    before = service.inspect_existing(metadata, options, project, CancellationToken())
+    assert before["proxy"]["status"] == "INVALID"
+    recovered = service.recover_ready_dependencies(
+        metadata,
+        options,
+        project,
+        use_existing_proxy=True,
+    )
+
+    assert recovered["proxy"]["status"] == "VALID"
+    assert recovered["proxy"]["artifact_status"] == "READY"
+    assert recovered["proxy"]["fps_policy"] == "PRESERVE"
+    assert recovered["proxy"]["source"] == "REUSED_EXISTING"
+    assert downloader.download_count == 0
+    assert ffmpeg.calls == []
+    manifest = ManifestLoader().load(project / MANIFEST_NAME).manifest
+    assert manifest.reaper_proxies["480"]["path"] == str(proxy)
+    repeated = service.inspect_existing(metadata, options, project, CancellationToken())
+    assert repeated["proxy"]["status"] == "VALID"
+    assert repeated["proxy"]["fps_policy"] == "PRESERVE"
+
+
+def test_proxy_validation_failure_does_not_block_audio_or_uvr(tmp_path: Path):
+    yt = tmp_path / "yt-dlp.exe"
+    ffmpeg_exe = tmp_path / "ffmpeg.exe"
+    ffprobe = tmp_path / "ffprobe.exe"
+    for executable in (yt, ffmpeg_exe, ffprobe):
+        executable.write_bytes(b"exe")
+
+    class RejectCapProxyValidator(FakeValidator):
+        def validate_expected_video(self, path, cancellation, **kwargs):
+            if kwargs.get("fps_policy") == ProxyFpsPolicy.CAP_30:
+                raise ValidationError(
+                    "Proxy создан с 60 FPS, но текущий профиль требует не более 30 FPS"
+                )
+            return super().validate_expected_video(path, cancellation, **kwargs)
+
+    downloader = FakeYtDlp(yt)
+    jobs = JobStore(tmp_path / "jobs")
+    service = ProjectService(
+        downloader,
+        FakeFfmpeg(ffmpeg_exe),
+        RejectCapProxyValidator(ffprobe),
+        FakeThumbnail(),
+        ReaperService(),
+        FakeSeparator(),
+        FakeSeparator(),
+        jobs,
+        NamingTemplates(),
+        vegas=FakeVegas(),
+    )
+    metadata = VideoMetadata(
+        "continue-audio",
+        "Continue Audio",
+        12,
+        "https://youtu.be/continue",
+        formats=[
+            VideoFormat("max", "mp4", height=1080, fps=60, vcodec="h264", acodec="aac"),
+            VideoFormat("proxy", "mp4", height=480, fps=60, vcodec="h264", acodec="aac"),
+            VideoFormat("audio", "m4a", acodec="aac"),
+        ],
+    )
+    options = ProjectOptions(
+        download_maximum=False,
+        create_proxy=True,
+        download_audio=True,
+        create_instrumental=True,
+        create_reaper_project=False,
+        reaper_proxy_height=480,
+    )
+
+    with pytest.raises(ValidationError, match="proxy"):
+        service.execute(
+            tmp_path,
+            metadata,
+            options,
+            CancellationToken(),
+            lambda _event: None,
+        )
+
+    record = jobs.load(metadata.video_id)
+    assert record["stages"]["proxy"]["status"] == "INVALID"
+    assert Path(record["files"]["audio"]).is_file()
+    assert Path(record["files"]["instrumental"]).is_file()

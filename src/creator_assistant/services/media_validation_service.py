@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from creator_assistant.domain.errors import ValidationError
 from creator_assistant.domain.job import CancellationToken
+from creator_assistant.domain.models import ProxyFpsPolicy
 from creator_assistant.infrastructure.process_runner import ProcessRunner
 
 
@@ -59,6 +60,7 @@ class MediaValidationService:
         require_audio: bool = True,
         maximum_height: Optional[int] = None,
         require_sdr: bool = True,
+        fps_policy: Optional[ProxyFpsPolicy] = None,
     ) -> Dict[str, Any]:
         data = self.probe(path, cancellation)
         streams = data.get("streams", [])
@@ -72,8 +74,18 @@ class MediaValidationService:
             raise ValidationError(f"Неверное разрешение {actual_height or '?'}p, ожидалось {height}p: {path.name}")
         if maximum_height and actual_height and actual_height > maximum_height:
             raise ValidationError(f"Разрешение {actual_height}p выше допустимых {maximum_height}p: {path.name}")
-        actual_fps = self._rate(video.get("avg_frame_rate") or video.get("r_frame_rate"))
-        if fps and actual_fps and abs(actual_fps - fps) > 0.15:
+        avg_fps = self._rate(video.get("avg_frame_rate"))
+        real_fps = self._rate(video.get("r_frame_rate"))
+        actual_fps = avg_fps or real_fps
+        if fps_policy == ProxyFpsPolicy.CAP_30 and actual_fps and actual_fps > 30.15:
+            raise ValidationError(
+                f"Proxy создан с {actual_fps:.3f} FPS, но текущий профиль требует не более 30 FPS: {path.name}"
+            )
+        if fps_policy == ProxyFpsPolicy.EXACT_30 and actual_fps and not self.fps_compatible(actual_fps, 30.0):
+            raise ValidationError(
+                f"Proxy создан с {actual_fps:.3f} FPS, но текущий профиль требует 30 FPS: {path.name}"
+            )
+        if fps_policy is None and fps and actual_fps and not self.fps_compatible(actual_fps, fps):
             raise ValidationError(f"Неверный FPS {actual_fps:.3f}, ожидалось {fps:.3f}: {path.name}")
         transfer = str(video.get("color_transfer") or "").casefold()
         if require_sdr and transfer in {"smpte2084", "arib-std-b67"}:
@@ -146,6 +158,20 @@ class MediaValidationService:
             return float(text)
         except (TypeError, ValueError, ZeroDivisionError):
             return None
+
+    @staticmethod
+    def fps_compatible(actual: float, expected: float, tolerance: float = 0.15) -> bool:
+        """Accept rational NTSC and neighbouring integer representations."""
+        if abs(actual - expected) <= tolerance:
+            return True
+        for ntsc, integer in ((29.97002997, 30.0), (59.94005994, 60.0)):
+            if (
+                abs(actual - ntsc) <= tolerance and abs(expected - integer) <= tolerance
+            ) or (
+                abs(actual - integer) <= tolerance and abs(expected - ntsc) <= tolerance
+            ):
+                return True
+        return False
 
     @staticmethod
     def duration(data: Dict[str, Any]) -> Optional[float]:

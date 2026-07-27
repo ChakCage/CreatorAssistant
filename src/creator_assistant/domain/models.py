@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from enum import Enum
 from typing import Any, Dict, List, Optional
+
+
+class ProxyFpsPolicy(str, Enum):
+    """Frame-rate contract for REAPER proxy artifacts."""
+
+    PRESERVE = "PRESERVE"
+    CAP_30 = "CAP_30"
+    EXACT_30 = "EXACT_30"
 
 
 @dataclass(frozen=True)
@@ -103,6 +112,7 @@ class ProjectOptions:
     create_vegas_project: bool = False
     dry_run: bool = False
     reaper_proxy_height: int = 720
+    proxy_fps_policy: ProxyFpsPolicy = ProxyFpsPolicy.CAP_30
     temp_root: str = ""
     job_id: str = ""
 

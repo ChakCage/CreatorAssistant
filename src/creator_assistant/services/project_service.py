@@ -17,6 +17,7 @@ from creator_assistant.domain.models import (
     ProjectOptions,
     ProjectPaths,
     ProjectResult,
+    ProxyFpsPolicy,
     VideoFormat,
     VideoMetadata,
 )
@@ -590,7 +591,11 @@ class ProjectService:
             return {}
         paths = ProjectPaths(project_path, project_path / "Материалы", project_path.name)
         required = self.required_roles(options)
-        plan = build_format_plan(metadata.formats, options.reaper_proxy_height)
+        plan = build_format_plan(
+            metadata.formats,
+            options.reaper_proxy_height,
+            options.proxy_fps_policy,
+        )
         effective_proxy_height = self.effective_proxy_height(plan, options.reaper_proxy_height)
         inspection_roles = set(required)
         if "proxy" in required:
@@ -601,6 +606,7 @@ class ProjectService:
         }
         loaded_manifest = self.manifest_loader.load(paths.root / self.MANIFEST_NAME)
         assigned_paths: Dict[str, Path] = {}
+        proxy_validation_policy = options.proxy_fps_policy
         if loaded_manifest.manifest:
             for key, entry in loaded_manifest.manifest.files.items():
                 if key in states and isinstance(entry, dict) and entry.get("path"):
@@ -608,12 +614,26 @@ class ProjectService:
             variant = loaded_manifest.manifest.reaper_proxies.get(str(effective_proxy_height), {})
             if isinstance(variant, dict) and variant.get("path"):
                 assigned_paths["proxy"] = Path(str(variant["path"]))
+                if variant.get("fps_policy") == ProxyFpsPolicy.PRESERVE.value:
+                    proxy_validation_policy = ProxyFpsPolicy.PRESERVE
         record = self.job_store.load(metadata.video_id) or {}
         record_files = record.get("files", {}) if isinstance(record, dict) else {}
         if isinstance(record_files, dict):
             for key, value in record_files.items():
                 if key in states and value and key not in assigned_paths:
                     assigned_paths[key] = Path(str(value))
+        record_proxy = (
+            record.get("stages", {}).get("proxy", {})
+            if isinstance(record.get("stages"), dict)
+            else {}
+        )
+        if (
+            isinstance(record_proxy, dict)
+            and record_proxy.get("fps_policy") == ProxyFpsPolicy.PRESERVE.value
+            and record_proxy.get("path")
+            and Path(str(record_proxy["path"])) == assigned_paths.get("proxy")
+        ):
+            proxy_validation_policy = ProxyFpsPolicy.PRESERVE
 
         def valid_project_file(path: Optional[Path]) -> Optional[Path]:
             if not path or not path.is_file() or path.stat().st_size <= 0:
@@ -644,12 +664,24 @@ class ProjectService:
                         {},
                     )
                     states[key].update({
+                        "artifact_status": "READY",
                         "requested_height": options.reaper_proxy_height,
                         "effective_height": effective_proxy_height,
                         "width": int(video.get("width") or 0),
                         "height": int(video.get("height") or 0),
                         "fps": self._rate_value(video.get("avg_frame_rate") or video.get("r_frame_rate")),
-                        "source": "manifest_profile" if assigned_paths.get("proxy") == candidate else "expected_name",
+                        "avg_frame_rate": str(video.get("avg_frame_rate") or ""),
+                        "r_frame_rate": str(video.get("r_frame_rate") or ""),
+                        "codec": str(video.get("codec_name") or ""),
+                        "fps_policy": proxy_validation_policy.value,
+                        "source": (
+                            "REUSED_EXISTING"
+                            if assigned_paths.get("proxy") == candidate
+                            else "RECOVERED_FROM_DISK"
+                        ),
+                        "artifact_status_before": "UNREGISTERED",
+                        "artifact_status_after": "READY",
+                        "validation_result": "VALID",
                     })
             except JobCancelledError:
                 raise
@@ -680,7 +712,7 @@ class ProjectService:
                 path,
                 cancellation,
                 duration=metadata.duration,
-                fps=plan.proxy_video.fps or plan.maximum_video.fps,
+                fps_policy=proxy_validation_policy,
                 require_audio=True,
                 height=effective_proxy_height,
                 require_sdr=True,
@@ -714,7 +746,7 @@ class ProjectService:
             metadata, plan, paths.root, options, cancellation, inspection_roles, assigned_paths,
             proxy_height=effective_proxy_height,
         ).items():
-            if states.get(key, {}).get("status") != "VALID":
+            if states.get(key, {}).get("status") in {"MISSING", "PARTIAL", "NOT_REQUIRED"}:
                 states[key] = details
         proxy_variants = dict(getattr(self, "last_proxy_variants", {}))
         if states.get("proxy", {}).get("status") == "VALID":
@@ -742,7 +774,7 @@ class ProjectService:
             for key, details in self._legacy_media_states(
                 metadata, plan, paths.root, options, cancellation, {"audio"}, assigned_paths
             ).items():
-                if states.get(key, {}).get("status") != "VALID":
+                if states.get(key, {}).get("status") in {"MISSING", "PARTIAL", "NOT_REQUIRED"}:
                     states[key] = details
         preview_candidates = [path for path in paths.root.glob(self.naming.preview + ".*") if path.is_file() and path.stat().st_size > 0]
         states["thumbnail"] = ({"status": "VALID", "path": str(preview_candidates[0]), "size": preview_candidates[0].stat().st_size} if preview_candidates else {"status": "MISSING"})
@@ -801,6 +833,105 @@ class ProjectService:
                 states["vegas"] = {"status": "INVALID", "path": str(veg), "size": veg.stat().st_size, "reason": "VEGAS project file is empty."}
             else:
                 states["vegas"] = {"status": "MISSING"}
+        return states
+
+    def recover_ready_dependencies(
+        self,
+        metadata: VideoMetadata,
+        options: ProjectOptions,
+        project_path: Path,
+        cancellation: Optional[CancellationToken] = None,
+        *,
+        use_existing_proxy: bool = False,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Register valid on-disk artifacts without recreating heavy outputs."""
+        token = cancellation or CancellationToken()
+        states = self.inspect_existing(metadata, options, project_path, token)
+        proxy = states.get("proxy", {})
+        if (
+            use_existing_proxy
+            and proxy.get("status") == "INVALID"
+            and proxy.get("path")
+        ):
+            path = Path(str(proxy["path"]))
+            probe = self.validator.validate_expected_video(
+                path,
+                token,
+                duration=metadata.duration,
+                height=self.effective_proxy_height(
+                    build_format_plan(
+                        metadata.formats,
+                        options.reaper_proxy_height,
+                        ProxyFpsPolicy.PRESERVE,
+                    ),
+                    options.reaper_proxy_height,
+                ),
+                require_audio=True,
+                require_sdr=True,
+                fps_policy=ProxyFpsPolicy.PRESERVE,
+            )
+            video = next(
+                item for item in probe.get("streams", [])
+                if item.get("codec_type") == "video"
+            )
+            states["proxy"] = {
+                "status": "VALID",
+                "artifact_status": "READY",
+                "path": str(path),
+                "size": path.stat().st_size,
+                "requested_height": options.reaper_proxy_height,
+                "effective_height": int(video.get("height") or 0),
+                "width": int(video.get("width") or 0),
+                "height": int(video.get("height") or 0),
+                "fps": self._rate_value(
+                    video.get("avg_frame_rate") or video.get("r_frame_rate")
+                ),
+                "avg_frame_rate": str(video.get("avg_frame_rate") or ""),
+                "r_frame_rate": str(video.get("r_frame_rate") or ""),
+                "codec": str(video.get("codec_name") or ""),
+                "fps_policy": ProxyFpsPolicy.PRESERVE.value,
+                "source": "REUSED_EXISTING",
+                "validation_result": "VALID_WITH_PRESERVE_OVERRIDE",
+                "artifact_status_before": "UNREGISTERED",
+                "artifact_status_after": "READY",
+                "probe": probe,
+            }
+            variants = states.setdefault(
+                "proxy_variants", {"status": "INFO", "variants": {}}
+            ).setdefault("variants", {})
+            variants[str(states["proxy"]["effective_height"])] = dict(states["proxy"])
+
+        record = self.job_store.load(metadata.video_id) or {
+            "created_by": "CreatorAssistant",
+            "video_id": metadata.video_id,
+            "url": metadata.webpage_url,
+            "title": metadata.title,
+            "project_path": str(project_path),
+            "materials_path": str(project_path / "Материалы"),
+            "created_at": dt.datetime.now().isoformat(timespec="seconds"),
+        }
+        record["stages"] = states
+        record["project_path"] = str(project_path)
+        record["materials_path"] = str(project_path / "Материалы")
+        recovered_files = {
+            key: str(details["path"])
+            for key, details in states.items()
+            if isinstance(details, dict)
+            and details.get("status") == "VALID"
+            and details.get("path")
+        }
+        record["files"] = {**record.get("files", {}), **recovered_files}
+        record["status"] = "recovered"
+        record["updated_at"] = dt.datetime.now().isoformat(timespec="seconds")
+        self._write_manifest(
+            project_path,
+            metadata,
+            "recovered",
+            options.reaper_proxy_height,
+            record["files"],
+            states,
+        )
+        self.job_store.save(metadata.video_id, record)
         return states
 
     def _legacy_media_states(
@@ -1148,6 +1279,58 @@ class ProjectService:
             "probe": probe,
         }
 
+    def _validate_proxy_artifact(
+        self,
+        path: Path,
+        metadata: VideoMetadata,
+        options: ProjectOptions,
+        effective_height: int,
+        cancellation: Optional[CancellationToken],
+        *,
+        source: str,
+    ) -> Dict[str, Any]:
+        probe = self.validator.validate_expected_video(
+            path,
+            cancellation,
+            duration=metadata.duration,
+            height=effective_height,
+            fps_policy=options.proxy_fps_policy,
+            require_audio=True,
+            require_sdr=True,
+        )
+        video = next(
+            item for item in probe.get("streams", [])
+            if item.get("codec_type") == "video"
+        )
+        if int(video.get("height") or 0) > int(video.get("width") or 0):
+            raise ValidationError("Вертикальное видео не подходит как REAPER proxy.")
+        return {
+            "status": "VALID",
+            "artifact_status": "READY",
+            "path": str(path),
+            "file_exists": path.is_file(),
+            "size": path.stat().st_size,
+            "duration": self.validator.duration(probe),
+            "requested_height": options.reaper_proxy_height,
+            "effective_height": effective_height,
+            "width": int(video.get("width") or 0),
+            "height": int(video.get("height") or 0),
+            "fps": self._rate_value(
+                video.get("avg_frame_rate") or video.get("r_frame_rate")
+            ),
+            "avg_frame_rate": str(video.get("avg_frame_rate") or ""),
+            "r_frame_rate": str(video.get("r_frame_rate") or ""),
+            "codec": str(video.get("codec_name") or ""),
+            "fps_policy": options.proxy_fps_policy.value,
+            "validation_result": "VALID",
+            "artifact_status_before": "CREATING",
+            "artifact_status_after": "READY",
+            "manifest_saved": True,
+            "dependency_resolution_result": "READY",
+            "source": source,
+            "probe": probe,
+        }
+
     @staticmethod
     def _non_destructive_target(target: Path) -> Path:
         if not target.exists():
@@ -1182,7 +1365,11 @@ class ProjectService:
         return None
 
     def dry_run(self, destination: Path, metadata: VideoMetadata, options: ProjectOptions) -> ProjectResult:
-        plan = build_format_plan(metadata.formats, options.reaper_proxy_height)
+        plan = build_format_plan(
+            metadata.formats,
+            options.reaper_proxy_height,
+            options.proxy_fps_policy,
+        )
         root = self.planned_path(destination, metadata)
         paths = ProjectPaths(root, root / "Материалы", root.name)
         return ProjectResult(None, self._plan_lines(metadata, paths, plan, options))
@@ -1199,7 +1386,11 @@ class ProjectService:
     ) -> ProjectResult:
         if options.dry_run:
             return self.dry_run(destination, metadata, options)
-        plan = build_format_plan(metadata.formats, options.reaper_proxy_height)
+        plan = build_format_plan(
+            metadata.formats,
+            options.reaper_proxy_height,
+            options.proxy_fps_policy,
+        )
         source_height = int(plan.maximum_video.height or options.reaper_proxy_height)
         effective_proxy_height = self.effective_proxy_height(plan, options.reaper_proxy_height)
         state = JobState()
@@ -1276,6 +1467,7 @@ class ProjectService:
             "reaper_proxy_height": options.reaper_proxy_height,
             "requested_reaper_proxy_height": options.reaper_proxy_height,
             "effective_reaper_proxy_height": effective_proxy_height,
+            "proxy_fps_policy": options.proxy_fps_policy.value,
             "created_at": (saved_record or {}).get("created_at") or dt.datetime.now().isoformat(timespec="seconds"),
             "expected_duration": metadata.duration,
             "expected_height": plan.maximum_video.height,
@@ -1353,6 +1545,14 @@ class ProjectService:
         def checkpoint() -> None:
             record["files"] = {key: str(value) for key, value in files.items()}
             record["updated_at"] = dt.datetime.now().isoformat(timespec="seconds")
+            self._write_manifest(
+                paths.root,
+                metadata,
+                str(record.get("status") or "running"),
+                options.reaper_proxy_height,
+                record["files"],
+                record.get("stages", {}),
+            )
             self.job_store.save(metadata.video_id, record)
 
         def require_space(operation: str, path: Path, estimated: int) -> None:
@@ -1529,6 +1729,11 @@ class ProjectService:
                         and source_height == effective_proxy_height
                         and is_reaper_compatible(plan.maximum_video, plan.maximum_audio)
                         and files["maximum"].suffix.casefold() == ".mp4"
+                        and (
+                            options.proxy_fps_policy == ProxyFpsPolicy.PRESERVE
+                            or not plan.maximum_video.fps
+                            or float(plan.maximum_video.fps) <= 30.05
+                        )
                     )
                     if max_is_exact_proxy:
                         shutil.copy2(files["maximum"], target)
@@ -1538,6 +1743,8 @@ class ProjectService:
                             on_progress=on_progress,
                             stage=f"Создание видео {effective_proxy_height}p из существующего MAX",
                             maximum_height=effective_proxy_height,
+                            fps_policy=options.proxy_fps_policy,
+                            source_fps=plan.maximum_video.fps,
                             environment=job_environment,
                             cwd=job_temp_path,
                         )
@@ -1561,6 +1768,8 @@ class ProjectService:
                             on_progress=on_progress,
                             stage=f"Создание видео {options.reaper_proxy_height}p",
                             maximum_height=effective_proxy_height,
+                            fps_policy=options.proxy_fps_policy,
+                            source_fps=plan.proxy_video.fps,
                             environment=job_environment,
                             cwd=job_temp_path,
                         )
@@ -1583,52 +1792,80 @@ class ProjectService:
                                 on_progress=on_progress,
                                 stage=f"Создание видео {options.reaper_proxy_height}p",
                                 maximum_height=effective_proxy_height,
+                                fps_policy=options.proxy_fps_policy,
+                                source_fps=plan.proxy_video.fps,
                                 environment=job_environment,
                                 cwd=job_temp_path,
                             )
                     files["proxy"] = target
-                    proxy_probe = self.validator.validate_expected_video(
-                        target,
-                        cancellation,
-                        duration=metadata.duration,
-                        height=effective_proxy_height,
-                        fps=plan.proxy_video.fps or plan.maximum_video.fps,
-                        require_audio=True,
-                        require_sdr=True,
-                    )
-                    video_stream = next(
-                        item for item in proxy_probe.get("streams", [])
-                        if item.get("codec_type") == "video"
-                    )
-                    proxy_state = {
-                        "status": "VALID",
-                        "path": str(target),
-                        "size": target.stat().st_size,
-                        "requested_height": options.reaper_proxy_height,
-                        "effective_height": effective_proxy_height,
-                        "width": int(video_stream.get("width") or 0),
-                        "height": int(video_stream.get("height") or 0),
-                        "fps": self._rate_value(video_stream.get("avg_frame_rate") or video_stream.get("r_frame_rate")),
-                        "source": "existing_max_transcode" if "maximum" in files else "youtube_proxy",
-                        "probe": proxy_probe,
-                    }
-                    record.setdefault("stages", {})["proxy"] = proxy_state
-                    variants = record.setdefault("stages", {}).setdefault(
-                        "proxy_variants", {"status": "INFO", "variants": {}}
-                    ).setdefault("variants", {})
-                    variants[str(effective_proxy_height)] = dict(proxy_state)
-                    self._update_scan_index_file(
-                        paths.root,
-                        target,
-                        "REAPER_PROXY",
-                        {
-                            "requested_height": options.reaper_proxy_height,
-                            "effective_height": effective_proxy_height,
-                            "width": proxy_state["width"],
-                            "height": proxy_state["height"],
-                            "fps": proxy_state["fps"],
-                        },
-                    )
+                    try:
+                        proxy_state = self._validate_proxy_artifact(
+                            target,
+                            metadata,
+                            options,
+                            effective_proxy_height,
+                            cancellation,
+                            source=(
+                                "TRANSCODED_FROM_MAX"
+                                if "maximum" in files
+                                else (
+                                    "REMUXED"
+                                    if not plan.proxy_requires_transcode
+                                    else "DOWNLOADED_DIRECT"
+                                )
+                            ),
+                        )
+                    except ValidationError as exc:
+                        record.setdefault("stages", {})["proxy"] = {
+                            "status": "INVALID",
+                            "artifact_status": "CREATED_NOT_READY",
+                            "path": str(target),
+                            "size": target.stat().st_size,
+                            "fps_policy": options.proxy_fps_policy.value,
+                            "validation_result": str(exc),
+                            "artifact_status_before": "CREATING",
+                            "artifact_status_after": "CREATED_NOT_READY",
+                            "reason": str(exc),
+                        }
+                        files.pop("proxy", None)
+                        on_progress(
+                            ProgressInfo(
+                                JobStage.CREATE_PROXY.value,
+                                str(exc) + ". Аудио и UVR продолжат работу; REAPER ожидает готовый proxy.",
+                                100.0,
+                                state="warning",
+                            )
+                        )
+                    else:
+                        record.setdefault("stages", {})["proxy"] = proxy_state
+                        key_builder = getattr(self.ffmpeg, "proxy_key", None)
+                        if callable(key_builder):
+                            proxy_state["proxy_key"] = key_builder(
+                                files.get("maximum") or target,
+                                effective_proxy_height,
+                                options.proxy_fps_policy,
+                                (
+                                    plan.maximum_video.fps
+                                    if "maximum" in files
+                                    else plan.proxy_video.fps
+                                ),
+                            )
+                        variants = record.setdefault("stages", {}).setdefault(
+                            "proxy_variants", {"status": "INFO", "variants": {}}
+                        ).setdefault("variants", {})
+                        variants[str(effective_proxy_height)] = dict(proxy_state)
+                        self._update_scan_index_file(
+                            paths.root,
+                            target,
+                            "REAPER_PROXY",
+                            {
+                                "requested_height": options.reaper_proxy_height,
+                                "effective_height": effective_proxy_height,
+                                "width": proxy_state["width"],
+                                "height": proxy_state["height"],
+                                "fps": proxy_state["fps"],
+                            },
+                        )
                 checkpoint()
             if options.download_audio:
                 stage(JobStage.DOWNLOAD_AUDIO, "Скачиваю лучшую оригинальную аудиодорожку")
