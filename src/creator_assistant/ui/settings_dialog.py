@@ -435,6 +435,18 @@ class SettingsDialog(QDialog):
         options_form.addRow("Звук при первом открытии RPP", self.initial_audio)
         content_layout.addWidget(options_group)
 
+        privacy_group = QGroupBox("Конфиденциальность и диагностика")
+        privacy_form = QFormLayout(privacy_group)
+        self.anonymous_diagnostics = QCheckBox("Разрешить отправку анонимной технической диагностики")
+        self.anonymous_diagnostics.setChecked(
+            bool(settings.get("privacy", {}).get("anonymous_technical_diagnostics", False))
+        )
+        self.anonymous_diagnostics.setToolTip(
+            "На этапе закрытой беты внешний сервис не подключён. Видео, transcript и секреты не собираются."
+        )
+        privacy_form.addRow(self.anonymous_diagnostics)
+        content_layout.addWidget(privacy_group)
+
         whisper_group = QGroupBox("Распознавание речи")
         whisper_form = QFormLayout(whisper_group)
         self.whisper_backend = QComboBox()
@@ -1187,6 +1199,9 @@ class SettingsDialog(QDialog):
         self.result_settings["reaper_proxy_height"] = proxy_height
         self.result_settings["prefer_nvenc"] = self.nvenc.isChecked()
         self.result_settings["open_folder_after_completion"] = self.open_folder.isChecked()
+        self.result_settings.setdefault("privacy", {})["anonymous_technical_diagnostics"] = (
+            self.anonymous_diagnostics.isChecked()
+        )
         self.result_settings["create_vegas_project_default"] = self.create_vegas_default.isChecked()
         self.result_settings["auto_open_vegas_project"] = self.auto_open_vegas.isChecked()
         self.result_settings["suggest_remember_author"] = self.suggest_remember_author.isChecked()

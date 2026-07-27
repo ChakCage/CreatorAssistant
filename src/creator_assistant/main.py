@@ -6,6 +6,7 @@ import sys
 import json
 import time
 import os
+import subprocess
 from datetime import datetime, timedelta, timezone
 from copy import deepcopy
 from pathlib import Path
@@ -350,7 +351,7 @@ def _commercial_setup_verification(window: MainWindow, container: ServiceContain
         "success": (
             container.edition is AppEdition.COMMERCIAL
             and not bool(container.settings.get("commercial_setup", {}).get("completed", False))
-            and len(page_titles) == 9
+            and len(page_titles) == 11
             and set(wizard.profile_radios) == {"compact", "maximum_quality"}
             and not forbidden
         ),
@@ -393,15 +394,19 @@ def _commercial_license_verification(container: ServiceContainer, report_path: P
         offline_clock = datetime.now(timezone.utc) + timedelta(hours=49)
         offline_service = type(container.licensing)(wall_clock=lambda: offline_clock)
         offline = offline_service.status(server_available=False)
-        restarted_service.deactivate_device(refreshed.device_id)
-        after_deactivate = restarted_service.status()
+        preserve = os.environ.get("CREATOR_ASSISTANT_E2E_PRESERVE_LICENSE") == "1"
+        if preserve:
+            after_deactivate = refreshed
+        else:
+            restarted_service.deactivate_device(refreshed.device_id)
+            after_deactivate = restarted_service.status()
         if os.environ.get("CREATOR_ASSISTANT_E2E_CREDENTIAL_NAMESPACE"):
             restarted_service.storage.credentials.delete("installation", kind="id")
         report.update({
             "success": (
                 not before.active and activated.active and restarted.active and refreshed.active
                 and offline.active and offline.state.value == "OFFLINE_GRACE"
-                and not after_deactivate.active
+                and (after_deactivate.active if preserve else not after_deactivate.active)
             ),
             "before": before.state.value,
             "activated": {"state": activated.state.value, "plan": activated.plan, "expires_at": activated.expires_at},
@@ -409,6 +414,7 @@ def _commercial_license_verification(container: ServiceContainer, report_path: P
             "refresh": refreshed.state.value,
             "offline_49h": offline.state.value,
             "after_deactivate": after_deactivate.state.value,
+            "license_preserved_for_update": preserve,
             "backend": restarted_service.endpoint,
             "installation_stable": container.licensing.installation_id == restarted_service.installation_id,
         })
@@ -417,6 +423,51 @@ def _commercial_license_verification(container: ServiceContainer, report_path: P
         report["request_id"] = getattr(exc, "request_id", "")
         report["message"] = str(exc)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _update_e2e_verification(container: ServiceContainer, report_path: Path) -> None:
+    """Use the same sealed update policy as the UI, then launch the verified installer."""
+    from urllib.parse import urlparse
+    from creator_assistant.infrastructure.release_updates import (
+        ReleaseUpdateService, UpdatePolicy,
+    )
+
+    build = current_build_info()
+    report = {"success": False, "from": build.__dict__}
+    try:
+        host = urlparse(build.update_backend_url).hostname or ""
+        service = ReleaseUpdateService(
+            build.update_backend_url,
+            UpdatePolicy(
+                edition=build.edition, channel=build.channel, architecture=build.architecture,
+                current_version=build.version, current_build=build.build_number,
+                public_keys=build.update_public_keys, allowed_hosts=(host,),
+                allow_local_http=build.build_variant == "staging",
+            ),
+            busy_check=container.update_busy_check,
+        )
+        manifest = service.latest()
+        if not manifest:
+            raise RuntimeError("No matching update")
+        installer = service.download(manifest, report_path.parent / "downloads")
+        report.update({
+            "success": True, "manifest": manifest.__dict__, "installer": str(installer),
+            "installer_sha256_verified": True,
+        })
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        if os.environ.get("CREATOR_ASSISTANT_E2E_INSTALL_UPDATE") == "1":
+            subprocess.Popen([
+                str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+                "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS",
+            ])
+    except Exception as exc:
+        report.update({
+            "error": str(exc), "error_code": getattr(exc, "code", type(exc).__name__),
+            "request_id": getattr(exc, "request_id", ""),
+        })
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main() -> int:
@@ -453,7 +504,7 @@ def main() -> int:
             return 1
     app = QApplication(sys.argv)
     edition = current_edition()
-    app.setApplicationName(qsettings_application_name(edition))
+    app.setApplicationName(qsettings_application_name())
     app.setApplicationDisplayName(edition.application_name)
     app.setOrganizationName("CreatorAssistant")
     app.setStyle("Fusion")
@@ -471,6 +522,12 @@ def main() -> int:
             "",
         )
         if commercial_license_verification_arg:
+            container.first_run = False
+        update_e2e_arg = next(
+            (value.split("=", 1)[1] for value in sys.argv if value.startswith("--verify-update=")),
+            "",
+        )
+        if update_e2e_arg:
             container.first_run = False
         if "--smoke-test" in sys.argv:
             container.first_run = False
@@ -538,6 +595,14 @@ def main() -> int:
                 500,
                 lambda: (
                     _commercial_license_verification(container, Path(commercial_license_verification_arg)),
+                    app.quit(),
+                ),
+            )
+        if update_e2e_arg:
+            QTimer.singleShot(
+                500,
+                lambda: (
+                    _update_e2e_verification(container, Path(update_e2e_arg)),
                     app.quit(),
                 ),
             )

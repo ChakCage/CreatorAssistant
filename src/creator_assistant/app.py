@@ -327,3 +327,9 @@ class ServiceContainer:
         self.settings_store.save(self.settings)
         self.youtube_auth = YtDlpAuthContext.from_settings(self.settings)
         self.rebuild()
+
+    def update_busy_check(self) -> tuple[bool, str]:
+        """Updates must not replace binaries while an external media/AI job is active."""
+        if self.runner.active_pid:
+            return True, f"внешний процесс PID {self.runner.active_pid}"
+        return False, ""

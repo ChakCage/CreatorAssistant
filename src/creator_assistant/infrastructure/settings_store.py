@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import datetime as dt
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
+    "_schema_version": 2,
     "youtube_root": r"E:\YouTube",
     "author_paths": [],
     "author_presets": [],
@@ -164,6 +166,13 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "last_preflight": {},
     },
     "last_update_check": "",
+    "app_updates": {
+        "last_check": "",
+        "remind_after": "",
+    },
+    "privacy": {
+        "anonymous_technical_diagnostics": False,
+    },
     "latest_yt_dlp_version": "",
     "dependency_sources": {},
     "youtube_access": {
@@ -195,26 +204,28 @@ def _local_base() -> Path:
 
 
 def config_root(edition=None) -> Path:
-    from creator_assistant.product import current_edition
+    from creator_assistant.product import AppEdition, current_distribution_profile, current_edition
 
     selected = edition or current_edition()
-    if selected.value == "developer":
+    if selected is AppEdition.DEVELOPER:
         name = "Developer"
+    elif edition is None:
+        name = current_distribution_profile().data_name
     else:
-        from creator_assistant.infrastructure.build_info import current_build_info
-        name = "CommercialStaging" if current_build_info().license_backend_profile == "staging" else "Commercial"
+        name = "Commercial"
     return _config_base() / name
 
 
 def local_data_root(edition=None) -> Path:
-    from creator_assistant.product import current_edition
+    from creator_assistant.product import AppEdition, current_distribution_profile, current_edition
 
     selected = edition or current_edition()
-    if selected.value == "developer":
+    if selected is AppEdition.DEVELOPER:
         name = "Developer"
+    elif edition is None:
+        name = current_distribution_profile().data_name
     else:
-        from creator_assistant.infrastructure.build_info import current_build_info
-        name = "CommercialStaging" if current_build_info().license_backend_profile == "staging" else "Commercial"
+        name = "Commercial"
     return _local_base() / name
 
 
@@ -288,16 +299,40 @@ class SettingsStore:
         self._migrate_processing(settings)
         self._migrate_shorts_ai(settings)
         self._migrate_author_presets(settings)
+        self._persist_migration(raw, settings)
         return settings
 
     def save(self, settings: Dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        settings["_schema_version"] = int(DEFAULT_SETTINGS["_schema_version"])
         temporary = self.path.with_suffix(".json.tmp")
         temporary.write_text(
             json.dumps(settings, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         os.replace(str(temporary), str(self.path))
+
+    def _persist_migration(self, raw: object, migrated: Dict[str, Any]) -> None:
+        if not isinstance(raw, dict):
+            return
+        current = int(raw.get("_schema_version", 0) or 0)
+        target = int(DEFAULT_SETTINGS["_schema_version"])
+        if current >= target:
+            return
+        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = self.path.with_name(f"{self.path.stem}.backup-v{current}-{stamp}{self.path.suffix}")
+        try:
+            shutil.copy2(self.path, backup)
+            temporary = self.path.with_suffix(".json.migrate.tmp")
+            temporary.write_text(json.dumps(migrated, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(str(temporary), str(self.path))
+        except OSError:
+            # The original settings file is never replaced unless the complete
+            # migrated JSON has been written successfully.
+            try:
+                temporary.unlink(missing_ok=True)
+            except (OSError, UnboundLocalError):
+                pass
 
     @staticmethod
     def _merge(target: Dict[str, Any], source: Dict[str, Any]) -> None:

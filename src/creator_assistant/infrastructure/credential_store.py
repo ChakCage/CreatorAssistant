@@ -22,9 +22,9 @@ class WindowsCredentialStore:
         if namespace:
             self.prefix = namespace.rstrip("/")
         else:
-            from creator_assistant.product import current_edition
+            from creator_assistant.product import current_distribution_profile
 
-            self.prefix = f"CreatorAssistant/{current_edition().value.title()}/Publishing"
+            self.prefix = f"{current_distribution_profile().credential_namespace}/Publishing"
 
     def target(self, account_id: str, kind: str = "oauth") -> str:
         safe = "".join(ch for ch in str(account_id) if ch.isalnum() or ch in "-_.")

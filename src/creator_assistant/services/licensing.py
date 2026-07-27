@@ -114,7 +114,10 @@ class LicenseService:
             namespace = ("CreatorAssistant/CommercialStaging/License"
                          if build.license_backend_profile == "staging"
                          else "CreatorAssistant/Commercial/License")
-            if build.license_backend_profile == "local":
+            if (
+                build.license_backend_profile == "local"
+                or (build.license_backend_profile == "staging" and os.environ.get("CREATOR_ASSISTANT_E2E") == "1")
+            ):
                 namespace = os.environ.get("CREATOR_ASSISTANT_E2E_CREDENTIAL_NAMESPACE", namespace)
             storage = SecureLicenseStorage(WindowsSecureCredentialStore(namespace=namespace))
         self.storage = storage

@@ -65,6 +65,19 @@ class CommercialSetupWizard(QWizard):
             "Это рекомендации, а не жёсткие требования."))
         layout.addWidget(requirements); layout.addStretch(1)
 
+        page, layout = self._page(
+            "Активация лицензии",
+            "AI можно настроить до активации, но платные операции доступны только после успешной активации.",
+        )
+        self.activation_status = QLabel("Лицензия ещё не проверена.")
+        self.activation_status.setWordWrap(True)
+        activate = QPushButton("Открыть активацию лицензии")
+        activate.clicked.connect(self._open_license)
+        layout.addWidget(self.activation_status)
+        layout.addWidget(activate)
+        layout.addWidget(QLabel("Можно продолжить настройку и вернуться к активации позже."))
+        layout.addStretch(1)
+
         page, layout = self._page("Проверка компьютера", "Проверка выполняется локально и не собирает токены или содержимое проектов.")
         self.computer_summary = QLabel("Проверка ещё не выполнена"); self.computer_summary.setWordWrap(True)
         self.computer_table = QTableWidget(0, 3); self.computer_table.setHorizontalHeaderLabels(("Компонент", "Статус", "Значение"))
@@ -125,12 +138,35 @@ class CommercialSetupWizard(QWizard):
             line = QHBoxLayout(); line.addWidget(combo, 1); line.addWidget(browse); form.addRow(label, line); self.folder_edits[key] = combo
         layout.addLayout(form); layout.addStretch(1)
 
+        page, layout = self._page(
+            "Короткое обучение",
+            "Основной рабочий путь от исходника до готового вертикального MP4.",
+        )
+        training = QLabel(
+            "1. «Подготовка проекта»: выберите автора и исходное видео.\n"
+            "2. Дождитесь MAX/proxy/audio и откройте вкладку Shorts.\n"
+            "3. Выполните локальную расшифровку и AI-анализ.\n"
+            "4. Проверьте кандидаты, субтитры, заголовок и баннер.\n"
+            "5. Сделайте тестовый 5-секундный рендер, затем «Рендер всех Shorts».\n"
+            "6. Готовые MP4 находятся в Shorts\\Renders."
+        )
+        training.setWordWrap(True)
+        layout.addWidget(training)
+        layout.addStretch(1)
+
         page, layout = self._page("Готово", "Настройки можно изменить позже через «Настройки → Локальный AI».")
         self.final_summary = QLabel(); self.final_summary.setWordWrap(True)
         layout.addWidget(self.final_summary); layout.addStretch(1)
 
     def _selected_profile_id(self) -> str:
         return next((key for key, radio in self.profile_radios.items() if radio.isChecked()), "maximum_quality")
+
+    def _open_license(self) -> None:
+        from creator_assistant.ui.license_dialog import LicenseDialog
+        LicenseDialog(self.container, self).exec()
+        status = self.container.feature_gate.status()
+        state = status.state.value if hasattr(status.state, "value") else str(status.state)
+        self.activation_status.setText(f"Текущее состояние лицензии: {state}")
 
     def _start(self, function, finished, failed=None, progress=None) -> None:
         thread = QThread(self); worker = FunctionWorker(lambda emit: function(emit)); worker.moveToThread(thread)

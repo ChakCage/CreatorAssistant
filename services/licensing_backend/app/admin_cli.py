@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 from datetime import timedelta
 
 from sqlalchemy import select, update
@@ -32,7 +33,18 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("list-devices"); p.add_argument("--user", required=True)
     p = sub.add_parser("show-license-events"); p.add_argument("--limit", type=int, default=100)
     p = sub.add_parser("create-price"); p.add_argument("--plan", default="beta"); p.add_argument("--provider", default="fake"); p.add_argument("--amount-minor", required=True, type=int); p.add_argument("--currency", default="RUB")
-    p = sub.add_parser("create-release"); p.add_argument("--version", required=True); p.add_argument("--download-url", required=True); p.add_argument("--sha256", required=True); p.add_argument("--channel", default="stable"); p.add_argument("--notes", default="")
+    p = sub.add_parser("create-release")
+    p.add_argument("--version", required=True); p.add_argument("--download-url", required=True); p.add_argument("--sha256", required=True)
+    p.add_argument("--edition", choices=("developer", "commercial"), default="commercial")
+    p.add_argument("--channel", choices=("developer", "stable", "beta"), default="stable")
+    p.add_argument("--architecture", default="x86_64"); p.add_argument("--build-number", type=int, default=0)
+    p.add_argument("--file-size", type=int, required=True); p.add_argument("--minimum-supported-version", default="")
+    p.add_argument("--notes", default=""); p.add_argument("--mandatory", action="store_true")
+    for name in ("activate-release", "deactivate-release", "show-release"):
+        p = sub.add_parser(name); p.add_argument("--release", required=True)
+    p = sub.add_parser("list-releases"); p.add_argument("--edition"); p.add_argument("--channel")
+    p = sub.add_parser("sign-release-manifest"); p.add_argument("--release", required=True)
+    p.add_argument("--private-key-file", required=True); p.add_argument("--key-id", required=True); p.add_argument("--output", required=True)
     p = sub.add_parser("list-payments"); p.add_argument("--limit", type=int, default=100)
     p = sub.add_parser("show-payment"); p.add_argument("--payment", required=True)
     p = sub.add_parser("expire-pending-payments")
@@ -88,9 +100,46 @@ def main(argv=None) -> int:
             row = Price(plan_id=plan.id, provider=args.provider, amount_minor=args.amount_minor, currency=args.currency.upper())
             db.add(row); db.flush(); result = {"id": row.id}
         elif args.command == "create-release":
-            row = Release(edition="commercial", channel=args.channel, version=args.version,
-                          download_url=args.download_url, sha256=args.sha256, release_notes=args.notes)
+            if not args.download_url.startswith(("https://", "http://127.0.0.1:", "http://localhost:")):
+                raise SystemExit("Release URL must use HTTPS (localhost is allowed for staging tests)")
+            row = Release(edition=args.edition, channel=args.channel, version=args.version,
+                          build_number=args.build_number, architecture=args.architecture,
+                          download_url=args.download_url, sha256=args.sha256.casefold(), file_size=args.file_size,
+                          release_notes=args.notes, minimum_supported_version=args.minimum_supported_version,
+                          mandatory=args.mandatory, is_active=False)
             db.add(row); db.flush(); result = {"id": row.id}
+        elif args.command in {"activate-release", "deactivate-release"}:
+            row = db.get(Release, args.release)
+            if not row: raise SystemExit("Release not found")
+            if args.command == "activate-release" and not row.signature:
+                raise SystemExit("Unsigned release cannot be activated")
+            row.is_active = args.command == "activate-release"
+            result = {"id": row.id, "active": row.is_active}
+        elif args.command == "list-releases":
+            query = select(Release)
+            if args.edition: query = query.where(Release.edition == args.edition)
+            if args.channel: query = query.where(Release.channel == args.channel)
+            rows = db.scalars(query.order_by(Release.published_at.desc())).all()
+            result = [{"id": row.id, "edition": row.edition, "channel": row.channel,
+                       "version": row.version, "build_number": row.build_number,
+                       "architecture": row.architecture, "active": row.is_active,
+                       "signed": bool(row.signature)} for row in rows]
+        elif args.command == "show-release":
+            from .release_signing import release_manifest
+            row = db.get(Release, args.release)
+            if not row: raise SystemExit("Release not found")
+            result = {"id": row.id, "active": row.is_active, "manifest": release_manifest(row)}
+        elif args.command == "sign-release-manifest":
+            from .release_signing import release_manifest, sign_release
+            row = db.get(Release, args.release)
+            if not row: raise SystemExit("Release not found")
+            private_key = Path(args.private_key_file).read_text(encoding="ascii").strip()
+            sign_release(row, private_key, args.key_id)
+            output = Path(args.output); output.parent.mkdir(parents=True, exist_ok=True)
+            temporary = output.with_suffix(output.suffix + ".tmp")
+            temporary.write_text(json.dumps(release_manifest(row), ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.replace(output)
+            result = {"id": row.id, "key_id": row.key_id, "manifest": str(output)}
         elif args.command == "list-payments":
             result = [_payment_json(row) for row in db.scalars(select(Payment).order_by(Payment.created_at.desc()).limit(args.limit)).all()]
         elif args.command == "show-payment":

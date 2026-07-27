@@ -28,6 +28,9 @@ if ($Edition -eq 'commercial') {
     if ($Found.Count -gt 0) {
         throw "Commercial package contains Developer-only modules: $($Found -join ', ')"
     }
+    if (-not $Archive.Contains('creator_assistant.services.licensing')) {
+        throw "Commercial package is missing licensing"
+    }
 } else {
     $Required = @(
         'creator_assistant.ui.autopilot_tab',
@@ -38,6 +41,9 @@ if ($Edition -eq 'commercial') {
     $Missing = @($Required | Where-Object { -not $Archive.Contains($_) })
     if ($Missing.Count -gt 0) {
         throw "Developer package is missing required modules: $($Missing -join ', ')"
+    }
+    if ($Archive.Contains('creator_assistant.services.licensing')) {
+        throw "Developer package unexpectedly contains licensing"
     }
 }
 Write-Host "Package boundary verified [$Edition]: $ResolvedExecutable"

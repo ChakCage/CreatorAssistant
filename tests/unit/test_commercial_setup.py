@@ -148,8 +148,11 @@ def test_commercial_wizard_exposes_all_required_steps(tmp_path: Path):
     )
     wizard = CommercialSetupWizard(container)
     titles = [wizard.page(page_id).title() for page_id in wizard.pageIds()]
-    assert titles == ["Добро пожаловать", "Проверка компьютера", "Выбор AI-профиля", "Ollama",
-                      "Загрузка модели", "Проверка AI", "Whisper, FFmpeg и рендер", "Папки", "Готово"]
+    assert titles == [
+        "Добро пожаловать", "Активация лицензии", "Проверка компьютера",
+        "Выбор AI-профиля", "Ollama", "Загрузка модели", "Проверка AI",
+        "Whisper, FFmpeg и рендер", "Папки", "Короткое обучение", "Готово",
+    ]
     assert set(wizard.profile_radios) == {"compact", "maximum_quality"}
     wizard.close()
 

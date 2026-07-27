@@ -2,7 +2,9 @@ param(
     [ValidateSet('all', 'developer', 'commercial', 'commercial-staging')][string]$Edition = 'all',
     [switch]$SkipInstall,
     [switch]$VerifyLaunch,
-    [string]$VerifyReportsDirectory = ""
+    [string]$VerifyReportsDirectory = "",
+    [int]$BuildNumber = 0,
+    [string]$Version = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,7 +18,12 @@ if (-not $SkipInstall) {
 
 $Commit = (& git -C $Root rev-parse --short=12 HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or -not $Commit) { throw 'Unable to determine the current git commit.' }
-$Editions = if ($Edition -eq 'all') { @('developer', 'commercial') } else { @($Edition) }
+if (-not $Version) {
+    $Version = (& $Python -c "import sys;sys.path.insert(0,r'$Root\\src');from creator_assistant.version import __version__;print(__version__)").Trim()
+}
+if ($Version -notmatch '^\d+\.\d+\.\d+([\-+][0-9A-Za-z.-]+)?$') { throw "Invalid semantic version: $Version" }
+if ($BuildNumber -le 0) { $BuildNumber = [int]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() / 3600) }
+$Editions = if ($Edition -eq 'all') { @('developer', 'commercial', 'commercial-staging') } else { @($Edition) }
 $Dist = [System.IO.Path]::GetFullPath((Join-Path $Root 'dist'))
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
@@ -46,12 +53,46 @@ foreach ($CurrentEdition in $Editions) {
         commit = $Commit
         build_date = (Get-Date).ToUniversalTime().ToString('o')
         edition = $PackageEdition
-        version = '0.1.0'
+        version = $Version
+        build_number = $BuildNumber
+        channel = if ($IsDeveloper) { 'developer' } elseif ($IsStaging) { 'beta' } else { 'stable' }
+        packaging_format = 'pyinstaller-onedir'
+        architecture = 'x86_64'
         build_variant = if ($IsStaging) { 'staging' } else { 'production' }
-        license_backend_profile = if ($IsStaging) { 'staging' } elseif ($env:CREATOR_ASSISTANT_LICENSE_PROFILE) { $env:CREATOR_ASSISTANT_LICENSE_PROFILE } else { 'production' }
-        license_backend_url = if ($env:CREATOR_ASSISTANT_LICENSE_URL) { $env:CREATOR_ASSISTANT_LICENSE_URL } else { 'https://licensing.creatorassistant.app' }
-        license_public_keys = if ($env:CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS) { $env:CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS | ConvertFrom-Json } else { @{} }
+        license_backend_profile = if ($IsDeveloper) {
+            'disabled'
+        } elseif ($IsStaging) {
+            'staging'
+        } elseif ($env:CREATOR_ASSISTANT_LICENSE_PROFILE) {
+            $env:CREATOR_ASSISTANT_LICENSE_PROFILE
+        } else {
+            'production'
+        }
+        license_backend_url = if ($IsDeveloper) {
+            ''
+        } elseif ($env:CREATOR_ASSISTANT_LICENSE_URL) {
+            $env:CREATOR_ASSISTANT_LICENSE_URL
+        } else {
+            'https://licensing.creatorassistant.app'
+        }
+        license_public_keys = if ($IsDeveloper) {
+            @{}
+        } elseif ($env:CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS) {
+            $env:CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS | ConvertFrom-Json
+        } else {
+            @{}
+        }
         telegram_bot_url = if ($IsDeveloper) { '' } elseif ($env:CREATOR_ASSISTANT_TELEGRAM_BOT_URL) { $env:CREATOR_ASSISTANT_TELEGRAM_BOT_URL } else { 'https://t.me/CreatorAssistantBot' }
+        update_backend_url = if ($env:CREATOR_ASSISTANT_UPDATE_URL) {
+            $env:CREATOR_ASSISTANT_UPDATE_URL
+        } elseif ($IsDeveloper) {
+            'https://updates-developer.creatorassistant.app'
+        } else {
+            'https://updates.creatorassistant.app'
+        }
+        update_public_keys = if ($env:CREATOR_ASSISTANT_UPDATE_PUBLIC_KEYS) { $env:CREATOR_ASSISTANT_UPDATE_PUBLIC_KEYS | ConvertFrom-Json } else { @{} }
+        update_key_id = if ($env:CREATOR_ASSISTANT_UPDATE_KEY_ID) { $env:CREATOR_ASSISTANT_UPDATE_KEY_ID } else { '' }
+        installer_signed = $false
     } | ConvertTo-Json
     [System.IO.File]::WriteAllText((Join-Path $Generated 'build_info.json'), $BuildInfo, $Utf8NoBom)
 

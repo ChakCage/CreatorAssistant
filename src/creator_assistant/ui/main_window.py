@@ -3,8 +3,8 @@ from __future__ import annotations
 import importlib
 import threading
 
-from PySide6.QtCore import QByteArray, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtCore import QByteArray, QTimer, QUrl
+from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import QApplication, QInputDialog, QLabel, QMainWindow, QMessageBox, QTabWidget, QToolBar
 
 from creator_assistant.app import ServiceContainer
@@ -24,7 +24,7 @@ class MainWindow(QMainWindow):
         edition = container.edition
         self.setWindowTitle(
             f"{edition.application_name} · {edition.display_name} · v{build.version} · "
-            f"{build.commit} · {build.build_date}"
+            f"{build.channel} · build {build.build_number} · {build.commit} · {build.build_date}"
         )
         self.setMinimumSize(1040, 700)
         toolbar = QToolBar("Основное")
@@ -54,10 +54,12 @@ class MainWindow(QMainWindow):
         help_action = QAction("Справка", self)
         updates_action = QAction("Обновления", self)
         about_action = QAction("О программе", self)
+        feedback_action = QAction("Оставить отзыв о бета-версии", self)
         help_action.triggered.connect(self.open_help)
         updates_action.triggered.connect(self.check_updates)
         about_action.triggered.connect(self.open_about)
-        toolbar.addAction(help_action); toolbar.addAction(updates_action); toolbar.addAction(about_action)
+        feedback_action.triggered.connect(self.open_beta_feedback)
+        toolbar.addAction(help_action); toolbar.addAction(updates_action); toolbar.addAction(feedback_action); toolbar.addAction(about_action)
         self.addToolBar(toolbar)
         self.tabs = QTabWidget()
         self.prep_tab = ProjectPrepTab(container)
@@ -137,19 +139,37 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "О программе",
             f"{self.container.edition.application_name}\n{self.container.edition.display_name}\n"
-            f"Версия: {build.version}\nCommit: {build.commit}\nДата сборки: {build.build_date}",
+            f"Версия: {build.version} (сборка {build.build_number})\n"
+            f"Канал: {build.channel}\nФормат: {build.packaging_format}\n"
+            f"Commit: {build.commit}\nДата сборки: {build.build_date}",
         )
 
     def open_help(self) -> None:
-        QMessageBox.information(self, "Справка", "Подготовка проекта и Shorts используют общий формат проектов в обеих редакциях.")
+        from creator_assistant.ui.help_dialog import HelpDialog
+        HelpDialog(self).exec()
 
     def check_updates(self) -> None:
-        build = current_build_info()
-        QMessageBox.information(self, "Обновления", f"Текущая версия: {build.version}\nРедакция: {self.container.edition.display_name}")
+        from creator_assistant.ui.updates_dialog import UpdatesDialog
+        UpdatesDialog(self.container, self).exec()
 
     def open_license(self) -> None:
         module = importlib.import_module("creator_assistant.ui." + "license_dialog")
         module.LicenseDialog(self.container, self).exec()
+
+    def open_beta_feedback(self) -> None:
+        build = current_build_info()
+        diagnostic_id = f"{build.commit}-{build.build_number}"
+        QApplication.clipboard().setText(
+            f"Creator Assistant {build.version} · {build.edition}/{build.channel} · "
+            f"commit {build.commit} · diagnostic ID {diagnostic_id}"
+        )
+        if build.telegram_bot_url:
+            QDesktopServices.openUrl(QUrl(build.telegram_bot_url))
+        QMessageBox.information(
+            self, "Отзыв о бета-версии",
+            "Версия и diagnostic ID скопированы в буфер обмена.\n"
+            "При ошибке приложите созданный вручную support ZIP. Секреты в сообщение не вставляйте.",
+        )
 
     def closeEvent(self, event) -> None:
         workers = [self.prep_tab.shutdown_workers(), self.shorts_tab.shutdown_workers()]

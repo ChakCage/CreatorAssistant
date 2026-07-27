@@ -25,6 +25,15 @@ DATA_FILES = [(
     str(SOURCE_ROOT / 'creator_assistant' / 'workers' / 'audio_separator_worker.py'),
     'creator_assistant\\workers',
 )]
+DOC_NAMES = [
+    'README_RU.md', 'beta-user-guide-ru.md', 'beta-quick-start-ru.md',
+    'updating-ru.md', 'support-and-privacy-ru.md', 'beta-known-issues-ru.md',
+    'privacy-policy-ru.md', 'eula-ru.md',
+]
+for name in DOC_NAMES:
+    source = PROJECT_ROOT / ('docs' if name != 'README_RU.md' else '') / name
+    if source.is_file():
+        DATA_FILES.append((str(source), 'docs'))
 if BUILD_INFO.is_file():
     DATA_FILES.append((str(BUILD_INFO), 'creator_assistant'))
 

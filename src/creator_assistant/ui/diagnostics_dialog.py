@@ -89,6 +89,7 @@ class DiagnosticsDialog(QDialog):
         self.vegas_test_button = QPushButton("Проверить создание VEGAS-проекта")
         self.youtube_test_button = QPushButton("Проверить доступ к YouTube")
         self.shorts_test_button = QPushButton("Проверить модуль Shorts")
+        self.support_button = QPushButton("Создать пакет для поддержки")
         close_button = QPushButton("Закрыть")
         self.check_button.clicked.connect(self.run_diagnostics)
         self.update_button.clicked.connect(self.update_yt_dlp)
@@ -96,6 +97,7 @@ class DiagnosticsDialog(QDialog):
         self.vegas_test_button.clicked.connect(self.test_vegas_project)
         self.youtube_test_button.clicked.connect(self.test_youtube_access)
         self.shorts_test_button.clicked.connect(self.test_shorts_module)
+        self.support_button.clicked.connect(self.create_support_bundle)
         close_button.clicked.connect(self.accept)
         actions.addWidget(self.check_button)
         actions.addWidget(self.update_button)
@@ -103,10 +105,34 @@ class DiagnosticsDialog(QDialog):
         actions.addWidget(self.vegas_test_button)
         actions.addWidget(self.youtube_test_button)
         actions.addWidget(self.shorts_test_button)
+        actions.addWidget(self.support_button)
         actions.addStretch(1)
         actions.addWidget(close_button)
         layout.addLayout(actions)
         self.run_diagnostics()
+
+    def create_support_bundle(self) -> None:
+        from creator_assistant.infrastructure.support_bundle import SupportBundleBuilder
+
+        builder = SupportBundleBuilder(self.container.settings, self.container.dependency_resolutions)
+        preview = builder.preview()
+        contents = "\n".join(f"• {item}" for item in preview.entries)
+        excluded = "\n".join(f"• {item}" for item in preview.excluded)
+        message = (
+            f"В пакет войдут:\n{contents}\n\nНе войдут:\n{excluded}\n\n"
+            "Пакет никуда не отправляется автоматически. Сохранить его?"
+        )
+        if QMessageBox.question(self, "Пакет для поддержки", message) != QMessageBox.Yes:
+            return
+        suggested = str(Path.home() / "Desktop" / f"CreatorAssistant-Support-{preview.request_id[:8]}.zip")
+        destination, _ = QFileDialog.getSaveFileName(self, "Сохранить пакет", suggested, "ZIP (*.zip)")
+        if not destination:
+            return
+        result = builder.create(Path(destination))
+        QMessageBox.information(
+            self, "Пакет создан",
+            f"Пакет сохранён:\n{result.destination}\n\nDiagnostic request ID: {result.request_id}",
+        )
 
     def done(self, result: int) -> None:
         if self._threads:

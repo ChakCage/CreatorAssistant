@@ -94,7 +94,14 @@ class AdminReleaseRequest(BaseModel):
     edition: str = "commercial"
     channel: str = "stable"
     version: str = Field(max_length=40)
+    build_number: int = Field(default=0, ge=0)
+    architecture: str = Field(default="x86_64", max_length=40)
     download_url: str = Field(max_length=600)
     sha256: str = Field(min_length=64, max_length=64)
+    file_size: int = Field(default=0, ge=0)
     release_notes: str = ""
     minimum_supported_version: str = ""
+    mandatory: bool = False
+    manifest_schema_version: int = 1
+    key_id: str = Field(default="", max_length=80)
+    signature: str = ""

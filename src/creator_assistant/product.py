@@ -18,7 +18,53 @@ class AppEdition(str, Enum):
 
     @property
     def application_name(self) -> str:
-        return "Creator Assistant Developer" if self is AppEdition.DEVELOPER else "Creator Assistant"
+        if self is AppEdition.DEVELOPER:
+            return "Creator Assistant Developer"
+        from creator_assistant.infrastructure.build_info import current_build_info
+        return ("Creator Assistant Commercial Staging"
+                if current_build_info().build_variant == "staging"
+                else "Creator Assistant")
+
+
+class DistributionProfile(str, Enum):
+    DEVELOPER = "developer"
+    COMMERCIAL = "commercial"
+    COMMERCIAL_STAGING = "commercial-staging"
+
+    @property
+    def edition(self) -> AppEdition:
+        return AppEdition.DEVELOPER if self is DistributionProfile.DEVELOPER else AppEdition.COMMERCIAL
+
+    @property
+    def channel(self) -> str:
+        return {
+            DistributionProfile.DEVELOPER: "developer",
+            DistributionProfile.COMMERCIAL: "stable",
+            DistributionProfile.COMMERCIAL_STAGING: "beta",
+        }[self]
+
+    @property
+    def data_name(self) -> str:
+        return {
+            DistributionProfile.DEVELOPER: "Developer",
+            DistributionProfile.COMMERCIAL: "Commercial",
+            DistributionProfile.COMMERCIAL_STAGING: "CommercialStaging",
+        }[self]
+
+    @property
+    def credential_namespace(self) -> str:
+        return f"CreatorAssistant/{self.data_name}"
+
+
+def current_distribution_profile() -> DistributionProfile:
+    from creator_assistant.infrastructure.build_info import current_build_info
+
+    build = current_build_info()
+    if build.edition == AppEdition.DEVELOPER.value:
+        return DistributionProfile.DEVELOPER
+    if build.build_variant == "staging" or build.channel == "beta":
+        return DistributionProfile.COMMERCIAL_STAGING
+    return DistributionProfile.COMMERCIAL
 
 
 class Feature(str, Enum):
@@ -101,6 +147,8 @@ def qsettings_application_name(edition: AppEdition | None = None) -> str:
     resolved = edition or current_edition()
     if resolved is AppEdition.DEVELOPER:
         return "CreatorAssistantDeveloper"
+    if edition is not None:
+        return "CreatorAssistantCommercial"
     from creator_assistant.infrastructure.build_info import current_build_info
     return ("CreatorAssistantCommercialStaging"
             if current_build_info().license_backend_profile == "staging"

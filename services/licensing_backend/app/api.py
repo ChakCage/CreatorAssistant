@@ -25,6 +25,7 @@ from .schemas import (ActivateRequest, AdminCodeRequest, AdminGrantRequest, Admi
                       RefreshRequest, TelegramUserRequest)
 from .security import verify_service_token
 from .service import LicenseError, LicenseManager, aware, iso
+from .release_signing import release_manifest
 
 
 settings = load_settings(); manager = LicenseManager(settings); billing = BillingService(settings, manager); limiter = RateLimiter(settings.redis_url)
@@ -91,6 +92,40 @@ def version(): return {"version": app.version, "environment": settings.environme
 
 @app.get("/v1/licenses/keys")
 def keys(): return {"keys": {settings.signing_key_id: manager.signer.public_key_b64()}, "schema_version": 1}
+
+
+@app.get("/v1/releases/latest")
+def latest_release(
+    edition: str,
+    channel: str,
+    current_version: str,
+    architecture: str,
+    db: Session = Depends(get_db),
+):
+    """Public, secret-free release metadata, strictly partitioned by product profile."""
+    if edition not in {"developer", "commercial"}:
+        raise HTTPException(400, "Unknown edition")
+    if channel not in {"developer", "stable", "beta"}:
+        raise HTTPException(400, "Unknown channel")
+    row = db.scalar(select(Release).where(
+        Release.edition == edition,
+        Release.channel == channel,
+        Release.architecture == architecture,
+        Release.is_active.is_(True),
+    ).order_by(Release.build_number.desc(), Release.published_at.desc()))
+    if not row or not row.signature or not _newer(row.version, current_version):
+        return {}
+    return release_manifest(row)
+
+
+def _newer(candidate: str, current: str) -> bool:
+    def key(value: str):
+        main = value.split("-", 1)[0]
+        try:
+            return tuple(int(item) for item in main.split("."))
+        except ValueError:
+            return ()
+    return key(candidate) > key(current)
 
 
 @app.post("/v1/licenses/activate")
