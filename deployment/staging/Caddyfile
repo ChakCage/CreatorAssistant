@@ -30,8 +30,12 @@
 		-Server
 	}
 	@allowed path /telegram/webhook /health /ready
-	reverse_proxy @allowed bot:8081
-	respond 404
+	handle @allowed {
+		reverse_proxy bot:8081
+	}
+	handle {
+		respond 404
+	}
 }
 
 {$STAGING_DOWNLOAD_DOMAIN} {
@@ -43,6 +47,10 @@
 		-Server
 	}
 	@installer path_regexp installer ^/CreatorAssistant-Commercial-Staging-[0-9A-Za-z._-]+\.exe$
-	file_server @installer
-	respond 404
+	handle @installer {
+		file_server
+	}
+	handle {
+		respond 404
+	}
 }

@@ -27,6 +27,13 @@ private keys через SSH/SFTP в root/deploy-owned файл mode 600, имп�
 значение в protected `.env.staging`, затем безопасно удалите transport copy
 только после проверки. Исходные ключи автоматически не удаляются.
 
+Скрипт включает строго четыре файла `license-staging.private/public` и
+`update-beta.private/public`; любые production/developer keys игнорируются.
+После записи backup он восстанавливает четыре файла во временный каталог,
+сверяет SHA-256 с источником и перезаписывает временные private files нулями
+перед удалением. В инвентаризации остаются только имена, key id, размеры и
+fingerprints публичных ключей.
+
 Emergency rotation: отключить active release, сгенерировать новый staging
 key id, сохранить encrypted backup, обновить server secret, пересобрать
 Commercial Staging с новым public key, опубликовать новый signed beta manifest,

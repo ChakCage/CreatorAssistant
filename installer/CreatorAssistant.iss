@@ -7,6 +7,9 @@
 #ifndef AppVersion
   #error AppVersion is required
 #endif
+#ifndef WindowsVersion
+  #error WindowsVersion is required
+#endif
 #ifndef OutputDir
   #define OutputDir "..\dist\installers"
 #endif
@@ -61,7 +64,7 @@ UsePreviousAppDir=yes
 UsePreviousTasks=yes
 DisableProgramGroupPage=yes
 WizardStyle=modern
-VersionInfoVersion={#AppVersion}.0
+VersionInfoVersion={#WindowsVersion}
 VersionInfoProductName={#ProductName}
 VersionInfoDescription={#ProductName} Installer
 VersionInfoCompany=Creator Assistant

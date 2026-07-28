@@ -35,6 +35,7 @@ $Profiles = if ($Edition -eq 'all') { @('developer', 'commercial', 'commercial-s
 $Output = Join-Path $Root 'dist\installers'
 New-Item -ItemType Directory -Force -Path $Output | Out-Null
 $Spec = Join-Path $Root 'installer\CreatorAssistant.iss'
+$WindowsVersion = (($Version -split '[-+]')[0] + '.0')
 $Metadata = @{
     'developer' = @('CreatorAssistant-Developer', 'CreatorAssistant-Developer-Setup')
     'commercial' = @('CreatorAssistant', 'CreatorAssistant-Commercial-Setup')
@@ -44,7 +45,8 @@ $Artifacts = @()
 foreach ($Profile in $Profiles) {
     $Source = Join-Path $Root ('dist\' + $Metadata[$Profile][0])
     if (-not (Test-Path -LiteralPath $Source)) { throw "Package is missing: $Source" }
-    & $IsccPath "/DProfile=$Profile" "/DSourceDir=$Source" "/DAppVersion=$Version" "/DOutputDir=$Output" $Spec
+    & $IsccPath "/DProfile=$Profile" "/DSourceDir=$Source" "/DAppVersion=$Version" `
+        "/DWindowsVersion=$WindowsVersion" "/DOutputDir=$Output" $Spec
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed for $Profile." }
     $Installer = Join-Path $Output ($Metadata[$Profile][1] + "-$Version.exe")
     if (-not (Test-Path -LiteralPath $Installer)) { throw "Installer is missing: $Installer" }

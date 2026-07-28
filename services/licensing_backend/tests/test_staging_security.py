@@ -1,4 +1,5 @@
 import pytest
+import base64
 
 from app.config import load_settings
 from app.redaction import redact, redact_text
@@ -42,4 +43,21 @@ def test_staging_refuses_payments_and_placeholder_secrets(monkeypatch):
     monkeypatch.setenv("LICENSE_PAYMENTS_ENABLED", "false")
     monkeypatch.setenv("LICENSE_ACTIVATION_PEPPER", "change-me-" + "a" * 32)
     with pytest.raises(RuntimeError, match="placeholder"):
+        load_settings()
+
+
+def test_signing_private_key_can_be_loaded_from_docker_secret_file(monkeypatch, tmp_path):
+    key = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
+    secret_file = tmp_path / "license.private"
+    secret_file.write_text(key + "\n", encoding="ascii")
+    monkeypatch.delenv("LICENSE_SIGNING_PRIVATE_KEY", raising=False)
+    monkeypatch.setenv("LICENSE_SIGNING_PRIVATE_KEY_FILE", str(secret_file))
+    assert load_settings().signing_private_key == bytes(range(32))
+
+
+def test_inline_and_file_signing_keys_are_mutually_exclusive(monkeypatch, tmp_path):
+    secret_file = tmp_path / "license.private"
+    secret_file.write_text("unused", encoding="ascii")
+    monkeypatch.setenv("LICENSE_SIGNING_PRIVATE_KEY_FILE", str(secret_file))
+    with pytest.raises(RuntimeError, match="cannot both be set"):
         load_settings()

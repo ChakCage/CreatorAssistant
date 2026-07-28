@@ -12,7 +12,7 @@ x-backend-env: &backend-env
   LICENSE_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
   LICENSE_ACTIVATION_PEPPER: ${LICENSE_ACTIVATION_PEPPER}
   LICENSE_SIGNING_KEY_ID: ${LICENSE_SIGNING_KEY_ID}
-  LICENSE_SIGNING_PRIVATE_KEY: ${LICENSE_SIGNING_PRIVATE_KEY}
+  LICENSE_SIGNING_PRIVATE_KEY_FILE: /run/secrets/license-signing-private-key
   LICENSE_ADMIN_TOKEN_HASH: ${LICENSE_ADMIN_TOKEN_HASH}
   LICENSE_BOT_SERVICE_SECRET: ${LICENSE_BOT_SERVICE_SECRET}
   LICENSE_PUBLIC_BASE_URL: https://${STAGING_API_DOMAIN}
@@ -49,7 +49,7 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - releases:/srv/releases:ro
+      - ${STAGING_RELEASES_DIRECTORY}:/srv/releases:ro
       - caddy-data:/data
       - caddy-config:/config
     networks: [edge, internal]
@@ -92,6 +92,7 @@ services:
     build:
       context: ../../services/licensing_backend
     environment: *backend-env
+    secrets: [license-signing-private-key]
     command: ["alembic", "upgrade", "head"]
     depends_on:
       postgres: {condition: service_healthy}
@@ -104,6 +105,7 @@ services:
       context: ../../services/licensing_backend
     restart: unless-stopped
     environment: *backend-env
+    secrets: [license-signing-private-key]
     depends_on:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -156,7 +158,6 @@ services:
     command: ["/ops/backup-loop.sh"]
     volumes:
       - backups:/backups
-      - ./ops:/ops:ro
     depends_on:
       migrate: {condition: service_completed_successfully}
     networks: [internal]
@@ -183,7 +184,6 @@ services:
     command: ["/ops/monitor-loop.sh"]
     volumes:
       - backups:/backups:ro
-      - ./ops:/ops:ro
     depends_on:
       api: {condition: service_healthy}
       bot: {condition: service_healthy}
@@ -199,7 +199,10 @@ networks:
 volumes:
   postgres-data:
   redis-data:
-  releases:
   backups:
   caddy-data:
   caddy-config:
+
+secrets:
+  license-signing-private-key:
+    file: ${STAGING_LICENSE_PRIVATE_KEY_FILE}

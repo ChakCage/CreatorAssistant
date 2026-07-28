@@ -41,11 +41,22 @@ def _decode_key(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
+def _secret_value(name: str) -> str:
+    value = os.getenv(name, "")
+    file_name = os.getenv(f"{name}_FILE", "").strip()
+    if value and file_name:
+        raise RuntimeError(f"{name} and {name}_FILE cannot both be set")
+    if file_name:
+        with open(file_name, "r", encoding="ascii") as secret_file:
+            return secret_file.read().strip()
+    return value
+
+
 def load_settings() -> Settings:
     environment = os.getenv("LICENSE_ENV", "local").strip().lower()
     database_url = os.getenv("LICENSE_DATABASE_URL", "postgresql+psycopg://creator_assistant:creator_assistant@localhost:5432/creator_assistant")
     pepper = os.getenv("LICENSE_ACTIVATION_PEPPER", "")
-    private_key = _decode_key(os.getenv("LICENSE_SIGNING_PRIVATE_KEY", ""))
+    private_key = _decode_key(_secret_value("LICENSE_SIGNING_PRIVATE_KEY"))
     public_base_url = os.getenv("LICENSE_PUBLIC_BASE_URL", "http://127.0.0.1:18080").rstrip("/")
     fake_payment_secret = os.getenv("LICENSE_FAKE_PAYMENT_SECRET", "")
     bot_service_secret = os.getenv("LICENSE_BOT_SERVICE_SECRET", "")

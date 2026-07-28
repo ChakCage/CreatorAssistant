@@ -21,5 +21,6 @@ docker compose --env-file .env.staging build
 docker compose --env-file .env.staging up -d --remove-orphans
 ln -sfn "`$previous" '$RemoteRoot/current'
 "@
+$remote = $remote.Replace("`r`n", "`n")
 ssh @ssh "$SshUser@$SshHost" $remote
 if ($LASTEXITCODE) { throw "Rollback failed." }

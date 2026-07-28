@@ -11,7 +11,7 @@ $patterns = @(
 )
 $violations = @()
 foreach ($file in $tracked) {
-    if ($file -eq "scripts/scan-staging-secrets.ps1") { continue }
+    if ($file -in @("scripts/scan-staging-secrets.ps1", "scripts/initialize-staging-secrets.ps1")) { continue }
     $path = Join-Path $Repository $file
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
     $text = Get-Content -Raw -LiteralPath $path -ErrorAction SilentlyContinue

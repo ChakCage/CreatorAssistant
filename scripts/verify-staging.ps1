@@ -18,6 +18,7 @@ curl --fail --silent --show-error --proto '=https' --tlsv1.2 "https://`$STAGING_
 curl --fail --silent --show-error --proto '=https' --tlsv1.2 "https://`$STAGING_API_DOMAIN/v1/admin/events" --output /dev/null --write-out '%{http_code}' | grep -q 404
 echo | openssl s_client -verify_return_error -verify_hostname "`$STAGING_API_DOMAIN" -servername "`$STAGING_API_DOMAIN" -connect "`$STAGING_API_DOMAIN:443" 2>/dev/null >/dev/null
 "@
+$remote = $remote.Replace("`r`n", "`n")
 ssh @ssh "$SshUser@$SshHost" $remote
 if ($LASTEXITCODE) { throw "Staging verification failed." }
 Write-Host "Staging HTTPS, hostname verification, public health, and admin isolation passed."
