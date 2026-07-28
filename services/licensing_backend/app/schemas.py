@@ -87,6 +87,17 @@ class NotificationResultRequest(BaseModel):
     error: str = Field(default="", max_length=500)
 
 
+class SupportTicketCreateRequest(BotUserRequest):
+    category: str = Field(pattern="^(activation|application|render|other)$")
+    message: str = Field(min_length=3, max_length=4000)
+    attachment: dict[str, Any] = Field(default_factory=dict)
+
+
+class SupportTicketActionRequest(BaseModel):
+    telegram_user_id: str = Field(min_length=1, max_length=64)
+    message: str = Field(default="", max_length=4000)
+
+
 class AdminPriceRequest(BaseModel):
     plan_code: str = "beta"
     provider: str = Field(default="fake", max_length=40)

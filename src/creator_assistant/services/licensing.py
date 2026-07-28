@@ -4,6 +4,8 @@ import base64
 import json
 import os
 import platform
+import socket
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -12,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -48,6 +51,28 @@ class LicenseStatus:
 class LicenseClientError(RuntimeError):
     def __init__(self, code: str, message: str = "", request_id: str = "", details: dict | None = None) -> None:
         super().__init__(message or code); self.code = code; self.request_id = request_id; self.details = details or {}
+
+
+@dataclass(frozen=True)
+class LicenseRequestDiagnostics:
+    edition: str
+    channel: str
+    hostname: str
+    method: str = ""
+    path: str = ""
+    timeout_seconds: int = 0
+    http_status: int = 0
+    request_id: str = ""
+    error_code: str = ""
+
+    def safe_text(self) -> str:
+        return (
+            f"Edition: {self.edition} · Channel: {self.channel}\n"
+            f"API: {self.hostname}{self.path}\n"
+            f"Метод: {self.method or '—'} · Timeout: {self.timeout_seconds or '—'} с · "
+            f"HTTP: {self.http_status or '—'}\n"
+            f"Код: {self.error_code or '—'} · Request ID: {self.request_id or '—'}"
+        )
 
 
 def _parse_time(value: str) -> datetime:
@@ -129,6 +154,12 @@ class LicenseService:
         self.process_started_wall = self.wall_clock()
         self.last_request_id = ""
         self.last_error_code = ""
+        split = urlsplit(self.endpoint)
+        self.last_diagnostics = LicenseRequestDiagnostics(
+            edition=build.edition,
+            channel=build.channel,
+            hostname=split.hostname or "",
+        )
 
     @property
     def installation_id(self) -> str: return self.storage.installation_id()
@@ -140,22 +171,83 @@ class LicenseService:
         if credential: headers["Authorization"] = "Bearer " + credential
         request = urllib.request.Request(self.endpoint + path,
             data=json.dumps(payload).encode("utf-8") if payload is not None else None, headers=headers, method=method)
+        build = current_build_info()
+        split = urlsplit(self.endpoint)
+        self.last_diagnostics = LicenseRequestDiagnostics(
+            edition=build.edition, channel=build.channel, hostname=split.hostname or "",
+            method=method, path=path, timeout_seconds=timeout,
+        )
         try:
             with self.opener(request, timeout=timeout) as response:
                 result = json.loads(response.read().decode("utf-8"))
+                status = int(getattr(response, "status", 0) or getattr(response, "getcode", lambda: 0)() or 0)
+                request_id = str(getattr(response, "headers", {}).get("X-Request-ID", "") or "")
+                self.last_request_id = request_id
+                self.last_error_code = ""
+                self.last_diagnostics = LicenseRequestDiagnostics(
+                    edition=build.edition, channel=build.channel, hostname=split.hostname or "",
+                    method=method, path=path, timeout_seconds=timeout, http_status=status,
+                    request_id=request_id,
+                )
         except urllib.error.HTTPError as exc:
             try: body = json.loads(exc.read().decode("utf-8"))
             except Exception: body = {}
             error = body.get("error", {}) if isinstance(body, dict) else {}
-            code = str(error.get("code") or "LICENSE_SERVER_ERROR")
-            self.last_request_id = str(body.get("request_id", ""))
+            code = str(error.get("code") or f"HTTP_{exc.code}")
+            request_id = str(
+                body.get("request_id", "")
+                or getattr(exc, "headers", {}).get("X-Request-ID", "")
+                or ""
+            )
+            self.last_request_id = request_id
             self.last_error_code = code
-            raise LicenseClientError(code, _friendly_error(code), request_id=str(body.get("request_id", "")), details=error) from exc
-        except (OSError, urllib.error.URLError, TimeoutError) as exc:
-            self.last_error_code = "SERVER_UNAVAILABLE"
-            raise LicenseClientError("SERVER_UNAVAILABLE", "Сервер лицензий временно недоступен") from exc
-        if not isinstance(result, dict): raise LicenseClientError("INVALID_SERVER_RESPONSE")
+            self.last_diagnostics = LicenseRequestDiagnostics(
+                edition=build.edition, channel=build.channel, hostname=split.hostname or "",
+                method=method, path=path, timeout_seconds=timeout, http_status=int(exc.code),
+                request_id=request_id, error_code=code,
+            )
+            message = _friendly_error(code)
+            if not message and isinstance(body, dict):
+                message = str(body.get("detail") or "")
+            raise LicenseClientError(
+                code, message or f"Сервер лицензий вернул HTTP {exc.code}.",
+                request_id=request_id, details=error,
+            ) from exc
+        except (ssl.SSLError, ssl.CertificateError) as exc:
+            self._record_error("TLS_ERROR", method, path, timeout, build, split)
+            raise LicenseClientError("TLS_ERROR", "Не удалось проверить защищённое соединение с сервером лицензий.") from exc
+        except (socket.timeout, TimeoutError) as exc:
+            self._record_error("REQUEST_TIMEOUT", method, path, timeout, build, split)
+            raise LicenseClientError("REQUEST_TIMEOUT", f"Сервер лицензий не ответил за {timeout} с.") from exc
+        except urllib.error.URLError as exc:
+            reason = getattr(exc, "reason", None)
+            code = "REQUEST_TIMEOUT" if isinstance(reason, (socket.timeout, TimeoutError)) else "SERVER_UNAVAILABLE"
+            self._record_error(code, method, path, timeout, build, split)
+            message = f"Сервер лицензий не ответил за {timeout} с." if code == "REQUEST_TIMEOUT" else "Нет соединения с сервером лицензий."
+            raise LicenseClientError(code, message) from exc
+        except OSError as exc:
+            self._record_error("SERVER_UNAVAILABLE", method, path, timeout, build, split)
+            raise LicenseClientError("SERVER_UNAVAILABLE", "Нет соединения с сервером лицензий.") from exc
+        if not isinstance(result, dict):
+            self._record_error(
+                "INVALID_SERVER_RESPONSE", method, path, timeout, build, split,
+                http_status=self.last_diagnostics.http_status, request_id=self.last_diagnostics.request_id,
+            )
+            raise LicenseClientError("INVALID_SERVER_RESPONSE", "Сервер лицензий вернул некорректный ответ.",
+                                     request_id=self.last_request_id)
         return result
+
+    def _record_error(
+        self, code: str, method: str, path: str, timeout: int, build, split,
+        *, http_status: int = 0, request_id: str = "",
+    ) -> None:
+        self.last_error_code = code
+        self.last_request_id = request_id
+        self.last_diagnostics = LicenseRequestDiagnostics(
+            edition=build.edition, channel=build.channel, hostname=split.hostname or "",
+            method=method, path=path, timeout_seconds=timeout, http_status=http_status,
+            request_id=request_id, error_code=code,
+        )
 
     def _verify(self, token: str) -> dict[str, Any]:
         try:

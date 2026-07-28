@@ -55,6 +55,12 @@ def test_production_bot_accepts_only_explicit_internal_http_and_rejects_placehol
         valid.model_copy(update={"service_secret": "change-me-" + "x" * 32}).validate_runtime()
 
 
+def test_staging_admin_section_is_explicit_and_support_has_no_personal_username():
+    settings = BotSettings(service_secret="x" * 32, admin_telegram_id=421403653)
+    assert settings.admin_telegram_id == 421403653
+    assert "Chak_74" not in settings.support_url
+
+
 @pytest.mark.asyncio
 async def test_beta_invite_is_redeemed_through_scoped_backend_route():
     seen = []

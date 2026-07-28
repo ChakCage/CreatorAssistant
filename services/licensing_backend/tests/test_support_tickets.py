@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+from sqlalchemy import select
+
+from app.api import settings
+from app.db import SessionLocal
+from app.models import SupportBlock, SupportTicket, SupportTicketStatus, User
+from app.security import mint_service_token
+
+
+def headers(*permissions: str) -> dict[str, str]:
+    token = mint_service_token("test-bot", list(permissions), "creator_assistant", settings.bot_service_secret)
+    return {"Authorization": "Bearer " + token}
+
+
+def user(telegram_id: str = "421400000") -> None:
+    with SessionLocal() as db:
+        db.add(User(telegram_user_id=telegram_id, telegram_first_name="Tester"))
+        db.commit()
+
+
+def test_support_ticket_lifecycle_and_audit_routes(client):
+    user()
+    created = client.post(
+        "/v1/bot/support/tickets",
+        headers=headers("support:write"),
+        json={
+            "telegram_user_id": "421400000",
+            "category": "activation",
+            "message": "Не проходит активация",
+            "attachment": {"type": "photo", "name": "screen.jpg", "file_id": "telegram-file", "size": 1024},
+        },
+    )
+    assert created.status_code == 200
+    ticket = created.json()
+    assert ticket["number"].startswith("CA-")
+    assert ticket["status"] == "OPEN"
+
+    listed = client.get("/v1/bot/support/tickets", headers=headers("support:admin"))
+    assert [item["id"] for item in listed.json()["tickets"]] == [ticket["id"]]
+
+    replied = client.post(
+        f"/v1/bot/support/tickets/{ticket['id']}/reply",
+        headers=headers("support:admin"),
+        json={"telegram_user_id": "421403653", "message": "Проверяем соединение."},
+    )
+    assert replied.status_code == 200
+    assert replied.json()["admin_reply"] == "Проверяем соединение."
+
+    closed = client.post(
+        f"/v1/bot/support/tickets/{ticket['id']}/close",
+        headers=headers("support:admin"),
+        json={"telegram_user_id": "421403653"},
+    )
+    assert closed.json()["status"] == SupportTicketStatus.CLOSED.value
+    with SessionLocal() as db:
+        assert db.get(SupportTicket, ticket["id"]).closed_at is not None
+
+
+def test_support_rejects_unsafe_attachment_and_blocked_spam(client):
+    user("421400001")
+    unsafe = client.post(
+        "/v1/bot/support/tickets",
+        headers=headers("support:write"),
+        json={
+            "telegram_user_id": "421400001", "category": "other", "message": "Файл",
+            "attachment": {"type": "application/x-msdownload", "name": "bad.exe", "file_id": "bad", "size": 12},
+        },
+    )
+    assert unsafe.status_code == 422
+    with SessionLocal() as db:
+        target = db.scalar(select(User).where(User.telegram_user_id == "421400001"))
+        db.add(SupportBlock(user_id=target.id, reason="spam")); db.commit()
+    blocked = client.post(
+        "/v1/bot/support/tickets",
+        headers=headers("support:write"),
+        json={"telegram_user_id": "421400001", "category": "other", "message": "Ещё сообщение"},
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["error"]["code"] == "SUPPORT_BLOCKED"

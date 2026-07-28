@@ -30,6 +30,7 @@ class PaymentStatus(str, enum.Enum): CREATED = "CREATED"; PENDING = "PENDING"; P
 class PaymentEventStatus(str, enum.Enum): RECEIVED = "RECEIVED"; PROCESSED = "PROCESSED"; DUPLICATE = "DUPLICATE"; REJECTED = "REJECTED"; REVIEW_REQUIRED = "REVIEW_REQUIRED"; FAILED = "FAILED"
 class NotificationStatus(str, enum.Enum): PENDING = "PENDING"; PROCESSING = "PROCESSING"; SENT = "SENT"; FAILED = "FAILED"; CANCELLED = "CANCELLED"
 class PaymentPurpose(str, enum.Enum): DIRECT_SUBSCRIPTION_PURCHASE = "DIRECT_SUBSCRIPTION_PURCHASE"
+class SupportTicketStatus(str, enum.Enum): OPEN = "OPEN"; CLOSED = "CLOSED"
 
 
 class TimestampMixin:
@@ -295,5 +296,29 @@ class BetaInviteUse(Base):
         UniqueConstraint("invite_id", "user_id", name="uq_beta_invite_user"),
         UniqueConstraint("telegram_user_id", name="uq_beta_single_subscription"),
     )
+
+
+class SupportTicket(Base):
+    __tablename__ = "support_tickets"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    telegram_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    category: Mapped[str] = mapped_column(String(40))
+    message: Mapped[str] = mapped_column(Text)
+    attachment: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[SupportTicketStatus] = mapped_column(Enum(SupportTicketStatus), default=SupportTicketStatus.OPEN, index=True)
+    admin_reply: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class SupportBlock(Base):
+    __tablename__ = "support_blocks"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+    reason: Mapped[str] = mapped_column(String(300), default="spam")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
 
 Index("ix_devices_active_subscription", Device.subscription_id, Device.status)

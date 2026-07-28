@@ -53,6 +53,10 @@ def test_inno_installer_defines_three_isolated_products_and_preserves_data():
     assert 'InstallLeaf "Commercial"' in script
     assert 'InstallLeaf "Commercial-Staging"' in script
     assert "PrivilegesRequired=lowest" in script
+    assert "DisableDirPage=no" in script
+    assert "Путь во временной папке используется только установщиком" in script
+    assert "IsTemporaryInstallPath(WizardForm.DirEdit.Text)" in script
+    assert "ExpandConstant('{localappdata}\\Programs\\CreatorAssistant\\{#InstallLeaf}')" in script
     assert "SetupMutex=CreatorAssistant-Installer-Global" in script
     assert "Также удалить настройки и данные Creator Assistant" in script
     assert "Общие модели Ollama/Whisper" in script

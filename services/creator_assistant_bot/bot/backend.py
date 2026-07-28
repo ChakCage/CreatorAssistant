@@ -47,4 +47,25 @@ class BackendClient:
     async def notifications(self): return await self._request("GET", "/v1/bot/notifications")
     async def notification_result(self, notification_id: str, success: bool, error: str = ""):
         return await self._request("POST", f"/v1/bot/notifications/{notification_id}/result", json={"success": success, "error": error})
+    async def create_support_ticket(self, telegram_user_id: int, category: str, message: str, attachment: dict | None = None):
+        return await self._request("POST", "/v1/bot/support/tickets", json={
+            "telegram_user_id": str(telegram_user_id), "category": category,
+            "message": message, "attachment": attachment or {},
+        })
+    async def support_tickets(self, status: str = "OPEN"):
+        return await self._request("GET", "/v1/bot/support/tickets", params={"status": status})
+    async def support_ticket(self, ticket_id: str):
+        return await self._request("GET", f"/v1/bot/support/tickets/{ticket_id}")
+    async def reply_support_ticket(self, admin_id: int, ticket_id: str, message: str):
+        return await self._request("POST", f"/v1/bot/support/tickets/{ticket_id}/reply", json={
+            "telegram_user_id": str(admin_id), "message": message,
+        })
+    async def close_support_ticket(self, admin_id: int, ticket_id: str):
+        return await self._request("POST", f"/v1/bot/support/tickets/{ticket_id}/close", json={
+            "telegram_user_id": str(admin_id),
+        })
+    async def block_support_user(self, admin_id: int, ticket_id: str):
+        return await self._request("POST", f"/v1/bot/support/tickets/{ticket_id}/block", json={
+            "telegram_user_id": str(admin_id), "message": "spam",
+        })
     async def close(self): await self.client.aclose()

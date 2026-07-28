@@ -62,6 +62,7 @@ CloseApplications=yes
 RestartApplications=yes
 UsePreviousAppDir=yes
 UsePreviousTasks=yes
+DisableDirPage=no
 DisableProgramGroupPage=yes
 WizardStyle=modern
 VersionInfoVersion={#WindowsVersion}
@@ -89,9 +90,36 @@ Filename: "{app}\{#ExecutableName}"; Description: "Запустить {#ProductN
 Filename: "notepad.exe"; Parameters: """{app}\docs\beta-quick-start-ru.md"""; Description: "Открыть краткую инструкцию"; Flags: postinstall skipifsilent shellexec
 
 [Code]
+function HasPathPrefix(const Candidate, Prefix: String): Boolean;
+var
+  NormalizedCandidate, NormalizedPrefix: String;
+begin
+  NormalizedCandidate := Lowercase(AddBackslash(ExpandFileName(Candidate)));
+  NormalizedPrefix := Lowercase(AddBackslash(ExpandFileName(Prefix)));
+  Result := Pos(NormalizedPrefix, NormalizedCandidate) = 1;
+end;
+
+function IsTemporaryInstallPath(const Candidate: String): Boolean;
+begin
+  Result :=
+    HasPathPrefix(Candidate, GetEnv('TEMP')) or
+    HasPathPrefix(Candidate, GetEnv('TMP')) or
+    HasPathPrefix(Candidate, ExpandConstant('{sd}\Temp')) or
+    HasPathPrefix(Candidate, ExpandConstant('{sd}\tmp'));
+end;
+
 function InitializeSetup(): Boolean;
 begin
   Result := True;
+end;
+
+procedure InitializeWizard();
+begin
+  if IsTemporaryInstallPath(WizardForm.DirEdit.Text) then
+    WizardForm.DirEdit.Text :=
+      ExpandConstant('{localappdata}\Programs\CreatorAssistant\{#InstallLeaf}');
+  WizardForm.SelectDirLabel.Caption :=
+    'Приложение будет установлено в указанную папку. Путь во временной папке используется только установщиком:';
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

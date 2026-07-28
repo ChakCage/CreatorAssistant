@@ -17,7 +17,8 @@ class BotSettings(BaseSettings):
     health_port: int = 8081
     bind_host: str = "127.0.0.1"
     mock_telegram: bool = False
-    support_url: str = "https://t.me/creator_assistant_support"
+    support_url: str = ""
+    admin_telegram_id: int = 0
     help_url: str = "https://example.invalid/creator-assistant/help"
     manage_webhook: bool = False
     run_notification_worker: bool = False

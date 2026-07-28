@@ -162,3 +162,29 @@ def test_wizard_is_rejected_for_developer():
     container = SimpleNamespace(edition=AppEdition.DEVELOPER)
     with pytest.raises(RuntimeError, match="Commercial Edition"):
         CommercialSetupWizard(container)
+
+
+def test_commercial_ai_success_hides_raw_runtime_dictionary(tmp_path: Path):
+    application = qt_app()
+    value = settings()
+    service = CommercialSetupService(value)
+    container = SimpleNamespace(
+        edition=AppEdition.COMMERCIAL,
+        settings=value,
+        settings_store=SettingsStore(tmp_path / "settings.json"),
+        commercial_setup=service,
+        first_run=True,
+    )
+    wizard = CommercialSetupWizard(container)
+    wizard._preflight_ready({
+        "model": "qwen3.6:35b-a3b",
+        "duration_seconds": 46.7,
+        "runtime": {"digest": "secret-looking-runtime-value", "quantization": "Q4_K_M"},
+    })
+    text = wizard.ai_test_status.text()
+    assert "qwen3.6:35b-a3b" in text
+    assert "46.7" in text
+    assert "Structured JSON" in text
+    assert "digest" not in text
+    assert "Q4_K_M" not in text
+    wizard.close()

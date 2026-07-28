@@ -14,6 +14,9 @@ ERRORS = {
     "TOO_MANY_ATTEMPTS": "Слишком много попыток. Повторите позже.", "SUBSCRIPTION_INACTIVE": "Подписка не активна.",
     "DEVICE_LIMIT_REACHED": "Достигнут лимит устройств. Отключите старое устройство.",
     "SERVER_UNAVAILABLE": "Сервер лицензий временно недоступен.",
+    "REQUEST_TIMEOUT": "Сервер лицензий не ответил вовремя. Проверьте подключение и повторите попытку.",
+    "TLS_ERROR": "Не удалось проверить защищённое соединение с сервером лицензий.",
+    "INVALID_SERVER_RESPONSE": "Сервер лицензий вернул некорректный ответ.",
 }
 
 
@@ -36,7 +39,8 @@ class LicenseDialog(QDialog):
         telegram.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(bot_url + "?start=activation")))
         purchase.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(bot_url + "?start=buy")))
         open_bot.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(bot_url)))
-        support.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://t.me/CreatorAssistantSupport")))
+        support.setEnabled(bool(bot_url))
+        support.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(bot_url + "?start=support")))
         links.addWidget(telegram); links.addWidget(purchase); links.addWidget(open_bot); links.addWidget(support); links.addStretch(1); layout.addLayout(links)
         self.devices = QTableWidget(0, 4); self.devices.setHorizontalHeaderLabels(("Устройство", "Статус", "Первый вход", "Последняя проверка")); layout.addWidget(self.devices, 1)
         self.technical = QLabel(); self.technical.setWordWrap(True); self.technical.setTextInteractionFlags(self.technical.textInteractionFlags()); layout.addWidget(self.technical)
@@ -47,11 +51,11 @@ class LicenseDialog(QDialog):
         self.status_label.setText(f"Статус: {state}\nТариф: {value.plan or '—'}\nОкончание: {value.expires_at or '—'}\n"
                                   f"Следующая проверка: раз в 24 часа\nOffline до: {value.offline_grace_until or '—'}\n"
                                   f"Последняя синхронизация: {value.last_refresh or '—'}\n{value.message}")
-        self.technical.setText(f"Backend: {self.service.endpoint}\nRequest ID: {value.request_id or '—'}")
+        self.technical.setText(self.service.last_diagnostics.safe_text())
 
     def _error(self, exc: Exception) -> None:
         code = getattr(exc, "code", "LICENSE_ERROR"); request_id = getattr(exc, "request_id", "")
-        self.technical.setText(f"Код: {code}\nRequest ID: {request_id or '—'}")
+        self.technical.setText(self.service.last_diagnostics.safe_text())
         devices = getattr(exc, "details", {}).get("devices", [])
         if devices:
             self._populate_devices(devices)

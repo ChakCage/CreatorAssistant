@@ -230,13 +230,21 @@ class CommercialSetupWizard(QWizard):
 
     def test_selected_model(self) -> None:
         model = self.service.profile(self._selected_profile_id()).model_id
-        self.ai_test_status.setText(f"Запускаю короткую проверку {model}…")
+        self.ai_test_status.setText(
+            f"Модель: {model}\n"
+            "Состояние: запуск модели → ожидание ответа → проверка Structured JSON…\n"
+            "Первый запуск большой модели может занять несколько минут."
+        )
         self._start(lambda _: self.service.structured_preflight(model), self._preflight_ready)
 
     def _preflight_ready(self, result: dict[str, Any]) -> None:
         self.container.settings.setdefault("commercial_setup", {})["last_preflight"] = result
-        runtime = result.get("runtime", {})
-        self.ai_test_status.setText(f"Модель готова · {result['duration_seconds']:.1f} с · runtime: {runtime or 'CPU/GPU не сообщён Ollama'}")
+        model = str(result.get("model") or self.service.profile(self._selected_profile_id()).model_id)
+        self.ai_test_status.setText(
+            f"Модель {model} готова.\n"
+            f"Проверка завершена за {result['duration_seconds']:.1f} с.\n"
+            "Structured JSON получен и прошёл валидацию."
+        )
 
     def _failed(self, message: str, details: str) -> None:
         self.pull_progress.hide(); self.ai_test_status.setText(f"Проблема: {message}")

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import json
+import socket
+import urllib.error
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -104,7 +106,8 @@ def test_secure_storage_keeps_tokens_out_of_settings():
 
 
 class Response:
-    def __init__(self, value): self.value = value
+    def __init__(self, value, status=200, headers=None):
+        self.value = value; self.status = status; self.headers = headers or {}
     def __enter__(self): return self
     def __exit__(self, *args): pass
     def read(self): return json.dumps(self.value).encode()
@@ -124,3 +127,45 @@ def test_logout_clears_secure_storage_when_server_unavailable():
     save_entitlement(service, private, installation, now)
     service.opener = lambda *a, **k: (_ for _ in ()).throw(OSError("offline"))
     service.logout(); assert service.status().state is LicenseState.NOT_ACTIVATED
+
+
+def test_license_diagnostics_are_safe_and_capture_success():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc); service, _, _ = service_at(now)
+    service.opener = lambda request, timeout=0: Response(
+        {"status": "ok"}, headers={"X-Request-ID": "request-123"},
+    )
+    assert service._request("GET", "/health", timeout=8)["status"] == "ok"
+    diagnostic = service.last_diagnostics
+    assert diagnostic.hostname == "127.0.0.1"
+    assert diagnostic.path == "/health"
+    assert diagnostic.timeout_seconds == 8
+    assert diagnostic.http_status == 200
+    assert diagnostic.request_id == "request-123"
+    assert "credential" not in diagnostic.safe_text().casefold()
+
+
+def test_http_error_is_not_reported_as_server_unavailable():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc); service, _, _ = service_at(now)
+    body = json.dumps({"detail": "validation failed", "request_id": "request-422"}).encode()
+    service.opener = lambda *args, **kwargs: (_ for _ in ()).throw(
+        urllib.error.HTTPError(
+            "http://127.0.0.1/v1/licenses/activate", 422, "bad", {},
+            __import__("io").BytesIO(body),
+        )
+    )
+    with pytest.raises(LicenseClientError) as caught:
+        service._request("POST", "/v1/licenses/activate", {})
+    assert caught.value.code == "HTTP_422"
+    assert caught.value.request_id == "request-422"
+    assert service.last_diagnostics.http_status == 422
+
+
+def test_timeout_is_distinct_from_other_transport_failures():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc); service, _, _ = service_at(now)
+    service.opener = lambda *args, **kwargs: (_ for _ in ()).throw(
+        urllib.error.URLError(socket.timeout("timed out"))
+    )
+    with pytest.raises(LicenseClientError) as caught:
+        service._request("GET", "/health", timeout=8)
+    assert caught.value.code == "REQUEST_TIMEOUT"
+    assert service.last_diagnostics.timeout_seconds == 8
