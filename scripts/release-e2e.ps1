@@ -132,6 +132,15 @@ try {
     Wait-File $LicenseReport
     $LicenseValue = Get-Content -Raw -LiteralPath $LicenseReport | ConvertFrom-Json
     Add-Step 'activate-and-restart-license' ([bool]$LicenseValue.success) $LicenseReport
+    Add-Step 'offline-grace-before-boundary' ($LicenseValue.offline_before_boundary -eq 'OFFLINE_GRACE') $LicenseValue.offline_grace_boundary
+    Add-Step 'offline-grace-after-boundary-blocked' ([bool]$LicenseValue.feature_gate_blocked_after_boundary) $LicenseValue.offline_after_boundary
+    Add-Step 'offline-grace-online-recovery' ($LicenseValue.online_recovery -eq 'ACTIVE') $LicenseValue.online_recovery
+
+    $ProjectFixtureReport = Join-Path $Reports 'packaged-project-fixture.json'
+    Start-Process -FilePath $InstalledStaging -ArgumentList "--verify-project-fixture=$ProjectFixtureReport" -Wait -WindowStyle Hidden
+    Wait-File $ProjectFixtureReport
+    $ProjectFixtureValue = Get-Content -Raw -LiteralPath $ProjectFixtureReport | ConvertFrom-Json
+    Add-Step 'short-packaged-project-fixture' ([bool]$ProjectFixtureValue.success) $ProjectFixtureReport
 
     $Hash = (Get-FileHash -LiteralPath $StagingNext -Algorithm SHA256).Hash.ToLowerInvariant()
     $Size = (Get-Item -LiteralPath $StagingNext).Length

@@ -391,9 +391,20 @@ def _commercial_license_verification(container: ServiceContainer, report_path: P
         restarted_service = type(container.licensing)()
         restarted = restarted_service.status()
         refreshed = restarted_service.refresh()
-        offline_clock = datetime.now(timezone.utc) + timedelta(hours=49)
+        payload = restarted_service.storage.load().get("payload") or {}
+        grace_boundary = datetime.fromisoformat(str(payload["offline_grace_until"]).replace("Z", "+00:00"))
+        offline_clock = grace_boundary - timedelta(seconds=1)
         offline_service = type(container.licensing)(wall_clock=lambda: offline_clock)
         offline = offline_service.status(server_available=False)
+        expired_clock = grace_boundary + timedelta(seconds=1)
+        expired_service = type(container.licensing)(wall_clock=lambda: expired_clock)
+        after_boundary = expired_service.status(server_available=False)
+        feature_blocked = False
+        try:
+            type(container.feature_gate)(container.edition, expired_service).require("shorts_analysis")
+        except Exception:
+            feature_blocked = True
+        recovered = restarted_service.refresh()
         preserve = os.environ.get("CREATOR_ASSISTANT_E2E_PRESERVE_LICENSE") == "1"
         if preserve:
             after_deactivate = refreshed
@@ -406,13 +417,18 @@ def _commercial_license_verification(container: ServiceContainer, report_path: P
             "success": (
                 not before.active and activated.active and restarted.active and refreshed.active
                 and offline.active and offline.state.value == "OFFLINE_GRACE"
+                and not after_boundary.active and feature_blocked and recovered.active
                 and (after_deactivate.active if preserve else not after_deactivate.active)
             ),
             "before": before.state.value,
             "activated": {"state": activated.state.value, "plan": activated.plan, "expires_at": activated.expires_at},
             "restart": restarted.state.value,
             "refresh": refreshed.state.value,
-            "offline_49h": offline.state.value,
+            "offline_before_boundary": offline.state.value,
+            "offline_after_boundary": after_boundary.state.value,
+            "feature_gate_blocked_after_boundary": feature_blocked,
+            "online_recovery": recovered.state.value,
+            "offline_grace_boundary": grace_boundary.isoformat(),
             "after_deactivate": after_deactivate.state.value,
             "license_preserved_for_update": preserve,
             "backend": restarted_service.endpoint,
@@ -529,6 +545,12 @@ def main() -> int:
         )
         if update_e2e_arg:
             container.first_run = False
+        project_fixture_arg = next(
+            (value.split("=", 1)[1] for value in sys.argv if value.startswith("--verify-project-fixture=")),
+            "",
+        )
+        if project_fixture_arg:
+            container.first_run = False
         if "--smoke-test" in sys.argv:
             container.first_run = False
         window = MainWindow(container)
@@ -606,6 +628,12 @@ def main() -> int:
                     app.quit(),
                 ),
             )
+        if project_fixture_arg:
+            def verify_project_fixture() -> None:
+                from creator_assistant.infrastructure.packaged_project_fixture import run_packaged_project_fixture
+                run_packaged_project_fixture(container.feature_gate, Path(project_fixture_arg))
+                app.quit()
+            QTimer.singleShot(500, verify_project_fixture)
         if "--smoke-test" in sys.argv:
             QTimer.singleShot(250, app.quit)
         return app.exec()

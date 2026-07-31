@@ -83,13 +83,20 @@ Source: "..\docs\beta-quick-start-ru.md"; DestDir: "{app}\docs"; Flags: ignoreve
 
 [Icons]
 Name: "{autoprograms}\{#ProductName}"; Filename: "{app}\{#ExecutableName}"; WorkingDir: "{app}"
-Name: "{autodesktop}\{#ProductName}"; Filename: "{app}\{#ExecutableName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{code:DesktopShortcutDirectory}\{#ProductName}"; Filename: "{app}\{#ExecutableName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#ExecutableName}"; Description: "Запустить {#ProductName}"; Flags: nowait postinstall skipifsilent
 Filename: "notepad.exe"; Parameters: """{app}\docs\beta-quick-start-ru.md"""; Description: "Открыть краткую инструкцию"; Flags: postinstall skipifsilent shellexec
 
 [Code]
+function DesktopShortcutDirectory(Param: String): String;
+begin
+  Result := GetEnv('CREATOR_ASSISTANT_E2E_DESKTOP');
+  if Result = '' then
+    Result := ExpandConstant('{autodesktop}');
+end;
+
 function HasPathPrefix(const Candidate, Prefix: String): Boolean;
 var
   NormalizedCandidate, NormalizedPrefix: String;
