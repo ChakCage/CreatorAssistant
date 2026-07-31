@@ -3,20 +3,24 @@ param(
     [Parameter(Mandatory = $true)][string]$VersionNPlusOne,
     [string]$InstallersDirectory = "",
     [string]$LicensePrivateKey = "C:\tmp\creator-assistant-6a-keys\license-staging.private",
-    [string]$UpdatePrivateKey = "C:\tmp\creator-assistant-6a-keys\update-beta.private"
+    [string]$UpdatePrivateKey = "C:\tmp\creator-assistant-6a-keys\update-beta.private",
+    [switch]$StagingOnly,
+    [switch]$CandidateOnly
 )
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $Python = Join-Path $Root '.venv\Scripts\python.exe'
 if (-not $InstallersDirectory) { $InstallersDirectory = Join-Path $Root 'dist\installers' }
-$E2ERoot = Join-Path 'C:\tmp' ("CreatorAssistant-ReleaseE2E-" + [Guid]::NewGuid().ToString('N'))
+$E2EParent = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'CreatorAssistant-E2E'
+$E2ERoot = Join-Path $E2EParent ("Release-" + [Guid]::NewGuid().ToString('N'))
 $Roaming = Join-Path $E2ERoot 'Roaming'
 $Local = Join-Path $E2ERoot 'Local'
 $Temp = Join-Path $E2ERoot 'Temp'
 $Reports = Join-Path $E2ERoot 'Reports'
 New-Item -ItemType Directory -Force -Path $Roaming,$Local,$Temp,$Reports | Out-Null
-if (-not ([System.IO.Path]::GetFullPath($E2ERoot).StartsWith('C:\tmp\CreatorAssistant-ReleaseE2E-', [StringComparison]::OrdinalIgnoreCase))) {
+if (-not ([System.IO.Path]::GetFullPath($E2ERoot).StartsWith(
+    [System.IO.Path]::GetFullPath($E2EParent + '\'), [StringComparison]::OrdinalIgnoreCase))) {
     throw "Unsafe E2E root: $E2ERoot"
 }
 
@@ -24,7 +28,10 @@ $StagingN = Join-Path $InstallersDirectory "CreatorAssistant-Commercial-Staging-
 $StagingNext = Join-Path $InstallersDirectory "CreatorAssistant-Commercial-Staging-Setup-$VersionNPlusOne.exe"
 $Developer = Join-Path $InstallersDirectory "CreatorAssistant-Developer-Setup-$VersionNPlusOne.exe"
 $Commercial = Join-Path $InstallersDirectory "CreatorAssistant-Commercial-Setup-$VersionNPlusOne.exe"
-foreach ($Path in ($StagingN,$StagingNext,$Developer,$Commercial,$LicensePrivateKey,$UpdatePrivateKey)) {
+$RequiredArtifacts = @($StagingNext,$LicensePrivateKey)
+if (-not $CandidateOnly) { $RequiredArtifacts += @($StagingN,$UpdatePrivateKey) }
+if (-not $StagingOnly) { $RequiredArtifacts += @($Developer,$Commercial) }
+foreach ($Path in $RequiredArtifacts) {
     if (-not (Test-Path -LiteralPath $Path)) { throw "Required E2E artifact is missing: $Path" }
 }
 
@@ -106,7 +113,8 @@ try {
     Add-Step 'local-backend-ready' $Ready 'localhost only'
 
     $InstalledStaging = Join-Path $Local 'Programs\CreatorAssistant\Commercial-Staging\CreatorAssistant-Commercial-Staging.exe'
-    Invoke-Installer $StagingN (Split-Path $InstalledStaging)
+    $InitialInstaller = if ($CandidateOnly) { $StagingNext } else { $StagingN }
+    Invoke-Installer $InitialInstaller (Split-Path $InstalledStaging)
     Wait-File $InstalledStaging
     Add-Step 'install-staging-n' $true $InstalledStaging
 
@@ -142,31 +150,33 @@ try {
     $ProjectFixtureValue = Get-Content -Raw -LiteralPath $ProjectFixtureReport | ConvertFrom-Json
     Add-Step 'short-packaged-project-fixture' ([bool]$ProjectFixtureValue.success) $ProjectFixtureReport
 
-    $Hash = (Get-FileHash -LiteralPath $StagingNext -Algorithm SHA256).Hash.ToLowerInvariant()
-    $Size = (Get-Item -LiteralPath $StagingNext).Length
-    $Create = & $Python -m app.admin_cli create-release --edition commercial --channel beta --version $VersionNPlusOne `
-        --build-number 900002 --architecture x86_64 --download-url "http://127.0.0.1:8766/$(Split-Path -Leaf $StagingNext)" `
-        --sha256 $Hash --file-size $Size --minimum-supported-version $VersionN --notes 'Local signed update E2E'
-    $ReleaseId = ($Create | ConvertFrom-Json).id
-    $Manifest = Join-Path $Reports 'release-manifest.json'
-    & $Python -m app.admin_cli sign-release-manifest --release $ReleaseId --private-key-file $UpdatePrivateKey --key-id staging-update-local --output $Manifest | Out-Null
-    & $Python -m app.admin_cli activate-release --release $ReleaseId | Out-Null
-    Add-Step 'signed-release-created' (Test-Path -LiteralPath $Manifest) $Manifest
+    if (-not $CandidateOnly) {
+        $Hash = (Get-FileHash -LiteralPath $StagingNext -Algorithm SHA256).Hash.ToLowerInvariant()
+        $Size = (Get-Item -LiteralPath $StagingNext).Length
+        $Create = & $Python -m app.admin_cli create-release --edition commercial --channel beta --version $VersionNPlusOne `
+            --build-number 900002 --architecture x86_64 --download-url "http://127.0.0.1:8766/$(Split-Path -Leaf $StagingNext)" `
+            --sha256 $Hash --file-size $Size --minimum-supported-version $VersionN --notes 'Local signed update E2E'
+        $ReleaseId = ($Create | ConvertFrom-Json).id
+        $Manifest = Join-Path $Reports 'release-manifest.json'
+        & $Python -m app.admin_cli sign-release-manifest --release $ReleaseId --private-key-file $UpdatePrivateKey --key-id staging-update-local --output $Manifest | Out-Null
+        & $Python -m app.admin_cli activate-release --release $ReleaseId | Out-Null
+        Add-Step 'signed-release-created' (Test-Path -LiteralPath $Manifest) $Manifest
 
-    $UpdateReport = Join-Path $Reports 'update.json'
-    $env:CREATOR_ASSISTANT_E2E_INSTALL_UPDATE = '1'
-    Start-Process -FilePath $InstalledStaging -ArgumentList "--verify-update=$UpdateReport" -Wait -WindowStyle Hidden
-    Wait-File $UpdateReport
-    $UpdateValue = Get-Content -Raw -LiteralPath $UpdateReport | ConvertFrom-Json
-    Add-Step 'application-update-check-download-launch' ([bool]$UpdateValue.success) $UpdateReport
-    Start-Sleep -Seconds 8
-    Wait-File $InstalledStaging
+        $UpdateReport = Join-Path $Reports 'update.json'
+        $env:CREATOR_ASSISTANT_E2E_INSTALL_UPDATE = '1'
+        Start-Process -FilePath $InstalledStaging -ArgumentList "--verify-update=$UpdateReport" -Wait -WindowStyle Hidden
+        Wait-File $UpdateReport
+        $UpdateValue = Get-Content -Raw -LiteralPath $UpdateReport | ConvertFrom-Json
+        Add-Step 'application-update-check-download-launch' ([bool]$UpdateValue.success) $UpdateReport
+        Start-Sleep -Seconds 8
+        Wait-File $InstalledStaging
 
-    $PostUpdate = Join-Path $Reports 'post-update.json'
-    Start-Process -FilePath $InstalledStaging -ArgumentList "--verify-edition=$PostUpdate" -Wait -WindowStyle Hidden
-    Wait-File $PostUpdate
-    $PostValue = Get-Content -Raw -LiteralPath $PostUpdate | ConvertFrom-Json
-    Add-Step 'updated-version-starts' ($PostValue.build.version -eq $VersionNPlusOne) $PostValue.build.version
+        $PostUpdate = Join-Path $Reports 'post-update.json'
+        Start-Process -FilePath $InstalledStaging -ArgumentList "--verify-edition=$PostUpdate" -Wait -WindowStyle Hidden
+        Wait-File $PostUpdate
+        $PostValue = Get-Content -Raw -LiteralPath $PostUpdate | ConvertFrom-Json
+        Add-Step 'updated-version-starts' ($PostValue.build.version -eq $VersionNPlusOne) $PostValue.build.version
+    }
     $Preserved = (Test-Path (Join-Path $Profile 'settings.json')) -and (Test-Path (Join-Path $Brand 'banner.txt')) -and (Test-Path (Join-Path $Project 'project.txt'))
     Add-Step 'update-preserves-settings-license-project-brand-model-roots' $Preserved 'all markers exist'
 
@@ -179,11 +189,13 @@ try {
     Wait-File $InstalledStaging
     Add-Step 'reinstall-recovers-data' ((Get-Content -Raw (Join-Path $Profile 'settings.json')) -match 'E:/E2E-preserve-me') 'settings marker restored'
 
-    $DeveloperExe = Join-Path $Local 'Programs\CreatorAssistant\Developer\CreatorAssistant-Developer.exe'
-    $CommercialExe = Join-Path $Local 'Programs\CreatorAssistant\Commercial\CreatorAssistant.exe'
-    Invoke-Installer $Developer (Split-Path $DeveloperExe)
-    Invoke-Installer $Commercial (Split-Path $CommercialExe)
-    Add-Step 'parallel-three-editions' ((Test-Path $InstalledStaging) -and (Test-Path $DeveloperExe) -and (Test-Path $CommercialExe)) 'three independent install roots'
+    if (-not $StagingOnly) {
+        $DeveloperExe = Join-Path $Local 'Programs\CreatorAssistant\Developer\CreatorAssistant-Developer.exe'
+        $CommercialExe = Join-Path $Local 'Programs\CreatorAssistant\Commercial\CreatorAssistant.exe'
+        Invoke-Installer $Developer (Split-Path $DeveloperExe)
+        Invoke-Installer $Commercial (Split-Path $CommercialExe)
+        Add-Step 'parallel-three-editions' ((Test-Path $InstalledStaging) -and (Test-Path $DeveloperExe) -and (Test-Path $CommercialExe)) 'three independent install roots'
+    }
 
     $Report.success = ($Report.steps | Where-Object { -not $_.success }).Count -eq 0
 }
