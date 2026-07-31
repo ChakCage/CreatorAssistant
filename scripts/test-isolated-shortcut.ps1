@@ -4,7 +4,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Root = Join-Path 'C:\tmp' ('CreatorAssistant-Shortcut-' + [Guid]::NewGuid().ToString('N'))
+$Parent = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'CreatorAssistant-E2E'
+$Root = Join-Path $Parent ('Shortcut-' + [Guid]::NewGuid().ToString('N'))
 $Desktop = Join-Path $Root 'Desktop'
 $Install = Join-Path $Root 'Install'
 New-Item -ItemType Directory -Force -Path $Desktop,$Install | Out-Null
