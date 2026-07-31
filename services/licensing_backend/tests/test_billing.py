@@ -157,6 +157,18 @@ def test_activation_code_rotation_keeps_only_one_active_code(client):
         assert sum(item.status is ActivationCodeStatus.REVOKED for item in values) == 1
 
 
+def test_bot_subscription_includes_backend_owned_device_limit(client):
+    value = checkout(client)
+    with SessionLocal() as db:
+        payment = db.get(Payment, value["payment_id"])
+        body, headers = event_for(payment, event_id="evt-device-limit")
+        expected_limit = payment.plan.device_limit
+    assert client.post("/v1/billing/webhooks/fake", content=body, headers=headers).status_code == 200
+    response = client.get("/v1/bot/subscription/42", headers=service_headers("subscription:read"))
+    assert response.status_code == 200
+    assert response.json()["device_limit"] == expected_limit
+
+
 def test_service_token_is_scoped(client):
     checkout(client)
     response = client.get("/v1/bot/plans", headers=service_headers("users:write"))

@@ -379,7 +379,17 @@ def bot_notification_result(notification_id: str, value: NotificationResultReque
                             _identity: dict = Depends(require_service("notifications:write")), db: Session = Depends(get_db)):
     row = db.get(BotNotification, notification_id)
     if not row: raise HTTPException(404, "Notification not found")
-    billing.finish_notification(row, value.success, value.error); db.commit()
+    billing.finish_notification(row, value.success, value.error)
+    if row.notification_type == "SUPPORT_TICKET_CREATED":
+        ticket_id = str((row.payload or {}).get("ticket_id") or "")
+        db.add(AdminAction(
+            admin_id="system:telegram-notification-worker",
+            action="support-admin-notification-sent" if value.success else "support-admin-notification-failed",
+            target_type="support-ticket", target_id=ticket_id,
+            reason="" if value.success else str(value.error or "delivery failed")[:300],
+            metadata={"notification_id": row.id, "attempts": row.attempts},
+        ))
+    db.commit()
     return {"status": row.status.value}
 
 
@@ -425,6 +435,13 @@ def bot_support_create(value: SupportTicketCreateRequest, request: Request,
     db.add(AdminAction(
         admin_id="telegram-user:" + value.telegram_user_id,
         action="create-support-ticket", target_type="support-ticket", target_id=row.id,
+    ))
+    db.add(BotNotification(
+        user_id=user.id,
+        telegram_user_id=value.telegram_user_id,
+        notification_type="SUPPORT_TICKET_CREATED",
+        payload={"ticket_id": row.id},
+        dedupe_key=f"support-created:{row.id}",
     ))
     db.commit()
     return _ticket_payload(row)

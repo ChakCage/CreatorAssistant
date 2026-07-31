@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from app.api import settings
 from app.db import SessionLocal
-from app.models import SupportBlock, SupportTicket, SupportTicketStatus, User
+from app.models import AdminAction, BotNotification, NotificationStatus, SupportBlock, SupportTicket, SupportTicketStatus, User
 from app.security import mint_service_token
 
 
@@ -35,6 +35,29 @@ def test_support_ticket_lifecycle_and_audit_routes(client):
     ticket = created.json()
     assert ticket["number"].startswith("CA-")
     assert ticket["status"] == "OPEN"
+    with SessionLocal() as db:
+        notification = db.scalar(select(BotNotification).where(
+            BotNotification.notification_type == "SUPPORT_TICKET_CREATED",
+        ))
+        assert notification is not None
+        assert notification.payload == {"ticket_id": ticket["id"]}
+        notification_id = notification.id
+
+    claimed = client.get("/v1/bot/notifications", headers=headers("notifications:read")).json()["notifications"]
+    assert [item["id"] for item in claimed] == [notification_id]
+    result = client.post(
+        f"/v1/bot/notifications/{notification_id}/result",
+        headers=headers("notifications:write"),
+        json={"success": True, "error": ""},
+    )
+    assert result.status_code == 200
+    with SessionLocal() as db:
+        assert db.get(BotNotification, notification_id).status == NotificationStatus.SENT
+        sent_audit = db.scalar(select(AdminAction).where(
+            AdminAction.action == "support-admin-notification-sent",
+            AdminAction.target_id == ticket["id"],
+        ))
+        assert sent_audit is not None
 
     listed = client.get("/v1/bot/support/tickets", headers=headers("support:admin"))
     assert [item["id"] for item in listed.json()["tickets"]] == [ticket["id"]]
@@ -47,6 +70,13 @@ def test_support_ticket_lifecycle_and_audit_routes(client):
     assert replied.status_code == 200
     assert replied.json()["admin_reply"] == "Проверяем соединение."
 
+    blocked = client.post(
+        f"/v1/bot/support/tickets/{ticket['id']}/block",
+        headers=headers("support:admin"),
+        json={"telegram_user_id": "421403653", "message": "spam"},
+    )
+    assert blocked.json()["status"] == "BLOCKED"
+
     closed = client.post(
         f"/v1/bot/support/tickets/{ticket['id']}/close",
         headers=headers("support:admin"),
@@ -55,6 +85,11 @@ def test_support_ticket_lifecycle_and_audit_routes(client):
     assert closed.json()["status"] == SupportTicketStatus.CLOSED.value
     with SessionLocal() as db:
         assert db.get(SupportTicket, ticket["id"]).closed_at is not None
+        actions = set(db.scalars(select(AdminAction.action).where(
+            AdminAction.target_id.in_([ticket["id"], db.get(SupportTicket, ticket["id"]).user_id]),
+        )).all())
+        assert {"create-support-ticket", "support-admin-notification-sent", "reply-support-ticket",
+                "close-support-ticket", "block-support-user"} <= actions
 
 
 def test_support_rejects_unsafe_attachment_and_blocked_spam(client):

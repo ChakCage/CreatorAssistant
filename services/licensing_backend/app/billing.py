@@ -249,6 +249,7 @@ class BillingService:
         return {
             "subscription_id": sub.id, "status": sub.status.value,
             "plan": sub.plan.code, "expires_at": iso(sub.expires_at),
+            "device_limit": sub.plan.device_limit,
             "devices": [{"id": d.id, "name": d.friendly_name, "status": d.status.value} for d in devices],
         }
 

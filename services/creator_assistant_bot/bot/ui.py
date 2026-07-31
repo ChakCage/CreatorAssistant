@@ -1,6 +1,158 @@
 from __future__ import annotations
 
+import math
+from datetime import datetime, timezone
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+
+STATUS_TEXT = {
+    "ACTIVE": "✅ Подписка активна",
+    "EXPIRED": "⛔ Подписка закончилась",
+    "CANCELLED": "🚫 Подписка отменена",
+    "NOT_ACTIVATED": "⚪ Creator Assistant ещё не активирован",
+    "OFFLINE_GRACE": "🟡 Временный офлайн-доступ",
+    "GRACE": "🟡 Временный офлайн-доступ",
+    "NONE": "⚪ Creator Assistant ещё не активирован",
+}
+
+DEVICE_STATUS_TEXT = {
+    "ACTIVE": "активно",
+    "DEACTIVATED": "отключено",
+    "BLOCKED": "заблокировано",
+}
+
+MONTHS = (
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
+
+STAGING_PAYMENT_DISABLED_TEXT = (
+    "Оплата в тестовой версии пока отключена.\n\n"
+    "Для участия в закрытом тестировании используйте тестовый доступ "
+    "или приглашение администратора."
+)
+
+DOWNLOAD_WARNING_TEXT = (
+    "⚠️ Тестовая сборка пока не имеет цифровой подписи.\n"
+    "Windows SmartScreen может показать предупреждение."
+)
+
+PUBLIC_HELP_TEXT = (
+    "1. Скачайте Creator Assistant.\n2. Установите программу.\n3. Получите код в боте.\n"
+    "4. Введите код в приложении.\n5. Настройте Ollama и AI-модель.\n"
+    "6. Создайте проект.\n7. Найдите и отрендерите Shorts.\n\n"
+    "Поддержка доступна только через кнопку «🛟 Поддержка» в этом боте."
+)
+
+SUPPORT_CATEGORY_TEXT = {
+    "activation": "Активация и лицензия",
+    "application": "Работа приложения",
+    "render": "Рендер и экспорт",
+    "other": "Другое",
+}
+
+
+def support_category_text(value: object) -> str:
+    return SUPPORT_CATEGORY_TEXT.get(str(value or "").strip().casefold(), "Другое")
+
+
+def support_status_text(value: dict) -> str:
+    if str(value.get("status") or "").upper() == "CLOSED":
+        return "закрыто"
+    if str(value.get("admin_reply") or "").strip():
+        return "отвечено"
+    return "ожидает ответа"
+
+
+def safe_attachment_text(value: object) -> str:
+    attachment = value if isinstance(value, dict) else {}
+    if not attachment:
+        return "нет"
+    name = str(attachment.get("name") or "вложение").replace("\n", " ").strip()
+    kind = str(attachment.get("type") or "файл").replace("\n", " ").strip()
+    try:
+        size = max(0, int(attachment.get("size") or 0))
+    except (TypeError, ValueError):
+        size = 0
+    return f"{name} · {kind} · {size / 1024:.1f} КБ"
+
+
+def localized_status(value: object) -> str:
+    return STATUS_TEXT.get(str(value or "").strip().upper(), "⚪ Статус подписки неизвестен")
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def russian_date(value: object) -> str:
+    parsed = _parse_datetime(value)
+    if parsed is None:
+        return ""
+    return f"{parsed.day} {MONTHS[parsed.month - 1]} {parsed.year} года"
+
+
+def russian_days(days: int) -> str:
+    value = abs(int(days))
+    tail = value % 100
+    if 11 <= tail <= 14:
+        word = "дней"
+    elif value % 10 == 1:
+        word = "день"
+    elif value % 10 in {2, 3, 4}:
+        word = "дня"
+    else:
+        word = "дней"
+    return f"{days} {word}"
+
+
+def subscription_text(value: dict, *, now: datetime | None = None) -> str:
+    lines = [localized_status(value.get("status"))]
+    expires = _parse_datetime(value.get("expires_at"))
+    if not value.get("expires_at"):
+        lines.append("Срок: бессрочно")
+    elif expires is None:
+        lines.append("Дата окончания: не указана")
+    else:
+        lines.append(f"Действует до: {russian_date(value.get('expires_at'))}")
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        seconds = (expires - current.astimezone(timezone.utc)).total_seconds()
+        if seconds <= 0:
+            lines.append("Срок истёк")
+        else:
+            lines.append(f"Осталось: {russian_days(max(1, math.ceil(seconds / 86400)))}")
+    return "\n".join(lines)
+
+
+def devices_text(value: dict) -> str:
+    devices = list(value.get("devices") or [])
+    active = [item for item in devices if str(item.get("status", "")).upper() == "ACTIVE"]
+    limit = value.get("device_limit")
+    try:
+        limit_value = int(limit) if limit is not None else None
+    except (TypeError, ValueError):
+        limit_value = None
+    counter = f"Использовано устройств: {len(active)}"
+    if limit_value is not None and limit_value >= 0:
+        counter += f" из {limit_value}"
+    lines = [counter]
+    for item in devices:
+        name = str(item.get("name") or "Без названия").strip() or "Без названия"
+        state = DEVICE_STATUS_TEXT.get(str(item.get("status") or "").upper(), "состояние неизвестно")
+        lines.append(f"• {name} — {state}")
+    return "\n".join(lines)
 
 
 def main_menu() -> InlineKeyboardMarkup:
@@ -10,7 +162,8 @@ def main_menu() -> InlineKeyboardMarkup:
         ("⬇️ Скачать Creator Assistant", "download"), ("📖 Инструкция", "help"),
         ("🐞 Сообщить об ошибке", "feedback"), ("🛟 Поддержка", "support"),
     ]
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=text, callback_data=data)] for text, data in labels])
+    buttons = [InlineKeyboardButton(text=text, callback_data=data) for text, data in labels]
+    return InlineKeyboardMarkup(inline_keyboard=[buttons[index:index + 2] for index in range(0, len(buttons), 2)])
 
 
 def checkout_keyboard(url: str) -> InlineKeyboardMarkup:

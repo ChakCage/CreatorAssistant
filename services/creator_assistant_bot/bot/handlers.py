@@ -10,12 +10,27 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from .backend import BackendClient
 from .config import BotSettings
-from .ui import main_menu
+from .ui import (
+    STAGING_PAYMENT_DISABLED_TEXT,
+    DOWNLOAD_WARNING_TEXT,
+    PUBLIC_HELP_TEXT,
+    devices_text,
+    main_menu,
+    russian_date,
+    safe_attachment_text,
+    subscription_text,
+    support_category_text,
+    support_status_text,
+)
 
 
 class SupportFlow(StatesGroup):
     message = State()
     admin_reply = State()
+
+
+def is_admin_user(settings: BotSettings, user_id: int) -> bool:
+    return bool(settings.admin_telegram_id and user_id == settings.admin_telegram_id)
 
 
 def build_router(backend: BackendClient, settings: BotSettings) -> Router:
@@ -47,7 +62,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         ])
 
     def admin_only(user_id: int) -> bool:
-        return bool(settings.admin_telegram_id and user_id == settings.admin_telegram_id)
+        return is_admin_user(settings, user_id)
 
     @router.message(CommandStart())
     async def start(message: Message):
@@ -57,7 +72,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             await message.answer("Выберите категорию обращения:", reply_markup=support_categories())
             return
         if payload == "buy":
-            await message.answer("Платежи в тестовой версии отключены. Используйте beta invite.")
+            await message.answer(STAGING_PAYMENT_DISABLED_TEXT)
             return
         await message.answer("Creator Assistant — закрытая бета\nТестовый доступ и управление устройствами.", reply_markup=main_menu())
 
@@ -76,12 +91,13 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             value = await backend.redeem_beta(message.from_user.id, parts[1])
         except httpx.HTTPStatusError as exc:
             await message.answer(backend_message(exc)); return
-        await message.answer(f"Тестовый доступ активирован до {value['expires_at']}.\nТеперь получите код активации.")
+        expiration = russian_date(value.get("expires_at")) or "даты, указанной в подписке"
+        await message.answer(f"Тестовый доступ активирован до {expiration}.\nТеперь получите код активации.")
 
     @router.callback_query(F.data == "subscription")
     async def subscription(callback: CallbackQuery):
         value = await backend.subscription(callback.from_user.id)
-        await callback.message.answer(f"Статус: {value['status']}\nДействует до: {value.get('expires_at', '—')}"); await callback.answer()
+        await callback.message.answer(subscription_text(value)); await callback.answer()
 
     @router.callback_query(F.data == "activation")
     async def activation(callback: CallbackQuery):
@@ -91,11 +107,10 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
     @router.callback_query(F.data == "devices")
     async def devices(callback: CallbackQuery):
         value = await backend.subscription(callback.from_user.id); devices = value.get("devices", [])
-        text = "\n".join(f"{d['name']} — {d['status']}" for d in devices) or "Активных устройств нет."
         buttons = [[InlineKeyboardButton(text=f"Отключить {d['name']}", callback_data=f"device:{d['id']}")]
                    for d in devices if d["status"] == "ACTIVE"]
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
-        await callback.message.answer(text, reply_markup=keyboard); await callback.answer()
+        await callback.message.answer(devices_text(value), reply_markup=keyboard); await callback.answer()
 
     @router.callback_query(F.data.startswith("device:"))
     async def confirm_device(callback: CallbackQuery):
@@ -118,16 +133,14 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         size = value.get("file_size", 0) / 1024**2
         await callback.message.answer(
             f"Creator Assistant Commercial Staging\nВерсия {value['version']} · {size:.1f} МБ\n"
-            f"SHA-256: <code>{value['sha256']}</code>\n\n⚠️ UNSIGNED BETA: Windows SmartScreen может показать предупреждение.\n"
+            f"SHA-256: <code>{value['sha256']}</code>\n\n"
+            f"{DOWNLOAD_WARNING_TEXT}\n"
             f"{value['download_url']}", parse_mode="HTML",
         ); await callback.answer()
 
     @router.callback_query(F.data == "help")
     async def help_(callback: CallbackQuery):
-        text = ("1. Скачайте Creator Assistant.\n2. Установите программу.\n3. Получите код в боте.\n"
-                "4. Введите код в приложении.\n5. Настройте Ollama и AI-модель.\n"
-                "6. Создайте проект.\n7. Найдите и отрендерите Shorts.\n\n" + settings.help_url)
-        await callback.message.answer(text); await callback.answer()
+        await callback.message.answer(PUBLIC_HELP_TEXT); await callback.answer()
     @router.callback_query(F.data == "support")
     async def support(callback: CallbackQuery):
         await callback.message.answer("Выберите категорию обращения:", reply_markup=support_categories())
@@ -179,16 +192,11 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             await message.answer(backend_message(exc))
             return
         await state.clear()
-        await message.answer(f"Обращение {ticket['number']} создано. Ответ придёт сюда от имени бота.")
-        if settings.admin_telegram_id:
-            with __import__("contextlib").suppress(Exception):
-                await message.bot.send_message(
-                    settings.admin_telegram_id,
-                    f"Новое обращение {ticket['number']} · {ticket['category']}",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                        InlineKeyboardButton(text="Открыть", callback_data=f"support_ticket:{ticket['id']}")
-                    ]]),
-                )
+        await message.answer(
+            f"Обращение {ticket['number']} создано.\n"
+            "Статус: ожидает ответа.\n"
+            "Ответ придёт сюда от имени бота."
+        )
 
     @router.message(Command("admin"))
     async def admin_menu(message: Message):
@@ -208,7 +216,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         values = (await backend.support_tickets(status)).get("tickets", [])
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=f"{item['number']} · {item['category']}",
+                text=f"{item['number']} · {support_category_text(item['category'])}",
                 callback_data=f"support_ticket:{item['id']}",
             )] for item in values
         ]) if values else None
@@ -227,7 +235,11 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             [InlineKeyboardButton(text="Заблокировать спам", callback_data=f"support_block:{ticket['id']}")],
         ])
         await callback.message.answer(
-            f"{ticket['number']} · {ticket['status']} · {ticket['category']}\n\n{ticket['message']}",
+            f"{ticket['number']} · {support_status_text(ticket)}\n"
+            f"Категория: {support_category_text(ticket['category'])}\n"
+            f"Пользователь: Telegram ID {ticket['telegram_user_id']}\n"
+            f"Вложение: {safe_attachment_text(ticket.get('attachment'))}\n\n"
+            f"{ticket['message']}",
             reply_markup=keyboard,
         )
         attachment = ticket.get("attachment") or {}
@@ -262,7 +274,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         ticket = await backend.reply_support_ticket(message.from_user.id, data["ticket_id"], text)
         await message.bot.send_message(
             int(ticket["telegram_user_id"]),
-            f"Ответ поддержки по обращению {ticket['number']}:\n\n{text}",
+            f"Ответ поддержки по обращению {ticket['number']}:\n\n{text}\n\nСтатус: отвечено.",
         )
         await state.clear()
         await message.answer("Ответ отправлен от имени бота.")
@@ -273,7 +285,10 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             await callback.answer("Недоступно", show_alert=True)
             return
         ticket = await backend.close_support_ticket(callback.from_user.id, callback.data.split(":", 1)[1])
-        await callback.bot.send_message(int(ticket["telegram_user_id"]), f"Обращение {ticket['number']} закрыто.")
+        await callback.bot.send_message(
+            int(ticket["telegram_user_id"]),
+            f"Обращение {ticket['number']} закрыто.\nСтатус: закрыто.",
+        )
         await callback.answer("Закрыто")
 
     @router.callback_query(F.data.startswith("support_block:"))

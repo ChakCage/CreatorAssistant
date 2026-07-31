@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -8,7 +9,20 @@ import pytest
 from bot.auth import BOT_PERMISSIONS
 from bot.backend import BackendClient
 from bot.config import BotSettings
-from bot.ui import main_menu, plans_text
+from bot.handlers import is_admin_user
+from bot.main import deliver_notification
+from bot.ui import (
+    STAGING_PAYMENT_DISABLED_TEXT,
+    DOWNLOAD_WARNING_TEXT,
+    PUBLIC_HELP_TEXT,
+    devices_text,
+    localized_status,
+    main_menu,
+    plans_text,
+    russian_date,
+    russian_days,
+    subscription_text,
+)
 
 
 @pytest.mark.asyncio
@@ -34,11 +48,134 @@ def test_plan_copy_formats_minor_units_without_float_contract():
 
 
 def test_start_menu_exposes_every_required_action():
-    callbacks = {button.callback_data for row in main_menu().inline_keyboard for button in row}
+    menu = main_menu()
+    assert [len(row) for row in menu.inline_keyboard] == [2, 2, 2, 2]
+    callbacks = {button.callback_data for row in menu.inline_keyboard for button in row}
     assert callbacks == {
         "beta_access", "subscription", "activation", "devices", "download",
         "help", "feedback", "support",
     }
+
+
+@pytest.mark.parametrize(("status", "expected"), [
+    ("ACTIVE", "✅ Подписка активна"),
+    ("EXPIRED", "⛔ Подписка закончилась"),
+    ("CANCELLED", "🚫 Подписка отменена"),
+    ("OFFLINE_GRACE", "🟡 Временный офлайн-доступ"),
+    ("unexpected", "⚪ Статус подписки неизвестен"),
+])
+def test_subscription_statuses_are_localized_without_exposing_enums(status, expected):
+    assert localized_status(status) == expected
+
+
+def test_russian_date_accepts_utc_timezone_legacy_and_missing_values():
+    assert russian_date("2026-08-11T14:34:53.260379Z") == "11 августа 2026 года"
+    assert russian_date("2026-08-11T17:34:53+03:00") == "11 августа 2026 года"
+    assert russian_date("legacy-invalid") == ""
+    assert russian_date(None) == ""
+
+
+@pytest.mark.parametrize(("days", "expected"), [
+    (1, "1 день"), (2, "2 дня"), (5, "5 дней"), (11, "11 дней"), (21, "21 день"),
+])
+def test_russian_days_uses_correct_declension(days, expected):
+    assert russian_days(days) == expected
+
+
+def test_subscription_copy_formats_date_remaining_expired_and_no_expiration():
+    now = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    active = subscription_text({"status": "ACTIVE", "expires_at": "2026-08-12T00:00:00Z"}, now=now)
+    assert active == "✅ Подписка активна\nДействует до: 12 августа 2026 года\nОсталось: 11 дней"
+    expired = subscription_text({"status": "EXPIRED", "expires_at": "2026-07-31T00:00:00Z"}, now=now)
+    assert "Срок истёк" in expired
+    assert subscription_text({"status": "ACTIVE"}, now=now).endswith("Срок: бессрочно")
+    assert subscription_text({"status": "ACTIVE", "expires_at": "legacy"}, now=now).endswith("Дата окончания: не указана")
+
+
+@pytest.mark.parametrize(("payload", "expected"), [
+    ({"devices": [], "device_limit": 1}, "Использовано устройств: 0 из 1"),
+    ({"devices": [{"name": "PC", "status": "ACTIVE"}], "device_limit": 1}, "Использовано устройств: 1 из 1"),
+    ({"devices": [{"name": "PC 1", "status": "ACTIVE"}, {"name": "PC 2", "status": "ACTIVE"}], "device_limit": 5}, "Использовано устройств: 2 из 5"),
+    ({"devices": []}, "Использовано устройств: 0"),
+])
+def test_device_counter_handles_limits_and_missing_limit(payload, expected):
+    assert devices_text(payload).splitlines()[0] == expected
+
+
+def test_device_copy_localizes_state_and_never_exposes_id():
+    text = devices_text({"device_limit": 2, "devices": [
+        {"id": "internal-secret-id", "name": "Рабочий ПК", "status": "ACTIVE"},
+        {"id": "old-id", "name": "Ноутбук", "status": "DEACTIVATED"},
+    ]})
+    assert "Рабочий ПК — активно" in text
+    assert "Ноутбук — отключено" in text
+    assert "internal-secret-id" not in text and "old-id" not in text
+
+
+def test_staging_purchase_copy_disables_payments_without_provider_link():
+    assert "Оплата в тестовой версии пока отключена" in STAGING_PAYMENT_DISABLED_TEXT
+    assert "приглашение администратора" in STAGING_PAYMENT_DISABLED_TEXT
+    assert "http" not in STAGING_PAYMENT_DISABLED_TEXT
+
+
+def test_download_warning_is_fully_localized_and_help_stays_inside_bot():
+    assert DOWNLOAD_WARNING_TEXT == (
+        "⚠️ Тестовая сборка пока не имеет цифровой подписи.\n"
+        "Windows SmartScreen может показать предупреждение."
+    )
+    assert "UNSIGNED BETA" not in DOWNLOAD_WARNING_TEXT
+    assert "http" not in PUBLIC_HELP_TEXT and "t.me/" not in PUBLIC_HELP_TEXT
+
+
+class _FakeNotificationBackend:
+    def __init__(self):
+        self.ticket = {
+            "id": "ticket-id", "number": "CA-12345678", "telegram_user_id": "424403653",
+            "category": "application", "message": "Не работает",
+            "attachment": {"type": "photo", "name": "screen.jpg", "size": 2048},
+        }
+
+    async def support_ticket(self, ticket_id: str):
+        assert ticket_id == "ticket-id"
+        return self.ticket
+
+
+class _FakeBot:
+    def __init__(self):
+        self.calls = []
+
+    async def send_message(self, chat_id, text, **kwargs):
+        self.calls.append((chat_id, text, kwargs))
+
+
+@pytest.mark.asyncio
+async def test_support_notification_targets_only_configured_admin_with_actions():
+    bot = _FakeBot()
+    await deliver_notification(
+        bot, _FakeNotificationBackend(),
+        {"type": "SUPPORT_TICKET_CREATED", "payload": {"ticket_id": "ticket-id"}},
+        mock=False, admin_telegram_id=421403653,
+    )
+    assert len(bot.calls) == 1
+    chat_id, text, kwargs = bot.calls[0]
+    assert chat_id == 421403653
+    assert "CA-12345678" in text
+    assert "Работа приложения" in text
+    assert "Telegram ID 424403653" in text
+    assert "Не работает" in text
+    assert "file_id" not in text
+    callbacks = [button.callback_data for row in kwargs["reply_markup"].inline_keyboard for button in row]
+    assert callbacks == ["support_reply:ticket-id", "support_close:ticket-id", "support_block:ticket-id"]
+
+
+@pytest.mark.asyncio
+async def test_support_notification_refuses_missing_admin_id():
+    with pytest.raises(RuntimeError, match="ADMIN_TELEGRAM_ID"):
+        await deliver_notification(
+            _FakeBot(), _FakeNotificationBackend(),
+            {"type": "SUPPORT_TICKET_CREATED", "payload": {"ticket_id": "ticket-id"}},
+            mock=False, admin_telegram_id=0,
+        )
 
 
 def test_production_bot_accepts_only_explicit_internal_http_and_rejects_placeholders():
@@ -58,7 +195,9 @@ def test_production_bot_accepts_only_explicit_internal_http_and_rejects_placehol
 def test_staging_admin_section_is_explicit_and_support_has_no_personal_username():
     settings = BotSettings(service_secret="x" * 32, admin_telegram_id=421403653)
     assert settings.admin_telegram_id == 421403653
-    assert "Chak_74" not in settings.support_url
+    assert is_admin_user(settings, 421403653)
+    assert not is_admin_user(settings, 424403653)
+    assert "Chak" + "_74" not in settings.support_url
 
 
 @pytest.mark.asyncio
