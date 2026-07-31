@@ -2,6 +2,7 @@ param(
     [ValidateSet('all', 'developer', 'commercial', 'commercial-staging')][string]$Edition = 'all',
     [switch]$SkipInstall,
     [switch]$VerifyLaunch,
+    [switch]$SkipShortcutUpdate,
     [string]$VerifyReportsDirectory = "",
     [int]$BuildNumber = 0,
     [string]$Version = ""
@@ -129,9 +130,11 @@ foreach ($CurrentEdition in $Editions) {
         if (Test-Path -LiteralPath $Report) { Remove-Item -LiteralPath $Report }
     }
     $Arguments = if ($Report) { '"--verify-edition=' + $Report + '"' } elseif ($VerifyLaunch) { '"--smoke-test"' } else { '' }
-    & (Join-Path $PSScriptRoot 'update-desktop-shortcut.ps1') -TargetPath $TargetExe -CommitHash $Commit `
-        -ShortcutName $ShortcutName -Launch:($VerifyLaunch -or [bool]$Report) -LaunchArguments $Arguments
-    if ($LASTEXITCODE -ne 0) { throw "Desktop shortcut update failed for $CurrentEdition." }
+    if (-not $SkipShortcutUpdate) {
+        & (Join-Path $PSScriptRoot 'update-desktop-shortcut.ps1') -TargetPath $TargetExe -CommitHash $Commit `
+            -ShortcutName $ShortcutName -Launch:($VerifyLaunch -or [bool]$Report) -LaunchArguments $Arguments
+        if ($LASTEXITCODE -ne 0) { throw "Desktop shortcut update failed for $CurrentEdition." }
+    }
     if ($Report) {
         for ($Attempt = 0; $Attempt -lt 60 -and -not (Test-Path -LiteralPath $Report); $Attempt++) { Start-Sleep -Milliseconds 500 }
         if (-not (Test-Path -LiteralPath $Report)) { throw "Smoke report was not created: $Report" }

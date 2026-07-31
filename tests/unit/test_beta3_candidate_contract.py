@@ -40,8 +40,10 @@ def test_installer_supports_isolated_shortcut_without_touching_owner_desktop():
     root = Path(__file__).resolve().parents[2]
     installer = (root / "installer" / "CreatorAssistant.iss").read_text(encoding="utf-8")
     verifier = (root / "scripts" / "test-isolated-shortcut.ps1").read_text(encoding="utf-8-sig")
+    build = (root / "scripts" / "build.ps1").read_text(encoding="utf-8-sig")
 
     assert "CREATOR_ASSISTANT_E2E_DESKTOP" in installer
     assert "{code:DesktopShortcutDirectory}" in installer
     assert "Creator Assistant Commercial Staging" in verifier
     assert "removed_after_uninstall" in verifier
+    assert "SkipShortcutUpdate" in build

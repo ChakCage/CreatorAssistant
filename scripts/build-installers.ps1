@@ -2,7 +2,8 @@ param(
     [string]$Version = "",
     [ValidateSet('all', 'developer', 'commercial', 'commercial-staging')][string]$Edition = 'all',
     [string]$IsccPath = "",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$SkipShortcutUpdate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,7 +14,7 @@ if (-not $Version) {
     $Version = (& $Python -c "import sys;sys.path.insert(0,r'$Root\\src');from creator_assistant.version import __version__;print(__version__)").Trim()
 }
 if (-not $SkipBuild) {
-    & (Join-Path $PSScriptRoot 'build.ps1') -Edition $Edition -SkipInstall
+    & (Join-Path $PSScriptRoot 'build.ps1') -Edition $Edition -SkipInstall -SkipShortcutUpdate:$SkipShortcutUpdate
     if ($LASTEXITCODE -ne 0) { throw 'Application build failed.' }
 }
 
