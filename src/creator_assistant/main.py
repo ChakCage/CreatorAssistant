@@ -411,7 +411,7 @@ def _commercial_license_verification(container: ServiceContainer, report_path: P
         else:
             restarted_service.deactivate_device(refreshed.device_id)
             after_deactivate = restarted_service.status()
-        if os.environ.get("CREATOR_ASSISTANT_E2E_CREDENTIAL_NAMESPACE"):
+        if os.environ.get("CREATOR_ASSISTANT_E2E_CREDENTIAL_NAMESPACE") and not preserve:
             restarted_service.storage.credentials.delete("installation", kind="id")
         report.update({
             "success": (
