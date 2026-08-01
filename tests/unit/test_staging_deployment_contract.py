@@ -103,5 +103,34 @@ def test_telegram_webhook_is_bound_to_secret_and_not_mutated_at_every_start():
     assert "if settings.manage_webhook:" in main
     assert "delete_webhook" not in main
     explicit = (STAGING / "ops" / "set-webhook.sh").read_text(encoding="utf-8")
-    assert "DELETE_OLD_WEBHOOK" in explicit
-    assert "secret_token=${CREATOR_BOT_WEBHOOK_SECRET}" in explicit
+    assert "webhook_readiness.py" in explicit
+    assert "--repair --force-set" in explicit
+    assert "deleteWebhook" not in explicit
+
+
+def test_deploy_requires_operational_webhook_pre_and_post_checks():
+    deploy = (ROOT / "scripts" / "deploy-staging.ps1").read_text(encoding="utf-8")
+    verify = (ROOT / "scripts" / "verify-staging.ps1").read_text(encoding="utf-8")
+    readiness = (STAGING / "ops" / "webhook_readiness.py").read_text(encoding="utf-8")
+    assert "--phase pre --repair --clear-stale-error" in deploy
+    assert "--phase post --repair --force-set --clear-stale-error --require-empty" in deploy
+    assert "bot_health" in deploy
+    assert "--phase verify --require-empty" in verify
+    assert '"drop_pending_updates": "false"' in readiness
+    assert '"deleteWebhook", {"drop_pending_updates": "false"}' in readiness
+    assert "last_error_message" in readiness
+    assert "pending_update_count is growing" in readiness
+    assert "X-Telegram-Bot-Api-Secret-Token" in readiness
+
+
+def test_monitor_checks_webhook_url_error_queue_and_runtime_endpoint():
+    monitor = (STAGING / "ops" / "monitor-loop.sh").read_text(encoding="utf-8")
+    compose = (STAGING / "docker-compose.yml").read_text(encoding="utf-8")
+    for marker in (
+        "telegram-webhook-url",
+        "telegram-webhook-last-error",
+        "telegram-webhook-queue-growing",
+        "telegram-webhook-operational-readiness",
+    ):
+        assert marker in monitor
+    assert "CREATOR_BOT_WEBHOOK_SECRET: ${CREATOR_BOT_WEBHOOK_SECRET}" in compose

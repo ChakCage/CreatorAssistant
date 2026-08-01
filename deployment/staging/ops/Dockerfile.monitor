@@ -1,4 +1,4 @@
 FROM postgres:16-alpine
-RUN apk add --no-cache bash curl openssl redis
+RUN apk add --no-cache bash curl jq openssl python3 redis
 COPY . /ops
 RUN sed -i 's/\r$//' /ops/*.sh && chmod 0555 /ops/*.sh

@@ -16,7 +16,16 @@ while true; do
     notify telegram-webhook-api
     webhook=""
   }
-  printf '%s' "$webhook" | grep -Fq "${PUBLIC_BOT_URL}/telegram/webhook" || notify telegram-webhook-url
+  expected_webhook="${PUBLIC_BOT_URL}/telegram/webhook"
+  webhook_url="$(printf '%s' "$webhook" | jq -r '.result.url // ""' 2>/dev/null)"
+  webhook_error="$(printf '%s' "$webhook" | jq -r '.result.last_error_message // ""' 2>/dev/null)"
+  webhook_pending="$(printf '%s' "$webhook" | jq -r '.result.pending_update_count // 0' 2>/dev/null)"
+  test "$webhook_url" = "$expected_webhook" || notify telegram-webhook-url
+  test -z "$webhook_error" || notify telegram-webhook-last-error
+  previous_pending="$(cat /tmp/telegram-webhook.pending 2>/dev/null || echo 0)"
+  if test "$webhook_pending" -gt "$previous_pending" 2>/dev/null; then notify telegram-webhook-queue-growing; fi
+  printf '%s' "$webhook_pending" > /tmp/telegram-webhook.pending
+  python3 /ops/webhook_readiness.py --env-file /dev/null --phase verify --sample-delay 0 >/dev/null 2>&1 || notify telegram-webhook-operational-readiness
   pending="$(psql -Atqc "select count(*) from bot_notifications where status in ('PENDING','PROCESSING')" 2>/dev/null || echo -1)"
   failed_notifications="$(psql -Atqc "select count(*) from bot_notifications where status='FAILED'" 2>/dev/null || echo -1)"
   failed_activations="$(psql -Atqc "select count(*) from license_events where event_type='ACTIVATE' and result<>'SUCCESS' and created_at > now() - interval '1 hour'" 2>/dev/null || echo -1)"

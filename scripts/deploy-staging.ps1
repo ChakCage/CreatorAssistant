@@ -104,11 +104,36 @@ cd '$RemoteRoot/releases/$stamp'
 tar -xf source.tar
 cp '$RemoteRoot/shared/.env.staging' deployment/staging/.env.staging
 chmod 600 deployment/staging/.env.staging
+python3 deployment/staging/ops/webhook_readiness.py --env-file '$RemoteRoot/shared/.env.staging' --phase pre --repair --clear-stale-error
 cd deployment/staging
 docker compose --env-file .env.staging config --quiet
 docker compose --env-file .env.staging build
 docker compose --env-file .env.staging run --rm migrate
 docker compose --env-file .env.staging up -d --remove-orphans
+set -a; . ./.env.staging; set +a
+for attempt in `$(seq 1 40); do
+  bot_id=`$(docker compose --env-file .env.staging ps -q bot)
+  bot_health=`$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "`$bot_id" 2>/dev/null || true)
+  if [ "`$bot_health" = healthy ] && curl --fail --silent --show-error --max-time 5 "https://`$STAGING_BOT_DOMAIN/ready" >/dev/null; then
+    break
+  fi
+  if [ "`$attempt" = 40 ]; then
+    echo 'Bot did not become operationally ready after deploy.' >&2
+    exit 1
+  fi
+  sleep 3
+done
+# Always write the runtime secret after the new bot is ready. This is an
+# idempotent setWebhook call; queued updates are preserved and no delete occurs.
+post_ready=false
+for attempt in `$(seq 1 6); do
+  if python3 ops/webhook_readiness.py --env-file .env.staging --phase post --repair --force-set --clear-stale-error --require-empty; then
+    post_ready=true
+    break
+  fi
+  sleep 5
+done
+test "`$post_ready" = true
 ln -sfn '$RemoteRoot/releases/$stamp' '$RemoteRoot/current'
 "@
     $remote = $remote.Replace("`r`n", "`n")
