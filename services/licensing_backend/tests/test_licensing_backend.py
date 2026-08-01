@@ -161,8 +161,15 @@ def test_admin_grant_is_idempotent(client, admin_headers):
 
 
 def test_public_api_rate_limit_and_health(client):
-    assert client.get("/health").json() == {"status": "ok"}
-    assert client.get("/ready").status_code == 200
+    assert client.get("/health").json() == {
+        "status": "ok", "version": "0.3.1-beta.4", "commit": "test-release-commit",
+    }
+    assert client.get("/ready").json() == {
+        "status": "ready", "version": "0.3.1-beta.4", "commit": "test-release-commit",
+    }
+    assert client.get("/version").json() == {
+        "version": "0.3.1-beta.4", "commit": "test-release-commit", "environment": "test",
+    }
     payload = {"activation_code": "CA-AAAA-BBBB-CCCC", "installation_id": "11111111-1111-4111-8111-111111111111",
                "device_name": "PC", "os_version": "Windows", "app_version": "0.1.0", "edition": "commercial"}
     statuses = [client.post("/v1/licenses/activate", json=payload).status_code for _ in range(13)]

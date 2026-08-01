@@ -18,6 +18,8 @@ x-backend-env: &backend-env
   LICENSE_PUBLIC_BASE_URL: https://${STAGING_API_DOMAIN}
   LICENSE_MINIMUM_APP_VERSION: ${LICENSE_MINIMUM_APP_VERSION:-0.3.0}
   LICENSE_RECOMMENDED_APP_VERSION: ${LICENSE_RECOMMENDED_APP_VERSION:-0.3.0}
+  CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.4}
+  CREATOR_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT:-unknown}
   LICENSE_PAYMENTS_ENABLED: "false"
   # FREE remains disabled in public staging until the separate acceptance test.
   LICENSE_FREE_ACCESS_ENABLED: ${LICENSE_FREE_ACCESS_ENABLED:-false}
@@ -47,6 +49,8 @@ x-bot-env: &bot-env
   CREATOR_BOT_SUPPORT_URL: ${CREATOR_BOT_SUPPORT_URL}
   CREATOR_BOT_ADMIN_TELEGRAM_ID: ${CREATOR_BOT_ADMIN_TELEGRAM_ID:-0}
   CREATOR_BOT_HELP_URL: ${CREATOR_BOT_HELP_URL}
+  CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.4}
+  CREATOR_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT:-unknown}
 
 services:
   caddy:
@@ -104,6 +108,9 @@ services:
   migrate:
     build:
       context: ../../services/licensing_backend
+      args:
+        CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.4}
+        CREATOR_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT:-unknown}
     environment: *backend-env
     secrets: [license-signing-private-key]
     command: ["alembic", "upgrade", "head"]
@@ -116,6 +123,9 @@ services:
   api:
     build:
       context: ../../services/licensing_backend
+      args:
+        CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.4}
+        CREATOR_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT:-unknown}
     restart: unless-stopped
     environment: *backend-env
     secrets: [license-signing-private-key]
@@ -133,6 +143,9 @@ services:
   bot:
     build:
       context: ../../services/creator_assistant_bot
+      args:
+        CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.4}
+        CREATOR_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT:-unknown}
     restart: unless-stopped
     environment: *bot-env
     depends_on:
@@ -148,6 +161,9 @@ services:
   notification-worker:
     build:
       context: ../../services/creator_assistant_bot
+      args:
+        CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.4}
+        CREATOR_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT:-unknown}
     restart: unless-stopped
     environment: *bot-env
     command: ["python", "-m", "bot.worker"]

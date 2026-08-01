@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from aiogram import Bot
 
@@ -12,6 +13,11 @@ from .main import notification_worker
 async def run() -> None:
     settings = BotSettings()
     settings.validate_runtime()
+    print(json.dumps({
+        "event": "notification-worker-started",
+        "version": settings.release_version,
+        "commit": settings.release_commit,
+    }, separators=(",", ":")), flush=True)
     backend = BackendClient(settings)
     bot = Bot(settings.token or "123456:LOCAL_TEST_TOKEN")
     try:

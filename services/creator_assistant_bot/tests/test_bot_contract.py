@@ -48,6 +48,16 @@ def test_plan_copy_formats_minor_units_without_float_contract():
     assert "990.00 RUB" in text
 
 
+def test_bot_release_metadata_comes_from_settings():
+    settings = BotSettings(
+        service_secret="x" * 32,
+        release_version="0.3.1-beta.4",
+        release_commit="test-release-commit",
+    )
+    assert settings.release_version == "0.3.1-beta.4"
+    assert settings.release_commit == "test-release-commit"
+
+
 def test_start_menu_exposes_every_required_action():
     menu = main_menu()
     assert [len(row) for row in menu.inline_keyboard] == [2, 2, 2, 2, 1]

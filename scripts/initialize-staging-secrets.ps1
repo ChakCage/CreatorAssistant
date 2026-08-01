@@ -5,6 +5,11 @@ param(
     [string]$RemoteRoot = "/opt/creator-assistant-staging"
 )
 $ErrorActionPreference = "Stop"
+$Repository = Split-Path -Parent $PSScriptRoot
+$ReleaseCommit = (& git -C $Repository rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $ReleaseCommit -notmatch '^[0-9a-f]{40}$') {
+    throw "Unable to determine the release commit."
+}
 
 function New-RandomSecret([int]$Bytes = 48) {
     $buffer = New-Object byte[] $Bytes
@@ -70,7 +75,9 @@ $lines = @(
     "LICENSE_ADMIN_TOKEN_HASH=$adminHash"
     "LICENSE_BOT_SERVICE_SECRET=$($secrets.LICENSE_BOT_SERVICE_SECRET)"
     "LICENSE_MINIMUM_APP_VERSION=0.3.0"
-    "LICENSE_RECOMMENDED_APP_VERSION=0.3.1-beta.3"
+    "LICENSE_RECOMMENDED_APP_VERSION=0.3.1-beta.4"
+    "CREATOR_RELEASE_VERSION=0.3.1-beta.4"
+    "CREATOR_RELEASE_COMMIT=$ReleaseCommit"
     "CREATOR_BOT_TOKEN=$($secrets.CREATOR_BOT_TOKEN)"
     "CREATOR_BOT_WEBHOOK_SECRET=$($secrets.CREATOR_BOT_WEBHOOK_SECRET)"
     "CREATOR_BOT_SUPPORT_URL=https://t.me/KazakovCreatorAssistantBot?start=support"

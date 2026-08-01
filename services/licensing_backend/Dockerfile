@@ -1,4 +1,8 @@
 FROM python:3.12-slim
+ARG CREATOR_RELEASE_VERSION=development
+ARG CREATOR_RELEASE_COMMIT=unknown
+LABEL org.opencontainers.image.version=$CREATOR_RELEASE_VERSION \
+      org.opencontainers.image.revision=$CREATOR_RELEASE_COMMIT
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY requirements.txt .

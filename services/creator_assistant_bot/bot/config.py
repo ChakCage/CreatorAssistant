@@ -8,6 +8,8 @@ class BotSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CREATOR_BOT_", case_sensitive=False)
 
     environment: str = "local"
+    release_version: str = "development"
+    release_commit: str = "unknown"
     token: str = ""
     backend_url: str = "http://127.0.0.1:18080"
     service_secret: str = Field(min_length=32)

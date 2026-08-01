@@ -35,7 +35,7 @@ from .free_access import FreeAccessService
 
 
 settings = load_settings(); manager = LicenseManager(settings); billing = BillingService(settings, manager); beta_access = BetaAccessService(manager); free_access = FreeAccessService(settings, manager); limiter = RateLimiter(settings.redis_url)
-app = FastAPI(title="Creator Assistant Licensing", version="1.0.0")
+app = FastAPI(title="Creator Assistant Licensing", version=settings.release_version)
 audit_log = logging.getLogger("creator_assistant.requests")
 audit_log.addFilter(SecretRedactionFilter())
 
@@ -100,17 +100,21 @@ def require_free_admin(telegram_user_id: str) -> None:
         raise LicenseError("FREE_ADMIN_FORBIDDEN", 403)
 
 
+def release_metadata() -> dict:
+    return {"version": settings.release_version, "commit": settings.release_commit}
+
+
 @app.get("/health")
-def health(): return {"status": "ok"}
+def health(): return {"status": "ok", **release_metadata()}
 
 
 @app.get("/ready")
 def ready(db: Session = Depends(get_db)):
-    db.execute(text("SELECT 1")); return {"status": "ready"}
+    db.execute(text("SELECT 1")); return {"status": "ready", **release_metadata()}
 
 
 @app.get("/version")
-def version(): return {"version": app.version, "environment": settings.environment}
+def version(): return {**release_metadata(), "environment": settings.environment}
 
 
 @app.get("/v1/licenses/keys")

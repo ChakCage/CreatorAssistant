@@ -10,6 +10,8 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Settings:
     environment: str
+    release_version: str
+    release_commit: str
     database_url: str
     redis_url: str
     activation_pepper: str
@@ -104,7 +106,10 @@ def load_settings() -> Settings:
         fake_payment_secret = fake_payment_secret or secrets.token_urlsafe(32)
         bot_service_secret = bot_service_secret or secrets.token_urlsafe(32)
     return Settings(
-        environment=environment, database_url=database_url,
+        environment=environment,
+        release_version=os.getenv("CREATOR_RELEASE_VERSION", "development").strip(),
+        release_commit=os.getenv("CREATOR_RELEASE_COMMIT", "unknown").strip(),
+        database_url=database_url,
         redis_url=os.getenv("LICENSE_REDIS_URL", ""), activation_pepper=pepper,
         signing_key_id=os.getenv("LICENSE_SIGNING_KEY_ID", "local-ephemeral"),
         signing_private_key=private_key, admin_token_hash=os.getenv("LICENSE_ADMIN_TOKEN_HASH", ""),

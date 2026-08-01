@@ -95,13 +95,14 @@ async def run() -> None:
             values.append(now)
         return await handler(request)
     app = web.Application(middlewares=[public_limits], client_max_size=262_144)
-    app.router.add_get("/health", lambda _: web.json_response({"status": "ok"}))
+    metadata = {"version": settings.release_version, "commit": settings.release_commit}
+    app.router.add_get("/health", lambda _: web.json_response({"status": "ok", **metadata}))
     async def ready(_request):
         try:
             await backend.ready()
         except Exception:
             return web.json_response({"status": "not-ready", "backend": "unavailable"}, status=503)
-        return web.json_response({"status": "ready", "backend": "ready"})
+        return web.json_response({"status": "ready", "backend": "ready", **metadata})
     app.router.add_get("/ready", ready)
     bot = Bot(settings.token or "123456:LOCAL_TEST_TOKEN")
     dispatcher = Dispatcher(); dispatcher.include_router(build_router(backend, settings))
