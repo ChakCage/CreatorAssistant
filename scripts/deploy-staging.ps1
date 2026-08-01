@@ -15,6 +15,8 @@ $ErrorActionPreference = "Stop"
 if (-not $ConfirmDeploy) { throw "Deployment requires explicit -ConfirmDeploy." }
 $repo = Split-Path -Parent $PSScriptRoot
 if ((git -C $repo status --porcelain)) { throw "Refusing to deploy a dirty worktree." }
+$releaseCommit = (git -C $repo rev-parse HEAD).Trim()
+if ($releaseCommit -notmatch '^[0-9a-f]{40}$') { throw "Cannot resolve release commit." }
 if (-not $SkipTests) {
     $testProfile = Join-Path $repo ".test-runtime\deploy-test-profile"
     New-Item -ItemType Directory -Force -Path $testProfile | Out-Null
@@ -104,6 +106,8 @@ cd '$RemoteRoot/releases/$stamp'
 tar -xf source.tar
 cp '$RemoteRoot/shared/.env.staging' deployment/staging/.env.staging
 chmod 600 deployment/staging/.env.staging
+sed -i '/^CREATOR_RELEASE_COMMIT=/d' deployment/staging/.env.staging
+printf '%s\n' 'CREATOR_RELEASE_COMMIT=$releaseCommit' >> deployment/staging/.env.staging
 python3 deployment/staging/ops/webhook_readiness.py --env-file '$RemoteRoot/shared/.env.staging' --phase pre --repair --clear-stale-error
 cd deployment/staging
 docker compose --env-file .env.staging config --quiet
