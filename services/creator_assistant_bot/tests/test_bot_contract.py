@@ -196,11 +196,11 @@ async def test_support_notification_targets_only_configured_admin_with_actions()
     await deliver_notification(
         bot, _FakeNotificationBackend(),
         {"type": "SUPPORT_TICKET_CREATED", "payload": {"ticket_id": "ticket-id"}},
-        mock=False, admin_telegram_id=421403653,
+        mock=False, admin_telegram_id=424403653,
     )
     assert len(bot.calls) == 1
     chat_id, text, kwargs = bot.calls[0]
-    assert chat_id == 421403653
+    assert chat_id == 424403653
     assert "CA-12345678" in text
     assert "Работа приложения" in text
     assert "Telegram ID 424403653" in text
@@ -235,10 +235,11 @@ def test_production_bot_accepts_only_explicit_internal_http_and_rejects_placehol
 
 
 def test_staging_admin_section_is_explicit_and_support_has_no_personal_username():
-    settings = BotSettings(service_secret="x" * 32, admin_telegram_id=421403653)
-    assert settings.admin_telegram_id == 421403653
-    assert is_admin_user(settings, 421403653)
-    assert not is_admin_user(settings, 424403653)
+    settings = BotSettings(service_secret="x" * 32, admin_telegram_id=424403653)
+    assert settings.admin_telegram_id == 424403653
+    assert is_admin_user(settings, 424403653)
+    assert not is_admin_user(settings, 421403653)
+    assert not is_admin_user(settings, 999999999)
     assert "Chak" + "_74" not in settings.support_url
 
 

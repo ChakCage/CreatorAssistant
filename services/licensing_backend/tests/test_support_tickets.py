@@ -65,7 +65,7 @@ def test_support_ticket_lifecycle_and_audit_routes(client):
     replied = client.post(
         f"/v1/bot/support/tickets/{ticket['id']}/reply",
         headers=headers("support:admin"),
-        json={"telegram_user_id": "421403653", "message": "Проверяем соединение."},
+        json={"telegram_user_id": "424403653", "message": "Проверяем соединение."},
     )
     assert replied.status_code == 200
     assert replied.json()["admin_reply"] == "Проверяем соединение."
@@ -73,14 +73,14 @@ def test_support_ticket_lifecycle_and_audit_routes(client):
     blocked = client.post(
         f"/v1/bot/support/tickets/{ticket['id']}/block",
         headers=headers("support:admin"),
-        json={"telegram_user_id": "421403653", "message": "spam"},
+        json={"telegram_user_id": "424403653", "message": "spam"},
     )
     assert blocked.json()["status"] == "BLOCKED"
 
     closed = client.post(
         f"/v1/bot/support/tickets/{ticket['id']}/close",
         headers=headers("support:admin"),
-        json={"telegram_user_id": "421403653"},
+        json={"telegram_user_id": "424403653"},
     )
     assert closed.json()["status"] == SupportTicketStatus.CLOSED.value
     with SessionLocal() as db:

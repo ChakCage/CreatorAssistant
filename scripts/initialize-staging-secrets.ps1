@@ -75,7 +75,7 @@ $lines = @(
     "CREATOR_BOT_WEBHOOK_SECRET=$($secrets.CREATOR_BOT_WEBHOOK_SECRET)"
     "CREATOR_BOT_SUPPORT_URL=https://t.me/KazakovCreatorAssistantBot?start=support"
     "CREATOR_BOT_HELP_URL=https://t.me/KazakovCreatorAssistantBot?start=help"
-    "CREATOR_BOT_ADMIN_TELEGRAM_ID=421403653"
+    "CREATOR_BOT_ADMIN_TELEGRAM_ID=424403653"
     "BACKUP_ENCRYPTION_KEY=$($secrets.BACKUP_ENCRYPTION_KEY)"
     "BACKUP_RETENTION_DAYS=7"
     "ALERT_WEBHOOK_URL="

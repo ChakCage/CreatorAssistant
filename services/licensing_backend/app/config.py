@@ -131,7 +131,7 @@ def load_settings() -> Settings:
         free_access_shorts_source_limit=int(os.getenv("LICENSE_FREE_ACCESS_SHORTS_SOURCE_LIMIT", "2")),
         free_access_device_limit=int(os.getenv("LICENSE_FREE_ACCESS_DEVICE_LIMIT", "1")),
         free_access_offer_version=os.getenv("LICENSE_FREE_ACCESS_OFFER_VERSION", "1").strip(),
-        free_access_admin_telegram_id=int(os.getenv("LICENSE_FREE_ACCESS_ADMIN_TELEGRAM_ID", "421403653")),
+        free_access_admin_telegram_id=int(os.getenv("LICENSE_FREE_ACCESS_ADMIN_TELEGRAM_ID", "0")),
     )
 
 
