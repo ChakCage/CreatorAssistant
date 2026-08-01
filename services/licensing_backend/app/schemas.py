@@ -107,6 +107,7 @@ class FreeConfigUpdateRequest(BaseModel):
     telegram_user_id: str = Field(min_length=1, max_length=64)
     enabled: Optional[bool] = None
     channel_chat_id: Optional[int] = None
+    channel_username: Optional[str] = Field(default=None, max_length=64)
     channel_title: Optional[str] = Field(default=None, max_length=200)
     channel_invite_url: Optional[str] = Field(default=None, max_length=600)
     recheck_enabled: Optional[bool] = None

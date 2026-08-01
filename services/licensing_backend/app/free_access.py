@@ -27,6 +27,7 @@ class FreeAccessService:
         return {
             "enabled": self.settings.free_access_enabled,
             "channel_chat_id": self.settings.free_access_channel_chat_id,
+            "channel_username": self.settings.free_access_channel_username,
             "channel_title": self.settings.free_access_channel_title,
             "channel_invite_url": self.settings.free_access_channel_invite_url,
             "recheck_enabled": self.settings.free_access_recheck_enabled,
@@ -41,8 +42,16 @@ class FreeAccessService:
         return {**self.defaults(), **(row.value if row else {})}
 
     def update_config(self, db: Session, values: dict, admin_id: str) -> dict:
+        values = dict(values)
         if "channel_chat_id" in values and int(values["channel_chat_id"]) >= 0:
             raise LicenseError("FREE_CHANNEL_CHAT_ID_INVALID", 422)
+        if "channel_username" in values:
+            username = str(values["channel_username"]).strip()
+            bare = username[1:]
+            if (not username.startswith("@") or not 5 <= len(bare) <= 32
+                    or not bare.isascii() or not bare.replace("_", "").isalnum()):
+                raise LicenseError("FREE_CHANNEL_USERNAME_INVALID", 422)
+            values["channel_username"] = username
         if "channel_invite_url" in values and not str(values["channel_invite_url"]).startswith("https://t.me/"):
             raise LicenseError("FREE_CHANNEL_INVITE_URL_INVALID", 422)
         current = self.config(db)

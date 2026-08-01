@@ -59,6 +59,10 @@ def test_staging_refuses_enabling_free_without_verified_numeric_channel(monkeypa
     monkeypatch.setenv("LICENSE_FREE_ACCESS_CHANNEL_CHAT_ID", "0")
     with pytest.raises(RuntimeError, match="verified numeric channel"):
         load_settings()
+    monkeypatch.setenv("LICENSE_FREE_ACCESS_CHANNEL_CHAT_ID", "-1002301404710")
+    monkeypatch.delenv("LICENSE_FREE_ACCESS_CHANNEL_USERNAME", raising=False)
+    with pytest.raises(RuntimeError, match="verified numeric channel"):
+        load_settings()
 
 
 def test_signing_private_key_can_be_loaded_from_docker_secret_file(monkeypatch, tmp_path):
@@ -82,3 +86,4 @@ def test_free_channel_verifier_never_prints_bot_token():
     script = (__import__("pathlib").Path(__file__).parents[3] / "deployment" / "staging" / "ops" / "verify-free-channel.py").read_text(encoding="utf-8")
     assert "CREATOR_BOT_TOKEN" in script
     assert "print(token" not in script and "json.dumps(token" not in script
+    assert "chat_type" in script and "username" in script

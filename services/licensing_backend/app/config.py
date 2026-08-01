@@ -31,6 +31,7 @@ class Settings:
     payments_enabled: bool
     free_access_enabled: bool
     free_access_channel_chat_id: int
+    free_access_channel_username: str
     free_access_channel_title: str
     free_access_channel_invite_url: str
     free_access_recheck_enabled: bool
@@ -73,6 +74,7 @@ def load_settings() -> Settings:
     payments_enabled = os.getenv("LICENSE_PAYMENTS_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
     free_access_enabled = os.getenv("LICENSE_FREE_ACCESS_ENABLED", "true").strip().lower() in {"1", "true", "yes"}
     free_channel_chat_id = int(os.getenv("LICENSE_FREE_ACCESS_CHANNEL_CHAT_ID", "0"))
+    free_channel_username = os.getenv("LICENSE_FREE_ACCESS_CHANNEL_USERNAME", "").strip()
     free_channel_title = os.getenv("LICENSE_FREE_ACCESS_CHANNEL_TITLE", "Чак").strip()
     free_channel_invite_url = os.getenv("LICENSE_FREE_ACCESS_CHANNEL_INVITE_URL", "https://t.me/+SZ9UVmrWHkNhMjhi").strip()
     if environment in {"production", "staging"}:
@@ -90,7 +92,10 @@ def load_settings() -> Settings:
             raise RuntimeError("Production/staging refuses placeholder secrets")
         if environment == "staging" and payments_enabled:
             raise RuntimeError("Payments must remain disabled in staging")
-        if free_access_enabled and (free_channel_chat_id >= 0 or not free_channel_title or not free_channel_invite_url.startswith("https://t.me/")):
+        if free_access_enabled and (
+            free_channel_chat_id >= 0 or not free_channel_username.startswith("@")
+            or not free_channel_title or not free_channel_invite_url.startswith("https://t.me/")
+        ):
             raise RuntimeError("Enabled FREE access requires a verified numeric channel chat_id, title and Telegram invite URL")
     else:
         # Ephemeral values are safe for one-process local/test use only and are never persisted.
@@ -118,6 +123,7 @@ def load_settings() -> Settings:
         payments_enabled=payments_enabled,
         free_access_enabled=free_access_enabled,
         free_access_channel_chat_id=free_channel_chat_id,
+        free_access_channel_username=free_channel_username,
         free_access_channel_title=free_channel_title,
         free_access_channel_invite_url=free_channel_invite_url,
         free_access_recheck_enabled=os.getenv("LICENSE_FREE_ACCESS_RECHECK_ENABLED", "true").strip().lower() in {"1", "true", "yes"},

@@ -113,3 +113,25 @@ def test_support_rejects_unsafe_attachment_and_blocked_spam(client):
     )
     assert blocked.status_code == 403
     assert blocked.json()["error"]["code"] == "SUPPORT_BLOCKED"
+
+
+def test_support_categories_are_stored_and_returned_without_remapping(client):
+    user("421400002")
+    expected = ("activation", "application", "render", "other")
+    created_ids = []
+    for category in expected:
+        response = client.post(
+            "/v1/bot/support/tickets",
+            headers=headers("support:write"),
+            json={
+                "telegram_user_id": "421400002",
+                "category": category,
+                "message": f"category regression: {category}",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["category"] == category
+        created_ids.append(response.json()["id"])
+    with SessionLocal() as db:
+        stored = [db.get(SupportTicket, ticket_id).category for ticket_id in created_ids]
+    assert stored == list(expected)

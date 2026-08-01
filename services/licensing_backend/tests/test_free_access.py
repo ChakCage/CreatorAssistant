@@ -33,6 +33,12 @@ def test_membership_status_policy(status, is_member, allowed):
     assert free_access.membership_allowed(status, is_member) is allowed
 
 
+def test_free_config_exposes_server_side_channel_username():
+    with SessionLocal() as db:
+        config = free_access.config(db)
+    assert "channel_username" in config
+
+
 def test_free_grant_is_idempotent_and_unsubscribe_resume_preserves_usage():
     user = add_user()
     with SessionLocal() as db:
@@ -119,9 +125,17 @@ def test_bot_routes_save_server_config_and_enforce_admin_id(client):
     })
     assert denied.status_code == 403
     changed = client.post("/v1/bot/free/admin/config", headers=headers, json={
-        "telegram_user_id": str(settings.free_access_admin_telegram_id), "project_limit": 3,
+        "telegram_user_id": str(settings.free_access_admin_telegram_id),
+        "channel_username": "@chak_kazak", "project_limit": 3,
     })
-    assert changed.status_code == 200 and changed.json()["project_limit"] == 3
+    assert changed.status_code == 200
+    assert changed.json()["project_limit"] == 3
+    assert changed.json()["channel_username"] == "@chak_kazak"
+    invalid = client.post("/v1/bot/free/admin/config", headers=headers, json={
+        "telegram_user_id": str(settings.free_access_admin_telegram_id),
+        "channel_username": "https://t.me/chak_kazak",
+    })
+    assert invalid.status_code == 422
     with SessionLocal() as db:
         assert db.scalar(select(AdminAction).where(AdminAction.action == "update-free-access-settings"))
 

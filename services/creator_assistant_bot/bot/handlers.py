@@ -304,12 +304,13 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             "FREE-доступ\n"
             f"Включён: {'да' if value.get('enabled') else 'нет'}\n"
             f"Канал: {value.get('channel_title') or 'не задан'}\n"
+            f"Username: {value.get('channel_username') or 'не задан'}\n"
             f"Chat ID: {value.get('channel_chat_id') or 'не задан'}\n"
             f"Лимиты: проекты {value.get('project_limit')} · Shorts {value.get('shorts_source_limit')} · устройства {value.get('device_limit')}\n"
             f"Повторная проверка: {'да' if value.get('recheck_enabled') else 'нет'}\n"
             f"Версия предложения: {value.get('offer_version')}\n\n"
             "Изменение значений: /free_set <ключ> <значение>\n"
-            "Ключи: channel_chat_id, channel_title, channel_invite_url, project_limit, shorts_source_limit, device_limit, offer_version",
+            "Ключи: channel_chat_id, channel_username, channel_title, channel_invite_url, project_limit, shorts_source_limit, device_limit, offer_version",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Включить/выключить FREE", callback_data="free_admin_toggle")],
                 [InlineKeyboardButton(text="Включить/выключить recheck", callback_data="free_admin_recheck")],
@@ -331,7 +332,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         if not admin_only(message.from_user.id):
             return
         parts = (message.text or "").split(maxsplit=2)
-        allowed = {"channel_chat_id", "channel_title", "channel_invite_url", "project_limit",
+        allowed = {"channel_chat_id", "channel_username", "channel_title", "channel_invite_url", "project_limit",
                    "shorts_source_limit", "device_limit", "offer_version"}
         if len(parts) != 3 or parts[1] not in allowed:
             await message.answer("Формат: /free_set <ключ> <значение>"); return
