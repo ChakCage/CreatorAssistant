@@ -19,7 +19,10 @@ def test_staging_compose_does_not_publish_database_redis_or_admin_api():
     assert "ports:" not in redis
     caddy = (STAGING / "Caddyfile").read_text(encoding="utf-8")
     assert "@admin path /v1/admin/*" in caddy
-    assert "respond @admin 404" in caddy
+    assert "handle @admin" in caddy
+    assert "respond 404" in caddy
+    assert "@installer path_regexp installer ^/downloads/CreatorAssistant-Commercial-Staging-" in caddy
+    assert "uri strip_prefix /downloads" in caddy
     assert "handle @allowed" in caddy
     assert "handle @installer" in caddy
 
