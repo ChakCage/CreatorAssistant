@@ -61,6 +61,20 @@ def test_inactive_release_is_not_served(client):
     assert response.json() == {}
 
 
+def test_latest_release_orders_numeric_beta_prereleases(client):
+    add_release(version="0.3.1-beta.5")
+    params = {
+        "edition": "commercial", "channel": "beta",
+        "current_version": "0.3.1-beta.2", "architecture": "x86_64",
+    }
+    response = client.get("/v1/releases/latest", params=params)
+    assert response.status_code == 200
+    assert response.json()["version"] == "0.3.1-beta.5"
+
+    params["current_version"] = "0.3.1-beta.5"
+    assert client.get("/v1/releases/latest", params=params).json() == {}
+
+
 def test_beta_bot_serves_only_signed_commercial_beta_release(client):
     add_release(edition="developer", channel="beta", version="9.9.9")
     add_release(edition="commercial", channel="stable", version="9.9.8")

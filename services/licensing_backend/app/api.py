@@ -153,11 +153,21 @@ def latest_release(
 
 def _newer(candidate: str, current: str) -> bool:
     def key(value: str):
-        main = value.split("-", 1)[0]
+        main, separator, prerelease = value.strip().split("+", 1)[0].partition("-")
         try:
-            return tuple(int(item) for item in main.split("."))
+            release = tuple(int(item) for item in main.split("."))
         except ValueError:
             return ()
+        # A stable release sorts after every prerelease of the same release.
+        # Prerelease identifiers use SemVer ordering: numeric identifiers sort
+        # numerically and before non-numeric identifiers.
+        if not separator:
+            return release, 1, ()
+        identifiers = tuple(
+            (0, int(item)) if item.isdigit() else (1, item.casefold())
+            for item in prerelease.replace("-", ".").split(".")
+        )
+        return release, 0, identifiers
     return key(candidate) > key(current)
 
 
