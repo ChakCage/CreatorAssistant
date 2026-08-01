@@ -320,6 +320,9 @@ class BetaInviteUse(Base):
 
 class SupportTicket(Base):
     __tablename__ = "support_tickets"
+    __table_args__ = (
+        Index("ix_support_tickets_forum_chat_thread", "forum_chat_id", "forum_message_thread_id"),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     telegram_user_id: Mapped[str] = mapped_column(String(64), index=True)
