@@ -91,11 +91,30 @@ class SupportTicketCreateRequest(BotUserRequest):
     category: str = Field(pattern="^(activation|application|render|other)$")
     message: str = Field(min_length=3, max_length=4000)
     attachment: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: Optional[str] = Field(default=None, max_length=160)
 
 
 class SupportTicketActionRequest(BaseModel):
     telegram_user_id: str = Field(min_length=1, max_length=64)
     message: str = Field(default="", max_length=4000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=160)
+    attachment: dict[str, Any] = Field(default_factory=dict)
+
+
+class SupportMessageRequest(BotUserRequest):
+    message: str = Field(min_length=1, max_length=4000)
+    attachment: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: Optional[str] = Field(default=None, max_length=160)
+
+
+class SupportDashboardStateRequest(BaseModel):
+    telegram_user_id: str = Field(min_length=1, max_length=64)
+    message_id: int = Field(ge=1)
+
+
+class SupportForumThreadRequest(BaseModel):
+    telegram_user_id: str = Field(min_length=1, max_length=64)
+    message_thread_id: int = Field(ge=1)
 
 
 class FreeMembershipRequest(BotUserRequest):

@@ -29,6 +29,7 @@ from .ui import (
 
 class SupportFlow(StatesGroup):
     message = State()
+    continue_message = State()
     admin_reply = State()
 
 
@@ -86,6 +87,9 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
     @router.message(CommandStart())
     async def start(message: Message):
         await ensure_user(message.from_user)
+        free_enabled = False
+        with contextlib.suppress(Exception):
+            free_enabled = bool((await backend.free_config()).get("enabled"))
         payload = (message.text or "").partition(" ")[2].strip().casefold()
         if payload == "support":
             await message.answer("Выберите категорию обращения:", reply_markup=support_categories())
@@ -95,13 +99,19 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             return
         if payload == "free":
             config = await backend.free_config()
+            if not config.get("enabled"):
+                await message.answer("Бесплатный доступ сейчас временно недоступен.")
+                return
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="📢 Подписаться на канал", url=str(config["channel_invite_url"]))],
                 [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="free_check")],
             ])
             await message.answer("Подпишитесь на канал и нажмите «Проверить подписку».", reply_markup=keyboard)
             return
-        await message.answer("Creator Assistant — закрытая бета\nТестовый доступ и управление устройствами.", reply_markup=main_menu())
+        await message.answer(
+            "Creator Assistant — закрытая бета\nТестовый доступ и управление устройствами.",
+            reply_markup=main_menu(free_enabled=free_enabled, is_admin=admin_only(message.from_user.id)),
+        )
 
     @router.callback_query(F.data == "beta_access")
     async def beta_access(callback: CallbackQuery):
@@ -137,6 +147,9 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         with contextlib.suppress(Exception):
             await backend.free_event(callback.from_user.id, "membership_check_started")
         config = await backend.free_config()
+        if not config.get("enabled"):
+            await callback.message.answer("Бесплатный доступ сейчас временно недоступен.")
+            await callback.answer(); return
         chat_id = int(config.get("channel_chat_id") or 0)
         if not chat_id:
             await callback.message.answer("Проверка подписки ещё настраивается. Попробуйте позже.")
@@ -229,8 +242,104 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         await callback.message.answer(PUBLIC_HELP_TEXT); await callback.answer()
     @router.callback_query(F.data == "support")
     async def support(callback: CallbackQuery):
+        await callback.message.answer("Поддержка:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎫 Мои обращения", callback_data="support_my:1"),
+             InlineKeyboardButton(text="➕ Новое обращение", callback_data="support_new")],
+        ]))
+        await callback.answer()
+
+    @router.callback_query(F.data == "support_new")
+    async def support_new(callback: CallbackQuery):
+        existing = (await backend.user_support_tickets(callback.from_user.id, status="OPEN")).get("tickets", [])
+        if existing:
+            ticket = existing[0]
+            await callback.message.answer(
+                f"У вас уже есть открытое обращение {ticket['number']}. Продолжить его или создать отдельное?",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Продолжить диалог", callback_data=f"support_continue:{ticket['id']}")],
+                    [InlineKeyboardButton(text="Создать отдельное", callback_data="support_new_confirm")],
+                ]),
+            )
+            await callback.answer(); return
         await callback.message.answer("Выберите категорию обращения:", reply_markup=support_categories())
         await callback.answer()
+
+    @router.callback_query(F.data == "support_new_confirm")
+    async def support_new_confirm(callback: CallbackQuery):
+        await callback.message.answer("Выберите категорию обращения:", reply_markup=support_categories())
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("support_my:"))
+    async def support_my(callback: CallbackQuery):
+        page = max(1, int(callback.data.rsplit(":", 1)[1]))
+        result = await backend.user_support_tickets(callback.from_user.id, page=page)
+        values = result.get("tickets", [])
+        summaries = [
+            f"{item['number']} · {support_category_text(item['category'])} · {support_status_text(item)}\n"
+            f"@{item.get('telegram_username') or 'без username'} · ID {item['telegram_user_id']} · "
+            f"сообщений {item.get('message_count', 0)} · новых {item.get('admin_unread_count', 0)}\n"
+            f"{item.get('last_activity_at', '')} · {item.get('last_preview', '')}"
+            for item in values
+        ]
+        buttons = [[InlineKeyboardButton(
+            text=f"{item['number']} · {support_status_text(item)}",
+            callback_data=f"support_user_ticket:{item['id']}",
+        )] for item in values]
+        nav = []
+        if page > 1: nav.append(InlineKeyboardButton(text="←", callback_data=f"support_my:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page}/{result.get('pages', 1)}", callback_data="noop"))
+        if page < int(result.get("pages", 1)): nav.append(InlineKeyboardButton(text="→", callback_data=f"support_my:{page + 1}"))
+        if nav: buttons.append(nav)
+        buttons.append([InlineKeyboardButton(text="➕ Новое обращение", callback_data="support_new")])
+        await callback.message.answer("Мои обращения:" if values else "Обращений пока нет.",
+                                      reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("support_user_ticket:"))
+    async def support_user_ticket(callback: CallbackQuery):
+        ticket_id = callback.data.split(":", 1)[1]
+        ticket = await backend.user_support_ticket(callback.from_user.id, ticket_id)
+        lines = [f"{ticket['number']} · {support_status_text(ticket)}", ""]
+        for item in ticket.get("messages", [])[-8:]:
+            who = "Вы" if item.get("sender_type") == "user" else "Поддержка"
+            lines.append(f"{who}: {item.get('text', '')}")
+        buttons = [[InlineKeyboardButton(text="Продолжить переписку", callback_data=f"support_continue:{ticket_id}")]]
+        if ticket.get("status") == "CLOSED":
+            buttons = [[InlineKeyboardButton(text="Создать новое обращение", callback_data="support_new")]]
+        await callback.message.answer("\n\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("support_continue:"))
+    async def support_continue(callback: CallbackQuery, state: FSMContext):
+        await state.set_state(SupportFlow.continue_message)
+        await state.update_data(ticket_id=callback.data.split(":", 1)[1])
+        await callback.message.answer("Напишите продолжение. /cancel — отмена.")
+        await callback.answer()
+
+    @router.message(Command("cancel"))
+    async def cancel_flow(message: Message, state: FSMContext):
+        await state.clear(); await message.answer("Действие отменено.")
+
+    @router.message(SupportFlow.continue_message)
+    async def support_continue_message(message: Message, state: FSMContext):
+        data = await state.get_data(); text = (message.text or message.caption or "").strip()
+        attachment = {}
+        if message.photo:
+            item = message.photo[-1]
+            attachment = {"type": "photo", "name": "screenshot.jpg", "file_id": item.file_id, "size": item.file_size or 0}
+        elif message.document:
+            document = message.document; mime = (document.mime_type or "").casefold()
+            if mime not in {"text/plain", "application/zip"}:
+                await message.answer("Разрешены только скриншоты, TXT и ZIP."); return
+            attachment = {"type": mime, "name": document.file_name or "attachment",
+                          "file_id": document.file_id, "size": document.file_size or 0}
+        if attachment and int(attachment.get("size", 0)) > 5 * 1024 * 1024:
+            await message.answer("Файл больше 5 МБ."); return
+        if not text:
+            await message.answer("Сообщение не может быть пустым."); return
+        await backend.continue_support_ticket(message.from_user.id, data["ticket_id"], text, attachment,
+                                              idempotency_key=f"tg:{message.chat.id}:{message.message_id}")
+        await state.clear(); await message.answer("Сообщение добавлено в обращение.")
 
     @router.callback_query(F.data.startswith("support_category:"))
     async def support_category(callback: CallbackQuery, state: FSMContext):
@@ -288,12 +397,43 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
     async def admin_menu(message: Message):
         if not admin_only(message.from_user.id):
             return
-        await message.answer("Администрирование:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Новые и открытые", callback_data="support_admin_list:OPEN")],
-            [InlineKeyboardButton(text="Закрытые", callback_data="support_admin_list:CLOSED")],
-            [InlineKeyboardButton(text="FREE: настройки", callback_data="free_admin_config")],
-            [InlineKeyboardButton(text="FREE: пользователи", callback_data="free_admin_users")],
+        await message.answer("Административный центр:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎫 Обращения", callback_data="support_admin_filters"),
+             InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_soon:users")],
+            [InlineKeyboardButton(text="🎁 FREE", callback_data="admin_soon:free"),
+             InlineKeyboardButton(text="📊 Статистика", callback_data="admin_soon:stats")],
+            [InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_soon:settings")],
         ]))
+
+    @router.callback_query(F.data == "admin_panel")
+    async def admin_panel(callback: CallbackQuery):
+        if not admin_only(callback.from_user.id):
+            await callback.answer("Недоступно", show_alert=True); return
+        await callback.message.answer("Административный центр:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎫 Обращения", callback_data="support_admin_filters"),
+             InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_soon:users")],
+            [InlineKeyboardButton(text="🎁 FREE", callback_data="admin_soon:free"),
+             InlineKeyboardButton(text="📊 Статистика", callback_data="admin_soon:stats")],
+            [InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_soon:settings")],
+        ])); await callback.answer()
+
+    @router.callback_query(F.data.startswith("admin_soon:"))
+    async def admin_soon(callback: CallbackQuery):
+        if not admin_only(callback.from_user.id):
+            await callback.answer("Недоступно", show_alert=True); return
+        await callback.answer("Раздел готовится", show_alert=True)
+
+    @router.callback_query(F.data == "support_admin_filters")
+    async def support_admin_filters(callback: CallbackQuery):
+        if not admin_only(callback.from_user.id):
+            await callback.answer("Недоступно", show_alert=True); return
+        labels = [("Новые", "NEW"), ("Ждут администратора", "WAITING_ADMIN"),
+                  ("Ждут пользователя", "WAITING_USER"), ("Отвеченные", "ANSWERED"),
+                  ("Закрытые", "CLOSED"), ("Заблокированные", "BLOCKED"), ("Все", "ALL")]
+        buttons = [[InlineKeyboardButton(text=label, callback_data=f"support_admin_list:{status}:1")]
+                   for label, status in labels]
+        await callback.message.answer("Фильтр обращений:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        await callback.answer()
 
     @router.callback_query(F.data == "free_admin_config")
     async def free_admin_config(callback: CallbackQuery):
@@ -373,15 +513,23 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         if not admin_only(callback.from_user.id):
             await callback.answer("Недоступно", show_alert=True)
             return
-        status = callback.data.split(":", 1)[1]
-        values = (await backend.support_tickets(status)).get("tickets", [])
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        parts = callback.data.split(":")
+        status, page = parts[1], int(parts[2]) if len(parts) > 2 else 1
+        result = await backend.support_tickets(status, page)
+        values = result.get("tickets", [])
+        buttons = [
             [InlineKeyboardButton(
-                text=f"{item['number']} · {support_category_text(item['category'])}",
+                text=f"{item['number']} · {support_category_text(item['category'])} · {item.get('admin_unread_count', 0)} новых",
                 callback_data=f"support_ticket:{item['id']}",
-            )] for item in values
-        ]) if values else None
-        await callback.message.answer("Обращения:" if values else "Обращений нет.", reply_markup=keyboard)
+            )] for item in values]
+        nav = []
+        if page > 1: nav.append(InlineKeyboardButton(text="←", callback_data=f"support_admin_list:{status}:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page} из {result.get('pages', 1)}", callback_data="noop"))
+        if page < int(result.get("pages", 1)): nav.append(InlineKeyboardButton(text="→", callback_data=f"support_admin_list:{status}:{page + 1}"))
+        if nav: buttons.append(nav)
+        buttons.append([InlineKeyboardButton(text="Фильтры", callback_data="support_admin_filters")])
+        await callback.message.answer(("Обращения:\n\n" + "\n\n".join(summaries)) if values else "Обращений нет.",
+                                      reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
         await callback.answer()
 
     @router.callback_query(F.data.startswith("support_ticket:"))
@@ -393,14 +541,21 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Ответить", callback_data=f"support_reply:{ticket['id']}"),
              InlineKeyboardButton(text="Закрыть", callback_data=f"support_close:{ticket['id']}")],
-            [InlineKeyboardButton(text="Заблокировать спам", callback_data=f"support_block:{ticket['id']}")],
+            [InlineKeyboardButton(text="Переоткрыть", callback_data=f"support_reopen:{ticket['id']}"),
+             InlineKeyboardButton(text="Заблокировать", callback_data=f"support_block_confirm:{ticket['id']}")],
+            [InlineKeyboardButton(text="Назад к обращениям", callback_data="support_admin_filters")],
         ])
+        history = []
+        for item in ticket.get("messages", [])[-10:]:
+            who = {"user": "Пользователь", "admin": "Администратор", "system": "Система"}.get(item.get("sender_type"), "Сообщение")
+            history.append(f"{who}: {item.get('text', '')}")
         await callback.message.answer(
             f"{ticket['number']} · {support_status_text(ticket)}\n"
             f"Категория: {support_category_text(ticket['category'])}\n"
-            f"Пользователь: Telegram ID {ticket['telegram_user_id']}\n"
+            f"Пользователь: @{ticket.get('telegram_username') or 'без username'} · ID {ticket['telegram_user_id']}\n"
+            f"Сообщений: {ticket.get('message_count', 0)} · непрочитано: {ticket.get('admin_unread_count', 0)}\n"
             f"Вложение: {safe_attachment_text(ticket.get('attachment'))}\n\n"
-            f"{ticket['message']}",
+            + "\n\n".join(history or [ticket['message']]),
             reply_markup=keyboard,
         )
         attachment = ticket.get("attachment") or {}
@@ -419,8 +574,14 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             return
         await state.set_state(SupportFlow.admin_reply)
         await state.update_data(ticket_id=callback.data.split(":", 1)[1])
-        await callback.message.answer("Введите ответ пользователю:")
+        await callback.message.answer("Введите ответ пользователю. /cancel — отмена:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="support_reply_cancel")]
+        ]))
         await callback.answer()
+
+    @router.callback_query(F.data == "support_reply_cancel")
+    async def support_reply_cancel(callback: CallbackQuery, state: FSMContext):
+        await state.clear(); await callback.answer("Отменено"); await callback.message.answer("Ответ отменён.")
 
     @router.message(SupportFlow.admin_reply)
     async def support_admin_reply(message: Message, state: FSMContext):
@@ -428,17 +589,29 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             await state.clear()
             return
         text = (message.text or "").strip()
+        attachment = {}
+        if message.photo:
+            item = message.photo[-1]
+            attachment = {"type": "photo", "name": "screenshot.jpg", "file_id": item.file_id, "size": item.file_size or 0}
+            text = (message.caption or "Вложение от поддержки").strip()
+        elif message.document:
+            document = message.document; mime = (document.mime_type or "").casefold()
+            if mime not in {"text/plain", "application/zip"}:
+                await message.answer("Разрешены только скриншоты, TXT и ZIP."); return
+            attachment = {"type": mime, "name": document.file_name or "attachment", "file_id": document.file_id,
+                          "size": document.file_size or 0}
+            text = (message.caption or "Вложение от поддержки").strip()
+        if attachment and int(attachment.get("size", 0)) > 5 * 1024 * 1024:
+            await message.answer("Файл больше 5 МБ."); return
         if not text:
             await message.answer("Ответ не может быть пустым.")
             return
         data = await state.get_data()
-        ticket = await backend.reply_support_ticket(message.from_user.id, data["ticket_id"], text)
-        await message.bot.send_message(
-            int(ticket["telegram_user_id"]),
-            f"Ответ поддержки по обращению {ticket['number']}:\n\n{text}\n\nСтатус: отвечено.",
-        )
+        ticket = await backend.reply_support_ticket(message.from_user.id, data["ticket_id"], text,
+                                                     idempotency_key=f"admin-tg:{message.chat.id}:{message.message_id}",
+                                                     attachment=attachment)
         await state.clear()
-        await message.answer("Ответ отправлен от имени бота.")
+        await message.answer(f"Ответ сохранён и поставлен в очередь доставки: {ticket['number']}.")
 
     @router.callback_query(F.data.startswith("support_close:"))
     async def support_close(callback: CallbackQuery):
@@ -459,6 +632,28 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             return
         await backend.block_support_user(callback.from_user.id, callback.data.split(":", 1)[1])
         await callback.answer("Пользователь заблокирован для поддержки")
+
+    @router.callback_query(F.data.startswith("support_block_confirm:"))
+    async def support_block_confirm(callback: CallbackQuery):
+        if not admin_only(callback.from_user.id):
+            await callback.answer("Недоступно", show_alert=True); return
+        ticket_id = callback.data.split(":", 1)[1]
+        await callback.message.answer("Заблокировать пользователя только в поддержке?",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Да, заблокировать", callback_data=f"support_block:{ticket_id}"),
+                 InlineKeyboardButton(text="Отмена", callback_data=f"support_ticket:{ticket_id}")],
+            ])); await callback.answer()
+
+    @router.callback_query(F.data.startswith("support_reopen:"))
+    async def support_reopen(callback: CallbackQuery):
+        if not admin_only(callback.from_user.id):
+            await callback.answer("Недоступно", show_alert=True); return
+        await backend.reopen_support_ticket(callback.from_user.id, callback.data.split(":", 1)[1])
+        await callback.answer("Обращение переоткрыто")
+
+    @router.callback_query(F.data == "noop")
+    async def noop(callback: CallbackQuery):
+        await callback.answer()
     @router.callback_query(F.data == "feedback")
     async def feedback(callback: CallbackQuery):
         await callback.message.answer(
@@ -466,4 +661,35 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             "• версия приложения и Diagnostic ID\n• AI-модель и характеристики ПК\n"
             "• что делали и какая ошибка возникла\n\nSupport ZIP прикладывайте только по своему выбору."
         ); await callback.answer()
+
+    if settings.support_forum_enabled:
+        @router.message(F.chat.id == settings.support_forum_chat_id)
+        async def support_forum_reply(message: Message):
+            # Forum messages are an optional adapter over the same backend
+            # conversation. Only the configured owner can produce replies.
+            if not admin_only(message.from_user.id) or not message.message_thread_id:
+                return
+            text = (message.text or message.caption or "").strip()
+            attachment = {}
+            if message.photo:
+                item = message.photo[-1]
+                attachment = {"type": "photo", "name": "screenshot.jpg", "file_id": item.file_id, "size": item.file_size or 0}
+                text = text or "Вложение от поддержки"
+            elif message.document:
+                document = message.document; mime = (document.mime_type or "").casefold()
+                if mime not in {"text/plain", "application/zip"} or int(document.file_size or 0) > 5 * 1024 * 1024:
+                    await message.reply("Разрешены только TXT/ZIP до 5 МБ."); return
+                attachment = {"type": mime, "name": document.file_name or "attachment", "file_id": document.file_id,
+                              "size": document.file_size or 0}
+                text = text or "Вложение от поддержки"
+            if not text: return
+            try:
+                ticket = await backend.support_ticket_by_forum_thread(message.message_thread_id)
+                await backend.reply_support_ticket(
+                    message.from_user.id, ticket["id"], text,
+                    idempotency_key=f"forum:{message.chat.id}:{message.message_id}",
+                    attachment=attachment,
+                )
+            except httpx.HTTPError:
+                await message.reply("Не удалось сохранить ответ. Повторите позже.")
     return router

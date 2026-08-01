@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class BotSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="CREATOR_BOT_", case_sensitive=False)
+    model_config = SettingsConfigDict(env_prefix="CREATOR_BOT_", case_sensitive=False, populate_by_name=True)
 
     environment: str = "local"
     release_version: str = "development"
@@ -25,12 +25,28 @@ class BotSettings(BaseSettings):
     manage_webhook: bool = False
     run_notification_worker: bool = False
     allow_internal_backend_http: bool = False
+    support_admin_notification_mode: str = Field(
+        default="dashboard", validation_alias=AliasChoices("SUPPORT_ADMIN_NOTIFICATION_MODE", "CREATOR_BOT_SUPPORT_ADMIN_NOTIFICATION_MODE")
+    )
+    support_forum_enabled: bool = Field(
+        default=False, validation_alias=AliasChoices("SUPPORT_FORUM_ENABLED", "CREATOR_BOT_SUPPORT_FORUM_ENABLED")
+    )
+    support_forum_chat_id: int = Field(
+        default=0, validation_alias=AliasChoices("SUPPORT_FORUM_CHAT_ID", "CREATOR_BOT_SUPPORT_FORUM_CHAT_ID")
+    )
+    support_forum_topic_mode: str = Field(
+        default="per_ticket", validation_alias=AliasChoices("SUPPORT_FORUM_TOPIC_MODE", "CREATOR_BOT_SUPPORT_FORUM_TOPIC_MODE")
+    )
 
     @property
     def production(self) -> bool:
         return self.environment == "production"
 
     def validate_runtime(self) -> None:
+        if self.support_admin_notification_mode not in {"dashboard", "compact", "full", "off"}:
+            raise RuntimeError("Invalid support admin notification mode")
+        if self.support_forum_enabled and not self.support_forum_chat_id:
+            raise RuntimeError("Support forum chat ID is required when forum integration is enabled")
         if self.production:
             if not self.public_url.startswith("https://"):
                 raise RuntimeError("Production bot webhook requires HTTPS")

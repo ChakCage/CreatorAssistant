@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from app.api import settings
 from app.db import SessionLocal
-from app.models import AdminAction, BotNotification, NotificationStatus, SupportBlock, SupportTicket, SupportTicketStatus, User
+from app.models import AdminAction, BotNotification, NotificationStatus, SupportBlock, SupportMessage, SupportTicket, SupportTicketStatus, User
 from app.security import mint_service_token
 
 
@@ -34,17 +34,17 @@ def test_support_ticket_lifecycle_and_audit_routes(client):
     assert created.status_code == 200
     ticket = created.json()
     assert ticket["number"].startswith("CA-")
-    assert ticket["status"] == "OPEN"
+    assert ticket["status"] == "NEW"
     with SessionLocal() as db:
         notification = db.scalar(select(BotNotification).where(
-            BotNotification.notification_type == "SUPPORT_TICKET_CREATED",
+            BotNotification.notification_type == "SUPPORT_DASHBOARD_REFRESH",
         ))
         assert notification is not None
-        assert notification.payload == {"ticket_id": ticket["id"]}
+        assert notification.payload == {"ticket_id": ticket["id"], "event": "created"}
         notification_id = notification.id
 
     claimed = client.get("/v1/bot/notifications", headers=headers("notifications:read")).json()["notifications"]
-    assert [item["id"] for item in claimed] == [notification_id]
+    assert notification_id in [item["id"] for item in claimed]
     result = client.post(
         f"/v1/bot/notifications/{notification_id}/result",
         headers=headers("notifications:write"),
@@ -68,6 +68,7 @@ def test_support_ticket_lifecycle_and_audit_routes(client):
         json={"telegram_user_id": "424403653", "message": "Проверяем соединение."},
     )
     assert replied.status_code == 200
+    assert replied.json()["status"] == "WAITING_USER"
     assert replied.json()["admin_reply"] == "Проверяем соединение."
 
     blocked = client.post(
@@ -88,8 +89,9 @@ def test_support_ticket_lifecycle_and_audit_routes(client):
         actions = set(db.scalars(select(AdminAction.action).where(
             AdminAction.target_id.in_([ticket["id"], db.get(SupportTicket, ticket["id"]).user_id]),
         )).all())
-        assert {"create-support-ticket", "support-admin-notification-sent", "reply-support-ticket",
-                "close-support-ticket", "block-support-user"} <= actions
+        assert {"create-support-ticket", "reply-support-ticket",
+                "close-support-ticket", "block-support-ticket"} <= actions
+        assert len(db.scalars(select(SupportMessage).where(SupportMessage.ticket_id == ticket["id"])).all()) == 2
 
 
 def test_support_rejects_unsafe_attachment_and_blocked_spam(client):

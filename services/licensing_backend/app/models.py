@@ -30,7 +30,13 @@ class PaymentStatus(str, enum.Enum): CREATED = "CREATED"; PENDING = "PENDING"; P
 class PaymentEventStatus(str, enum.Enum): RECEIVED = "RECEIVED"; PROCESSED = "PROCESSED"; DUPLICATE = "DUPLICATE"; REJECTED = "REJECTED"; REVIEW_REQUIRED = "REVIEW_REQUIRED"; FAILED = "FAILED"
 class NotificationStatus(str, enum.Enum): PENDING = "PENDING"; PROCESSING = "PROCESSING"; SENT = "SENT"; FAILED = "FAILED"; CANCELLED = "CANCELLED"
 class PaymentPurpose(str, enum.Enum): DIRECT_SUBSCRIPTION_PURCHASE = "DIRECT_SUBSCRIPTION_PURCHASE"
-class SupportTicketStatus(str, enum.Enum): OPEN = "OPEN"; CLOSED = "CLOSED"
+class SupportTicketStatus(str, enum.Enum):
+    NEW = "NEW"
+    WAITING_ADMIN = "WAITING_ADMIN"
+    WAITING_USER = "WAITING_USER"
+    ANSWERED = "ANSWERED"
+    CLOSED = "CLOSED"
+    BLOCKED = "BLOCKED"
 class FreeAccessState(str, enum.Enum):
     ELIGIBLE = "ELIGIBLE"
     ACTIVE = "ACTIVE"
@@ -320,8 +326,15 @@ class SupportTicket(Base):
     category: Mapped[str] = mapped_column(String(40))
     message: Mapped[str] = mapped_column(Text)
     attachment: Mapped[dict] = mapped_column(JSON, default=dict)
-    status: Mapped[SupportTicketStatus] = mapped_column(Enum(SupportTicketStatus), default=SupportTicketStatus.OPEN, index=True)
+    # A string is intentional: support workflow states can evolve without a
+    # PostgreSQL enum migration that locks production traffic.
+    status: Mapped[str] = mapped_column(String(32), default=SupportTicketStatus.NEW.value, index=True)
     admin_reply: Mapped[str] = mapped_column(Text, default="")
+    admin_unread_count: Mapped[int] = mapped_column(Integer, default=1)
+    user_unread_count: Mapped[int] = mapped_column(Integer, default=0)
+    message_count: Mapped[int] = mapped_column(Integer, default=1)
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    forum_message_thread_id: Mapped[Optional[int]] = mapped_column(Integer, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -332,7 +345,25 @@ class SupportBlock(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
     reason: Mapped[str] = mapped_column(String(300), default="spam")
+    admin_telegram_user_id: Mapped[Optional[str]] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SupportMessage(Base):
+    __tablename__ = "support_messages"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    ticket_id: Mapped[str] = mapped_column(ForeignKey("support_tickets.id", ondelete="CASCADE"), index=True)
+    sender_type: Mapped[str] = mapped_column(String(16), index=True)
+    sender_telegram_user_id: Mapped[Optional[str]] = mapped_column(String(64))
+    text: Mapped[str] = mapped_column(Text, default="")
+    content_type: Mapped[str] = mapped_column(String(40), default="text")
+    attachment: Mapped[dict] = mapped_column(JSON, default=dict)
+    delivery_status: Mapped[str] = mapped_column(String(24), default="PENDING", index=True)
+    telegram_user_message_id: Mapped[Optional[str]] = mapped_column(String(64))
+    telegram_admin_message_id: Mapped[Optional[str]] = mapped_column(String(64))
+    forum_message_id: Mapped[Optional[str]] = mapped_column(String(64))
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(160), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
 class ServerSetting(TimestampMixin, Base):

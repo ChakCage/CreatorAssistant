@@ -58,11 +58,12 @@ def support_category_text(value: object) -> str:
 
 
 def support_status_text(value: dict) -> str:
-    if str(value.get("status") or "").upper() == "CLOSED":
-        return "закрыто"
-    if str(value.get("admin_reply") or "").strip():
-        return "отвечено"
-    return "ожидает ответа"
+    return {
+        "NEW": "новое", "WAITING_ADMIN": "ожидает ответа поддержки",
+        "WAITING_USER": "ожидает ответа пользователя", "ANSWERED": "отвечено",
+        "CLOSED": "закрыто", "BLOCKED": "заблокировано",
+        "OPEN": "ожидает ответа поддержки",
+    }.get(str(value.get("status") or "").upper(), "статус неизвестен")
 
 
 def safe_attachment_text(value: object) -> str:
@@ -155,14 +156,17 @@ def devices_text(value: dict) -> str:
     return "\n".join(lines)
 
 
-def main_menu() -> InlineKeyboardMarkup:
+def main_menu(*, free_enabled: bool = False, is_admin: bool = False) -> InlineKeyboardMarkup:
     labels = [
-        ("🎁 Попробовать бесплатно", "free_offer"), ("🎟 Получить тестовый доступ", "beta_access"),
-        ("📅 Моя подписка", "subscription"),
+        ("🎟 Тестовый доступ", "beta_access"), ("📅 Моя подписка", "subscription"),
         ("🔑 Код активации", "activation"), ("💻 Мои устройства", "devices"),
         ("⬇️ Скачать Creator Assistant", "download"), ("📖 Инструкция", "help"),
         ("🐞 Сообщить об ошибке", "feedback"), ("🛟 Поддержка", "support"),
     ]
+    if free_enabled:
+        labels.insert(0, ("🎁 Попробовать бесплатно", "free_offer"))
+    if is_admin:
+        labels.append(("🛠 Админ-панель", "admin_panel"))
     buttons = [InlineKeyboardButton(text=text, callback_data=data) for text, data in labels]
     return InlineKeyboardMarkup(inline_keyboard=[buttons[index:index + 2] for index in range(0, len(buttons), 2)])
 

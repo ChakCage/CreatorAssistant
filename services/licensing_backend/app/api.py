@@ -19,19 +19,23 @@ from .db import get_db
 from .billing import BillingService
 from .models import (ActivationCode, ActivationCodeStatus, AdminAction, BotNotification, Device, DeviceStatus,
                      FreeEntitlement, FreeQuotaKind, LicenseEvent, LicenseSession, Plan, Price, Release, SessionStatus, Subscription,
-                     SubscriptionStatus, SupportBlock, SupportTicket, SupportTicketStatus, User, UserStatus, utcnow)
+                     ServerSetting, SubscriptionStatus, SupportBlock, SupportMessage, SupportTicket, SupportTicketStatus,
+                     User, UserStatus, utcnow)
 from .rate_limit import RateLimiter
 from .schemas import (ActivateRequest, AdminCodeRequest, AdminGrantRequest, AdminPriceRequest,
                       AdminReleaseRequest, AdminUserRequest, BetaRedeemRequest, BotDeviceRequest, BotUserRequest,
                       CheckoutRequest, DeactivateRequest, NotificationResultRequest,
                       FreeBlockRequest, FreeConfigUpdateRequest, FreeEventRequest, FreeMembershipRequest, FreeQuotaFinishRequest,
-                      FreeQuotaRequest, RefreshRequest, SupportTicketActionRequest, SupportTicketCreateRequest, TelegramUserRequest)
+                      FreeQuotaRequest, RefreshRequest, SupportDashboardStateRequest, SupportForumThreadRequest,
+                      SupportMessageRequest, SupportTicketActionRequest,
+                      SupportTicketCreateRequest, TelegramUserRequest)
 from .security import verify_service_token
 from .service import LicenseError, LicenseManager, aware, iso
 from .release_signing import release_manifest
 from .beta_access import BetaAccessService
 from .redaction import SecretRedactionFilter
 from .free_access import FreeAccessService
+from .support import support_service, ticket_payload
 
 
 settings = load_settings(); manager = LicenseManager(settings); billing = BillingService(settings, manager); beta_access = BetaAccessService(manager); free_access = FreeAccessService(settings, manager); limiter = RateLimiter(settings.redis_url)
@@ -473,32 +477,22 @@ def bot_notification_result(notification_id: str, value: NotificationResultReque
     row = db.get(BotNotification, notification_id)
     if not row: raise HTTPException(404, "Notification not found")
     billing.finish_notification(row, value.success, value.error)
-    if row.notification_type == "SUPPORT_TICKET_CREATED":
+    if row.notification_type == "SUPPORT_ADMIN_REPLY":
+        message_id = str((row.payload or {}).get("message_id") or "")
+        message = db.get(SupportMessage, message_id) if message_id else None
+        if message:
+            message.delivery_status = "DELIVERED" if value.success else "FAILED"
+    if row.notification_type in {"SUPPORT_TICKET_CREATED", "SUPPORT_DASHBOARD_REFRESH", "SUPPORT_ADMIN_REPLY"}:
         ticket_id = str((row.payload or {}).get("ticket_id") or "")
         db.add(AdminAction(
             admin_id="system:telegram-notification-worker",
             action="support-admin-notification-sent" if value.success else "support-admin-notification-failed",
             target_type="support-ticket", target_id=ticket_id,
             reason="" if value.success else str(value.error or "delivery failed")[:300],
-            metadata={"notification_id": row.id, "attempts": row.attempts},
+            action_metadata={"notification_id": row.id, "attempts": row.attempts},
         ))
     db.commit()
     return {"status": row.status.value}
-
-
-def _ticket_payload(row: SupportTicket) -> dict:
-    return {
-        "id": row.id,
-        "number": "CA-" + row.id.split("-", 1)[0].upper(),
-        "telegram_user_id": row.telegram_user_id,
-        "category": row.category,
-        "message": row.message,
-        "attachment": row.attachment or {},
-        "status": row.status.value,
-        "admin_reply": row.admin_reply,
-        "created_at": iso(row.created_at),
-        "updated_at": iso(row.updated_at),
-    }
 
 
 @app.post("/v1/bot/support/tickets")
@@ -510,97 +504,154 @@ def bot_support_create(value: SupportTicketCreateRequest, request: Request,
     user = db.scalar(select(User).where(User.telegram_user_id == value.telegram_user_id))
     if not user:
         raise LicenseError("USER_NOT_FOUND", 404)
-    if db.scalar(select(SupportBlock).where(SupportBlock.user_id == user.id)):
-        raise LicenseError("SUPPORT_BLOCKED", 403)
-    attachment = dict(value.attachment or {})
-    if attachment:
-        allowed = {"photo", "text/plain", "application/zip"}
-        if str(attachment.get("type", "")) not in allowed:
-            raise LicenseError("UNSUPPORTED_ATTACHMENT", 422)
-        if int(attachment.get("size", 0) or 0) > 5 * 1024 * 1024:
-            raise LicenseError("ATTACHMENT_TOO_LARGE", 413)
-        attachment = {key: attachment[key] for key in ("type", "name", "file_id", "size") if key in attachment}
-    row = SupportTicket(
-        user_id=user.id, telegram_user_id=value.telegram_user_id,
-        category=value.category, message=value.message, attachment=attachment,
-    )
-    db.add(row); db.flush()
-    db.add(AdminAction(
-        admin_id="telegram-user:" + value.telegram_user_id,
-        action="create-support-ticket", target_type="support-ticket", target_id=row.id,
-    ))
-    db.add(BotNotification(
-        user_id=user.id,
-        telegram_user_id=value.telegram_user_id,
-        notification_type="SUPPORT_TICKET_CREATED",
-        payload={"ticket_id": row.id},
-        dedupe_key=f"support-created:{row.id}",
-    ))
+    row = support_service.create(db, user, value.category, value.message, value.attachment, value.idempotency_key)
     db.commit()
-    return _ticket_payload(row)
+    return ticket_payload(row, user)
 
 
 @app.get("/v1/bot/support/tickets")
-def bot_support_list(status: str = "OPEN", limit: int = 30,
+def bot_support_list(status: str = "OPEN", page: int = 1, page_size: int = 10,
+                     telegram_user_id: str = None,
                      _identity: dict = Depends(require_service("support:admin")),
                      db: Session = Depends(get_db)):
-    query = select(SupportTicket).order_by(SupportTicket.created_at.desc()).limit(min(max(limit, 1), 100))
-    if status in {"OPEN", "CLOSED"}:
-        query = query.where(SupportTicket.status == SupportTicketStatus(status))
-    return {"tickets": [_ticket_payload(row) for row in db.scalars(query).all()]}
+    return support_service.list(db, status.upper(), page, page_size, telegram_user_id)
+
+
+@app.get("/v1/bot/support/users/{telegram_user_id}/tickets")
+def bot_support_user_list(telegram_user_id: str, status: str = "ALL", page: int = 1,
+                          _identity: dict = Depends(require_service("support:write")),
+                          db: Session = Depends(get_db)):
+    return support_service.list(db, status.upper(), page, 10, telegram_user_id)
 
 
 @app.get("/v1/bot/support/tickets/{ticket_id}")
-def bot_support_get(ticket_id: str, _identity: dict = Depends(require_service("support:admin")),
+def bot_support_get(ticket_id: str, admin_view: bool = True, telegram_user_id: str = None,
+                    message_page: int = 1, _identity: dict = Depends(require_service("support:admin")),
                     db: Session = Depends(get_db)):
-    row = db.get(SupportTicket, ticket_id)
-    if not row:
-        raise LicenseError("SUPPORT_TICKET_NOT_FOUND", 404)
-    return _ticket_payload(row)
+    result = support_service.detail(db, ticket_id, admin_view=admin_view,
+                                    telegram_user_id=telegram_user_id, message_page=message_page)
+    db.commit()
+    return result
+
+
+@app.get("/v1/bot/support/users/{telegram_user_id}/tickets/{ticket_id}")
+def bot_support_user_get(telegram_user_id: str, ticket_id: str, message_page: int = 1,
+                         _identity: dict = Depends(require_service("support:write")),
+                         db: Session = Depends(get_db)):
+    result = support_service.detail(db, ticket_id, admin_view=False,
+                                    telegram_user_id=telegram_user_id, message_page=message_page)
+    db.commit()
+    return result
+
+
+@app.post("/v1/bot/support/tickets/{ticket_id}/messages")
+def bot_support_message(ticket_id: str, value: SupportMessageRequest,
+                        _identity: dict = Depends(require_service("support:write")),
+                        db: Session = Depends(get_db)):
+    row = support_service.add_user_message(db, ticket_id, value.telegram_user_id, value.message,
+                                           value.attachment, value.idempotency_key)
+    db.commit()
+    return ticket_payload(row, db.get(User, row.user_id))
 
 
 @app.post("/v1/bot/support/tickets/{ticket_id}/reply")
 def bot_support_reply(ticket_id: str, value: SupportTicketActionRequest,
                       _identity: dict = Depends(require_service("support:admin")),
                       db: Session = Depends(get_db)):
-    row = db.get(SupportTicket, ticket_id)
-    if not row:
-        raise LicenseError("SUPPORT_TICKET_NOT_FOUND", 404)
-    row.admin_reply = value.message
-    db.add(AdminAction(admin_id="telegram-admin:" + value.telegram_user_id, action="reply-support-ticket",
-                       target_type="support-ticket", target_id=row.id))
+    row, message = support_service.reply(db, ticket_id, value.telegram_user_id, value.message,
+                                         value.idempotency_key, value.attachment)
+    db.flush()
+    dedupe_key = f"support-reply:{message.id}"
+    if not db.scalar(select(BotNotification).where(BotNotification.dedupe_key == dedupe_key)):
+        db.add(BotNotification(user_id=row.user_id, telegram_user_id=row.telegram_user_id,
+                               notification_type="SUPPORT_ADMIN_REPLY",
+                               payload={"ticket_id": row.id, "message_id": message.id},
+                               dedupe_key=dedupe_key))
     db.commit()
-    return _ticket_payload(row)
+    return ticket_payload(row, db.get(User, row.user_id))
 
 
 @app.post("/v1/bot/support/tickets/{ticket_id}/close")
 def bot_support_close(ticket_id: str, value: SupportTicketActionRequest,
                       _identity: dict = Depends(require_service("support:admin")),
                       db: Session = Depends(get_db)):
-    row = db.get(SupportTicket, ticket_id)
-    if not row:
-        raise LicenseError("SUPPORT_TICKET_NOT_FOUND", 404)
-    row.status = SupportTicketStatus.CLOSED
-    row.closed_at = utcnow()
-    db.add(AdminAction(admin_id="telegram-admin:" + value.telegram_user_id, action="close-support-ticket",
-                       target_type="support-ticket", target_id=row.id))
+    row = support_service.transition(db, ticket_id, value.telegram_user_id, "close", value.message)
     db.commit()
-    return _ticket_payload(row)
+    return ticket_payload(row, db.get(User, row.user_id))
+
+
+@app.post("/v1/bot/support/tickets/{ticket_id}/reopen")
+def bot_support_reopen(ticket_id: str, value: SupportTicketActionRequest,
+                       _identity: dict = Depends(require_service("support:admin")),
+                       db: Session = Depends(get_db)):
+    row = support_service.transition(db, ticket_id, value.telegram_user_id, "reopen", value.message)
+    db.commit(); return ticket_payload(row, db.get(User, row.user_id))
 
 
 @app.post("/v1/bot/support/tickets/{ticket_id}/block")
 def bot_support_block(ticket_id: str, value: SupportTicketActionRequest,
                       _identity: dict = Depends(require_service("support:admin")),
                       db: Session = Depends(get_db)):
-    row = db.get(SupportTicket, ticket_id)
-    if not row:
-        raise LicenseError("SUPPORT_TICKET_NOT_FOUND", 404)
-    if not db.scalar(select(SupportBlock).where(SupportBlock.user_id == row.user_id)):
-        db.add(SupportBlock(user_id=row.user_id, reason=value.message or "spam"))
-    db.add(AdminAction(admin_id="telegram-admin:" + value.telegram_user_id, action="block-support-user",
-                       target_type="user", target_id=row.user_id, reason=value.message or "spam"))
+    row = support_service.transition(db, ticket_id, value.telegram_user_id, "block", value.message)
     db.commit()
-    return {"status": "BLOCKED"}
+    return ticket_payload(row, db.get(User, row.user_id))
+
+
+@app.post("/v1/bot/support/tickets/{ticket_id}/unblock")
+def bot_support_unblock(ticket_id: str, value: SupportTicketActionRequest,
+                        _identity: dict = Depends(require_service("support:admin")),
+                        db: Session = Depends(get_db)):
+    row = support_service.transition(db, ticket_id, value.telegram_user_id, "unblock", value.message)
+    db.commit(); return ticket_payload(row, db.get(User, row.user_id))
+
+
+@app.get("/v1/bot/support/dashboard")
+def bot_support_dashboard(_identity: dict = Depends(require_service("support:admin")),
+                          db: Session = Depends(get_db)):
+    result = support_service.dashboard(db)
+    state = db.get(ServerSetting, "support_admin_dashboard")
+    result["message_id"] = int((state.value or {}).get("message_id", 0)) if state else 0
+    return result
+
+
+@app.post("/v1/bot/support/dashboard/message")
+def bot_support_dashboard_message(value: SupportDashboardStateRequest,
+                                  _identity: dict = Depends(require_service("support:admin")),
+                                  db: Session = Depends(get_db)):
+    state = db.get(ServerSetting, "support_admin_dashboard")
+    payload = {"message_id": value.message_id, "telegram_user_id": value.telegram_user_id}
+    if state is None:
+        state = ServerSetting(key="support_admin_dashboard", value=payload); db.add(state)
+    else:
+        state.value = payload
+    db.commit(); return payload
+
+
+@app.post("/v1/bot/support/tickets/{ticket_id}/forum-thread")
+def bot_support_forum_thread(ticket_id: str, value: SupportForumThreadRequest,
+                             _identity: dict = Depends(require_service("support:admin")),
+                             db: Session = Depends(get_db)):
+    row = db.get(SupportTicket, ticket_id)
+    if not row: raise LicenseError("SUPPORT_TICKET_NOT_FOUND", 404)
+    collision = db.scalar(select(SupportTicket).where(
+        SupportTicket.forum_message_thread_id == value.message_thread_id,
+        SupportTicket.id != ticket_id,
+    ))
+    if collision: raise LicenseError("SUPPORT_FORUM_THREAD_ALREADY_LINKED", 409)
+    row.forum_message_thread_id = value.message_thread_id
+    db.add(AdminAction(admin_id="telegram-admin:" + value.telegram_user_id,
+                       action="link-support-forum-topic", target_type="support-ticket", target_id=row.id,
+                       action_metadata={"message_thread_id": value.message_thread_id}))
+    db.commit(); return ticket_payload(row, db.get(User, row.user_id))
+
+
+@app.get("/v1/bot/support/forum-threads/{message_thread_id}")
+def bot_support_by_forum_thread(message_thread_id: int,
+                                _identity: dict = Depends(require_service("support:admin")),
+                                db: Session = Depends(get_db)):
+    row = db.scalar(select(SupportTicket).where(SupportTicket.forum_message_thread_id == message_thread_id))
+    if not row: raise LicenseError("SUPPORT_TICKET_NOT_FOUND", 404)
+    return support_service.detail(db, row.id, admin_view=True)
 
 
 @app.post("/v1/admin/prices")

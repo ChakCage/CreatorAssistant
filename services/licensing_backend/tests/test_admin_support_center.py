@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+from datetime import timedelta
+
+import pytest
+from sqlalchemy import select
+
+from app.api import settings
+from app.db import SessionLocal
+from app.models import AdminAction, SupportBlock, SupportMessage, SupportTicket, User, utcnow
+from app.security import mint_service_token
+
+
+ADMIN_ID = "424403653"
+
+
+def headers(*permissions: str) -> dict[str, str]:
+    token = mint_service_token("test-bot", list(permissions), "creator_assistant", settings.bot_service_secret)
+    return {"Authorization": "Bearer " + token}
+
+
+def add_user(telegram_id: str, username: str = "tester") -> None:
+    with SessionLocal() as db:
+        db.add(User(telegram_user_id=telegram_id, telegram_username=username, telegram_first_name="Test")); db.commit()
+
+
+def create_ticket(client, telegram_id: str, index: int = 0) -> dict:
+    response = client.post("/v1/bot/support/tickets", headers=headers("support:write"), json={
+        "telegram_user_id": telegram_id, "category": "application", "message": f"message {index}",
+        "idempotency_key": f"create:{telegram_id}:{index}",
+    })
+    assert response.status_code == 200
+    return response.json()
+
+
+@pytest.mark.parametrize(("count", "pages"), [(0, 1), (1, 1), (10, 1), (11, 2), (25, 3)])
+def test_admin_list_paginates_ten_per_page(client, count, pages):
+    for index in range(count):
+        telegram_id = f"200{index:03d}"
+        add_user(telegram_id)
+        create_ticket(client, telegram_id, index)
+    result = client.get("/v1/bot/support/tickets?status=ALL&page=1&page_size=10",
+                        headers=headers("support:admin")).json()
+    assert result["total"] == count and result["pages"] == pages
+    assert len(result["tickets"]) == min(count, 10)
+
+
+def test_conversation_status_unread_idempotency_and_user_privacy(client):
+    add_user("10002", "alice"); add_user("10003", "bob")
+    ticket = create_ticket(client, "10002")
+    opened = client.get(f"/v1/bot/support/tickets/{ticket['id']}", headers=headers("support:admin")).json()
+    assert opened["admin_unread_count"] == 0 and len(opened["messages"]) == 1
+
+    payload = {"telegram_user_id": "10002", "message": "more details", "idempotency_key": "update:10002:1"}
+    first = client.post(f"/v1/bot/support/tickets/{ticket['id']}/messages",
+                        headers=headers("support:write"), json=payload)
+    second = client.post(f"/v1/bot/support/tickets/{ticket['id']}/messages",
+                         headers=headers("support:write"), json=payload)
+    assert first.status_code == second.status_code == 200
+    assert second.json()["message_count"] == 2
+    assert second.json()["status"] == "WAITING_ADMIN"
+
+    forbidden = client.get(f"/v1/bot/support/users/10003/tickets/{ticket['id']}",
+                           headers=headers("support:write"))
+    assert forbidden.status_code == 404
+
+    reply_payload = {"telegram_user_id": ADMIN_ID, "message": "please retry", "idempotency_key": "reply:1"}
+    reply1 = client.post(f"/v1/bot/support/tickets/{ticket['id']}/reply",
+                         headers=headers("support:admin"), json=reply_payload)
+    reply2 = client.post(f"/v1/bot/support/tickets/{ticket['id']}/reply",
+                         headers=headers("support:admin"), json=reply_payload)
+    assert reply1.status_code == reply2.status_code == 200
+    assert reply2.json()["message_count"] == 3
+    assert reply2.json()["user_unread_count"] == 1
+    user_view = client.get(f"/v1/bot/support/users/10002/tickets/{ticket['id']}",
+                           headers=headers("support:write")).json()
+    assert user_view["user_unread_count"] == 0
+    assert [message["sender_type"] for message in user_view["messages"]] == ["user", "user", "admin"]
+
+
+def test_filters_sort_transitions_block_and_unblock_do_not_change_license(client):
+    add_user("10004")
+    older = create_ticket(client, "10004", 1); newer = create_ticket(client, "10004", 2)
+    closed = client.post(f"/v1/bot/support/tickets/{older['id']}/close", headers=headers("support:admin"),
+                         json={"telegram_user_id": ADMIN_ID}).json()
+    assert closed["status"] == "CLOSED"
+    reopened = client.post(f"/v1/bot/support/tickets/{older['id']}/reopen", headers=headers("support:admin"),
+                           json={"telegram_user_id": ADMIN_ID}).json()
+    assert reopened["status"] == "WAITING_ADMIN"
+    blocked = client.post(f"/v1/bot/support/tickets/{newer['id']}/block", headers=headers("support:admin"),
+                          json={"telegram_user_id": ADMIN_ID, "message": "spam"}).json()
+    assert blocked["status"] == "BLOCKED"
+    with SessionLocal() as db:
+        ticket = db.get(SupportTicket, newer["id"])
+        user = db.get(User, ticket.user_id)
+        assert db.scalar(select(SupportBlock).where(SupportBlock.user_id == user.id)) is not None
+        assert str(user.status.value) == "ACTIVE"
+    unblocked = client.post(f"/v1/bot/support/tickets/{newer['id']}/unblock", headers=headers("support:admin"),
+                            json={"telegram_user_id": ADMIN_ID}).json()
+    assert unblocked["status"] == "WAITING_ADMIN"
+    rows = client.get("/v1/bot/support/tickets?status=WAITING_ADMIN", headers=headers("support:admin")).json()["tickets"]
+    assert {row["id"] for row in rows} == {older["id"], newer["id"]}
+    assert rows[0]["last_activity_at"] >= rows[1]["last_activity_at"]
+
+
+def test_owner_cannot_be_blocked(client):
+    add_user(ADMIN_ID, "owner")
+    ticket = create_ticket(client, ADMIN_ID)
+    result = client.post(f"/v1/bot/support/tickets/{ticket['id']}/block", headers=headers("support:admin"),
+                         json={"telegram_user_id": ADMIN_ID, "message": "mistake"})
+    assert result.status_code == 409
+    assert result.json()["error"]["code"] == "SUPPORT_OWNER_CANNOT_BE_BLOCKED"

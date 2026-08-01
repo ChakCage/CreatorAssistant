@@ -18,7 +18,7 @@ x-backend-env: &backend-env
   LICENSE_PUBLIC_BASE_URL: https://${STAGING_API_DOMAIN}
   LICENSE_MINIMUM_APP_VERSION: ${LICENSE_MINIMUM_APP_VERSION:-0.3.0}
   LICENSE_RECOMMENDED_APP_VERSION: ${LICENSE_RECOMMENDED_APP_VERSION:-0.3.0}
-  CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.4}
+  CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.5}
   CREATOR_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT:-unknown}
   LICENSE_PAYMENTS_ENABLED: "false"
   # FREE remains disabled in public staging until the separate acceptance test.
@@ -49,8 +49,12 @@ x-bot-env: &bot-env
   CREATOR_BOT_SUPPORT_URL: ${CREATOR_BOT_SUPPORT_URL}
   CREATOR_BOT_ADMIN_TELEGRAM_ID: ${CREATOR_BOT_ADMIN_TELEGRAM_ID:-0}
   CREATOR_BOT_HELP_URL: ${CREATOR_BOT_HELP_URL}
-  CREATOR_BOT_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.4}
+  CREATOR_BOT_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.5}
   CREATOR_BOT_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT:-unknown}
+  SUPPORT_ADMIN_NOTIFICATION_MODE: ${SUPPORT_ADMIN_NOTIFICATION_MODE:-dashboard}
+  SUPPORT_FORUM_ENABLED: ${SUPPORT_FORUM_ENABLED:-false}
+  SUPPORT_FORUM_CHAT_ID: ${SUPPORT_FORUM_CHAT_ID:-0}
+  SUPPORT_FORUM_TOPIC_MODE: ${SUPPORT_FORUM_TOPIC_MODE:-per_ticket}
 
 services:
   caddy:
@@ -109,7 +113,7 @@ services:
     build:
       context: ../../services/licensing_backend
       args:
-        CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.4}
+        CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.5}
         CREATOR_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT:-unknown}
     environment: *backend-env
     secrets: [license-signing-private-key]
@@ -124,7 +128,7 @@ services:
     build:
       context: ../../services/licensing_backend
       args:
-        CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.4}
+        CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.5}
         CREATOR_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT:-unknown}
     restart: unless-stopped
     environment: *backend-env
@@ -144,7 +148,7 @@ services:
     build:
       context: ../../services/creator_assistant_bot
       args:
-        CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.4}
+        CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.5}
         CREATOR_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT:-unknown}
     restart: unless-stopped
     environment: *bot-env
@@ -162,7 +166,7 @@ services:
     build:
       context: ../../services/creator_assistant_bot
       args:
-        CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.4}
+        CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION:-0.3.1-beta.5}
         CREATOR_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT:-unknown}
     restart: unless-stopped
     environment: *bot-env

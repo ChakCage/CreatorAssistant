@@ -18,7 +18,7 @@ class Gate:
 def test_beta4_version_is_single_runtime_source():
     import creator_assistant
 
-    assert __version__ == "0.3.1-beta.4"
+    assert __version__ == "0.3.1-beta.5"
     assert creator_assistant.__version__ == __version__
 
 

@@ -51,21 +51,30 @@ def test_plan_copy_formats_minor_units_without_float_contract():
 def test_bot_release_metadata_comes_from_settings():
     settings = BotSettings(
         service_secret="x" * 32,
-        release_version="0.3.1-beta.4",
+        release_version="0.3.1-beta.5",
         release_commit="test-release-commit",
     )
-    assert settings.release_version == "0.3.1-beta.4"
+    assert settings.release_version == "0.3.1-beta.5"
     assert settings.release_commit == "test-release-commit"
 
 
 def test_start_menu_exposes_every_required_action():
     menu = main_menu()
-    assert [len(row) for row in menu.inline_keyboard] == [2, 2, 2, 2, 1]
+    assert [len(row) for row in menu.inline_keyboard] == [2, 2, 2, 2]
     callbacks = {button.callback_data for row in menu.inline_keyboard for button in row}
     assert callbacks == {
-        "free_offer", "beta_access", "subscription", "activation", "devices", "download",
+        "beta_access", "subscription", "activation", "devices", "download",
         "help", "feedback", "support",
     }
+    assert all("Получить тестовый доступ" not in button.text for row in menu.inline_keyboard for button in row)
+
+
+def test_free_and_admin_actions_are_exposed_only_when_explicitly_enabled():
+    ordinary = {button.callback_data for row in main_menu().inline_keyboard for button in row}
+    admin = {button.callback_data for row in main_menu(is_admin=True).inline_keyboard for button in row}
+    free = {button.callback_data for row in main_menu(free_enabled=True).inline_keyboard for button in row}
+    assert "free_offer" not in ordinary and "admin_panel" not in ordinary
+    assert "admin_panel" in admin and "free_offer" in free
 
 
 @pytest.mark.parametrize(("status", "expected"), [
@@ -191,6 +200,12 @@ class _FakeNotificationBackend:
         assert ticket_id == "ticket-id"
         return self.ticket
 
+    async def support_dashboard(self):
+        return {"new": 1, "waiting_admin": 2, "answered": 3, "message_id": 0}
+
+    async def save_support_dashboard_message(self, admin_id: int, message_id: int):
+        self.saved = (admin_id, message_id)
+
 
 class _FakeBot:
     def __init__(self):
@@ -198,6 +213,7 @@ class _FakeBot:
 
     async def send_message(self, chat_id, text, **kwargs):
         self.calls.append((chat_id, text, kwargs))
+        return type("Sent", (), {"message_id": 77})()
 
 
 @pytest.mark.asyncio
@@ -211,13 +227,11 @@ async def test_support_notification_targets_only_configured_admin_with_actions()
     assert len(bot.calls) == 1
     chat_id, text, kwargs = bot.calls[0]
     assert chat_id == 424403653
-    assert "CA-12345678" in text
-    assert "Работа приложения" in text
-    assert "Telegram ID 424403653" in text
-    assert "Не работает" in text
+    assert "Центр поддержки" in text
+    assert "Ждут администратора: 2" in text
     assert "file_id" not in text
     callbacks = [button.callback_data for row in kwargs["reply_markup"].inline_keyboard for button in row]
-    assert callbacks == ["support_reply:ticket-id", "support_close:ticket-id", "support_block:ticket-id"]
+    assert callbacks == ["support_admin_filters"]
 
 
 @pytest.mark.asyncio

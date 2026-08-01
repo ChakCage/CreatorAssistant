@@ -71,13 +71,27 @@ class BackendClient:
             "telegram_user_id": str(telegram_user_id), "category": category,
             "message": message, "attachment": attachment or {},
         })
-    async def support_tickets(self, status: str = "OPEN"):
-        return await self._request("GET", "/v1/bot/support/tickets", params={"status": status})
-    async def support_ticket(self, ticket_id: str):
-        return await self._request("GET", f"/v1/bot/support/tickets/{ticket_id}")
-    async def reply_support_ticket(self, admin_id: int, ticket_id: str, message: str):
+    async def support_tickets(self, status: str = "OPEN", page: int = 1, page_size: int = 10):
+        return await self._request("GET", "/v1/bot/support/tickets", params={
+            "status": status, "page": page, "page_size": page_size,
+        })
+    async def support_ticket(self, ticket_id: str, *, admin_view: bool = True):
+        return await self._request("GET", f"/v1/bot/support/tickets/{ticket_id}", params={"admin_view": admin_view})
+    async def user_support_tickets(self, user_id: int, status: str = "ALL", page: int = 1):
+        return await self._request("GET", f"/v1/bot/support/users/{user_id}/tickets", params={"status": status, "page": page})
+    async def user_support_ticket(self, user_id: int, ticket_id: str):
+        return await self._request("GET", f"/v1/bot/support/users/{user_id}/tickets/{ticket_id}")
+    async def continue_support_ticket(self, user_id: int, ticket_id: str, message: str,
+                                      attachment: dict | None = None, idempotency_key: str | None = None):
+        return await self._request("POST", f"/v1/bot/support/tickets/{ticket_id}/messages", json={
+            "telegram_user_id": str(user_id), "message": message, "attachment": attachment or {},
+            "idempotency_key": idempotency_key,
+        })
+    async def reply_support_ticket(self, admin_id: int, ticket_id: str, message: str,
+                                   idempotency_key: str | None = None, attachment: dict | None = None):
         return await self._request("POST", f"/v1/bot/support/tickets/{ticket_id}/reply", json={
-            "telegram_user_id": str(admin_id), "message": message,
+            "telegram_user_id": str(admin_id), "message": message, "idempotency_key": idempotency_key,
+            "attachment": attachment or {},
         })
     async def close_support_ticket(self, admin_id: int, ticket_id: str):
         return await self._request("POST", f"/v1/bot/support/tickets/{ticket_id}/close", json={
@@ -87,4 +101,20 @@ class BackendClient:
         return await self._request("POST", f"/v1/bot/support/tickets/{ticket_id}/block", json={
             "telegram_user_id": str(admin_id), "message": "spam",
         })
+    async def reopen_support_ticket(self, admin_id: int, ticket_id: str):
+        return await self._request("POST", f"/v1/bot/support/tickets/{ticket_id}/reopen", json={"telegram_user_id": str(admin_id)})
+    async def unblock_support_user(self, admin_id: int, ticket_id: str):
+        return await self._request("POST", f"/v1/bot/support/tickets/{ticket_id}/unblock", json={"telegram_user_id": str(admin_id)})
+    async def support_dashboard(self):
+        return await self._request("GET", "/v1/bot/support/dashboard")
+    async def save_support_dashboard_message(self, admin_id: int, message_id: int):
+        return await self._request("POST", "/v1/bot/support/dashboard/message", json={
+            "telegram_user_id": str(admin_id), "message_id": message_id,
+        })
+    async def set_support_forum_thread(self, admin_id: int, ticket_id: str, message_thread_id: int):
+        return await self._request("POST", f"/v1/bot/support/tickets/{ticket_id}/forum-thread", json={
+            "telegram_user_id": str(admin_id), "message_thread_id": message_thread_id,
+        })
+    async def support_ticket_by_forum_thread(self, message_thread_id: int):
+        return await self._request("GET", f"/v1/bot/support/forum-threads/{message_thread_id}")
     async def close(self): await self.client.aclose()

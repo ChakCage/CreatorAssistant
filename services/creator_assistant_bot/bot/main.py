@@ -14,6 +14,7 @@ from .backend import BackendClient
 from .config import BotSettings
 from .handlers import build_router
 from .ui import safe_attachment_text, support_category_text
+from .support_forum import create_ticket_topic, relay_user_message
 
 
 async def deliver_notification(
@@ -23,11 +24,15 @@ async def deliver_notification(
     *,
     mock: bool,
     admin_telegram_id: int,
+    notification_mode: str = "dashboard",
+    forum_settings: BotSettings | None = None,
 ) -> None:
     notification_type = str(item.get("type") or "")
-    if notification_type == "SUPPORT_TICKET_CREATED":
+    if notification_type in {"SUPPORT_TICKET_CREATED", "SUPPORT_DASHBOARD_REFRESH"}:
         if not admin_telegram_id:
             raise RuntimeError("CREATOR_BOT_ADMIN_TELEGRAM_ID is not configured")
+        if notification_mode == "off":
+            return
         ticket_id = str((item.get("payload") or {}).get("ticket_id") or "")
         if not ticket_id:
             raise RuntimeError("Support notification has no ticket_id")
@@ -46,8 +51,71 @@ async def deliver_notification(
             ],
             [InlineKeyboardButton(text="Заблокировать", callback_data=f"support_block:{ticket_id}")],
         ])
-        if not mock:
+        if mock:
+            return
+        if notification_mode == "dashboard":
+            summary = await backend.support_dashboard()
+            dashboard_text = (
+                "🛠 Центр поддержки\n\n"
+                f"Новые: {summary.get('new', 0)}\n"
+                f"Ждут администратора: {summary.get('waiting_admin', 0)}\n"
+                f"Отвеченные: {summary.get('answered', 0)}"
+            )
+            dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Открыть обращения", callback_data="support_admin_filters")
+            ]])
+            message_id = int(summary.get("message_id") or 0)
+            if message_id:
+                try:
+                    await bot.edit_message_text(dashboard_text, admin_telegram_id, message_id,
+                                                reply_markup=dashboard_keyboard)
+                    return
+                except Exception:
+                    pass
+            sent = await bot.send_message(admin_telegram_id, dashboard_text, reply_markup=dashboard_keyboard)
+            await backend.save_support_dashboard_message(admin_telegram_id, sent.message_id)
+        elif notification_mode == "compact":
+            await bot.send_message(admin_telegram_id, f"Новое сообщение в {ticket['number']}", reply_markup=keyboard)
+        else:
             await bot.send_message(admin_telegram_id, text, reply_markup=keyboard)
+        return
+    if notification_type == "SUPPORT_ADMIN_REPLY":
+        ticket_id = str((item.get("payload") or {}).get("ticket_id") or "")
+        ticket = await backend.support_ticket(ticket_id)
+        message_id = str((item.get("payload") or {}).get("message_id") or "")
+        message = next((value for value in ticket.get("messages", []) if value.get("id") == message_id), None)
+        if not message:
+            raise RuntimeError("Support reply message not found")
+        if not mock:
+            text = (f"Ответ поддержки по обращению {ticket['number']}:\n\n{message['text']}\n\n"
+                    "Вы можете продолжить переписку в разделе «Мои обращения».")
+            attachment = message.get("attachment") or {}
+            if attachment.get("file_id") and attachment.get("type") == "photo":
+                await bot.send_photo(int(ticket["telegram_user_id"]), attachment["file_id"], caption=text)
+            elif attachment.get("file_id"):
+                await bot.send_document(int(ticket["telegram_user_id"]), attachment["file_id"], caption=text)
+            else:
+                await bot.send_message(int(ticket["telegram_user_id"]), text)
+        return
+    if notification_type == "SUPPORT_FORUM_NEW_TICKET":
+        if not forum_settings or not forum_settings.support_forum_enabled:
+            return
+        ticket_id = str((item.get("payload") or {}).get("ticket_id") or "")
+        ticket = await backend.support_ticket(ticket_id)
+        thread_id = await create_ticket_topic(bot, forum_settings, ticket)
+        if thread_id:
+            await backend.set_support_forum_thread(admin_telegram_id, ticket_id, thread_id)
+            ticket["forum_message_thread_id"] = thread_id
+            if ticket.get("messages"):
+                await relay_user_message(bot, forum_settings, ticket, ticket["messages"][0])
+        return
+    if notification_type == "SUPPORT_FORUM_USER_MESSAGE":
+        if not forum_settings or not forum_settings.support_forum_enabled:
+            return
+        payload = item.get("payload") or {}; ticket = await backend.support_ticket(str(payload.get("ticket_id") or ""))
+        message = next((value for value in ticket.get("messages", []) if value.get("id") == payload.get("message_id")), None)
+        if not message: raise RuntimeError("Support forum message not found")
+        await relay_user_message(bot, forum_settings, ticket, message)
         return
     if not mock:
         await bot.send_message(
@@ -61,6 +129,8 @@ async def notification_worker(
     backend: BackendClient,
     mock: bool,
     admin_telegram_id: int = 0,
+    notification_mode: str = "dashboard",
+    forum_settings: BotSettings | None = None,
 ) -> None:
     while True:
         try:
@@ -68,6 +138,8 @@ async def notification_worker(
                 try:
                     await deliver_notification(
                         bot, backend, item, mock=mock, admin_telegram_id=admin_telegram_id,
+                        notification_mode=notification_mode,
+                        forum_settings=forum_settings,
                     )
                     await backend.notification_result(item["id"], True)
                 except Exception as exc:
@@ -109,6 +181,8 @@ async def run() -> None:
     worker = (
         asyncio.create_task(notification_worker(
             bot, backend, settings.mock_telegram, settings.admin_telegram_id,
+            settings.support_admin_notification_mode,
+            settings,
         ))
         if settings.run_notification_worker else None
     )
