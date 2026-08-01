@@ -5,6 +5,7 @@ Revises: 0005_support_tickets
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 revision = "0006_free_access"
 down_revision = "0005_support_tickets"
@@ -13,13 +14,26 @@ depends_on = None
 
 
 def upgrade():
-    free_state = sa.Enum("ELIGIBLE", "ACTIVE", "PAUSED_UNSUBSCRIBED", "EXHAUSTED", "BLOCKED", "CONVERTED_TO_PAID", name="freeaccessstate")
-    quota_kind = sa.Enum("PROJECT", "SHORTS_SOURCE", name="freequotakind")
-    quota_status = sa.Enum("RESERVED", "COMMITTED", "RELEASED", name="freequotauestatus")
     bind = op.get_bind()
     tables = set(sa.inspect(bind).get_table_names())
-    if bind.dialect.name == "postgresql" and ("free_entitlements" not in tables or "free_quota_uses" not in tables):
-        for value in (free_state, quota_kind, quota_status): value.create(bind, checkfirst=True)
+    enum_specs = (
+        ("freeaccessstate", ("ELIGIBLE", "ACTIVE", "PAUSED_UNSUBSCRIBED", "EXHAUSTED", "BLOCKED", "CONVERTED_TO_PAID")),
+        ("freequotakind", ("PROJECT", "SHORTS_SOURCE")),
+        ("freequotauestatus", ("RESERVED", "COMMITTED", "RELEASED")),
+    )
+    if bind.dialect.name == "postgresql":
+        # Create each named type once, then prevent SQLAlchemy's table event from
+        # issuing a second CREATE TYPE for the same PostgreSQL enum.
+        for name, values in enum_specs:
+            postgresql.ENUM(*values, name=name).create(bind, checkfirst=True)
+        free_state, quota_kind, quota_status = (
+            postgresql.ENUM(*values, name=name, create_type=False)
+            for name, values in enum_specs
+        )
+    else:
+        free_state, quota_kind, quota_status = (
+            sa.Enum(*values, name=name) for name, values in enum_specs
+        )
     if "server_settings" not in tables:
         op.create_table("server_settings",
             sa.Column("key", sa.String(100), primary_key=True), sa.Column("value", sa.JSON(), nullable=False),
