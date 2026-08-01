@@ -16,8 +16,19 @@
 		-Server
 	}
 	@admin path /v1/admin/*
-	respond @admin 404
-	reverse_proxy api:8080
+	@installer path_regexp installer ^/downloads/CreatorAssistant-Commercial-Staging-[0-9A-Za-z._-]+\.exe$
+	handle @installer {
+		uri strip_prefix /downloads
+		root * /srv/releases
+		header Content-Security-Policy "default-src 'none'"
+		file_server
+	}
+	handle @admin {
+		respond 404
+	}
+	handle {
+		reverse_proxy api:8080
+	}
 }
 
 {$STAGING_BOT_DOMAIN} {
