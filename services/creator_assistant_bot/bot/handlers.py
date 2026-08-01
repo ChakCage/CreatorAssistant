@@ -13,7 +13,8 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 
 from .backend import BackendClient
 from .config import BotSettings
-from .support_forum import set_topic_closed
+from .support_dashboard import dashboard_keyboard, upsert_dashboard
+from .support_forum import set_topic_closed, ticket_keyboard
 from .support_taxonomy import (
     SUPPORT_CATEGORIES,
     parse_support_category_callback,
@@ -24,6 +25,7 @@ from .ui import (
     DOWNLOAD_WARNING_TEXT,
     PUBLIC_HELP_TEXT,
     devices_text,
+    format_telegram_datetime,
     free_status_text,
     main_menu,
     russian_date,
@@ -57,24 +59,34 @@ def parse_support_admin_list_callback(data: str | None) -> tuple[str, int]:
 
 
 def support_admin_ticket_summaries(values: list[dict]) -> list[str]:
-    return [
-        f"{item['number']} · {support_category_text(item['category'])} · {support_status_text(item)}\n"
-        f"@{item.get('telegram_username') or 'без username'} · ID {item['telegram_user_id']} · "
-        f"сообщений {item.get('message_count', 0)} · новых {item.get('admin_unread_count', 0)}\n"
-        f"{item.get('last_activity_at', '')} · {item.get('last_preview', '')}"
-        for item in values
-    ]
+    summaries = []
+    for item in values[:10]:
+        unread = max(0, int(item.get("admin_unread_count", 0) or 0))
+        preview = " ".join(str(item.get("last_preview") or "").split())
+        if len(preview) > 96:
+            preview = preview[:95].rstrip() + "…"
+        summaries.append(
+            f"{item['number']} · {support_category_text(item['category'])}\n"
+            f"@{item.get('telegram_username') or 'без username'} · {unread} новых · "
+            f"{format_telegram_datetime(item.get('last_activity_at'))}\n"
+            f"{preview or 'Без текстового сообщения'}"
+        )
+    return summaries
 
 
 def support_admin_list_view(result: dict, status: str, page: int) -> tuple[str, InlineKeyboardMarkup]:
-    values = result.get("tickets", [])
+    values = list(result.get("tickets", []))[:10]
     summaries = support_admin_ticket_summaries(values)
-    buttons = [
-        [InlineKeyboardButton(
-            text=f"{item['number']} · {support_category_text(item['category'])} · {item.get('admin_unread_count', 0)} новых",
-            callback_data=f"support_ticket:{item['id']}",
-        )] for item in values
-    ]
+    buttons = []
+    for item in values:
+        chat_id = int(item.get("forum_chat_id") or 0)
+        thread_id = int(item.get("forum_message_thread_id") or 0)
+        kwargs = {"callback_data": f"support_ticket:{item['id']}"}
+        if str(chat_id).startswith("-100") and thread_id:
+            kwargs = {"url": f"https://t.me/c/{abs(chat_id) - 1_000_000_000_000}/{thread_id}"}
+        buttons.append([InlineKeyboardButton(
+            text=f"{item['number']} · {support_category_text(item['category'])}", **kwargs,
+        )])
     pages = max(1, int(result.get("pages", 1)))
     nav = []
     if page > 1:
@@ -83,7 +95,7 @@ def support_admin_list_view(result: dict, status: str, page: int) -> tuple[str, 
     if page < pages:
         nav.append(InlineKeyboardButton(text="→", callback_data=f"support_admin_list:{status}:{page + 1}"))
     buttons.append(nav)
-    buttons.append([InlineKeyboardButton(text="Фильтры", callback_data="support_admin_filters")])
+    buttons.append([InlineKeyboardButton(text="📊 Фильтры", callback_data="support_admin_filters")])
     text = "Обращения:\n\n" + "\n\n".join(summaries) if values else "Обращений нет."
     return text, InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -141,6 +153,58 @@ def support_category_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=item.label, callback_data=item.callback_data)]
         for item in SUPPORT_CATEGORIES
     ])
+
+
+def admin_ticket_keyboard(ticket: dict, *, forum_context: bool) -> InlineKeyboardMarkup:
+    ticket_id = str(ticket["id"])
+    if forum_context:
+        return ticket_keyboard(ticket_id, closed=str(ticket.get("status")) == "CLOSED")
+    if str(ticket.get("status")) == "CLOSED":
+        rows = [[InlineKeyboardButton(text="🔓 Переоткрыть", callback_data=f"support_reopen:{ticket_id}")]]
+    else:
+        rows = [
+            [InlineKeyboardButton(text="Ответить", callback_data=f"support_reply:{ticket_id}"),
+             InlineKeyboardButton(text="✅ Закрыть", callback_data=f"support_close_confirm:{ticket_id}")],
+            [InlineKeyboardButton(text="🚫 Заблокировать", callback_data=f"support_block_confirm:{ticket_id}")],
+        ]
+    rows.extend([
+        [InlineKeyboardButton(text="👤 Пользователь", callback_data=f"support_user_info:{ticket_id}")],
+        [InlineKeyboardButton(text="📊 К обращениям", callback_data="support_admin_filters")],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def support_user_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 Мои обращения", callback_data="support_my:1"),
+         InlineKeyboardButton(text="➕ Новое обращение", callback_data="support_new")],
+    ])
+
+
+def close_confirmation_view(ticket: dict) -> tuple[str, InlineKeyboardMarkup]:
+    ticket_id = str(ticket["id"])
+    return (
+        f"Закрыть обращение {ticket['number']}?",
+        InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Да, закрыть", callback_data=f"support_close:{ticket_id}"),
+            InlineKeyboardButton(text="Отмена", callback_data="support_action_cancel"),
+        ]]),
+    )
+
+
+def block_confirmation_view(ticket: dict, owner_telegram_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    if str(ticket.get("telegram_user_id")) == str(owner_telegram_id):
+        raise ValueError("support owner cannot be blocked")
+    ticket_id = str(ticket["id"])
+    username = str(ticket.get("telegram_username") or "без username").lstrip("@")
+    return (
+        f"Заблокировать поддержку для пользователя @{username}?\n\n"
+        "Это не отключит его лицензию.",
+        InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🚫 Заблокировать", callback_data=f"support_block:{ticket_id}"),
+            InlineKeyboardButton(text="Отмена", callback_data="support_action_cancel"),
+        ]]),
+    )
 
 
 async def apply_support_category_selection(state: FSMContext, callback_data: object) -> str:
@@ -355,10 +419,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         await callback.message.answer(PUBLIC_HELP_TEXT); await callback.answer()
     @router.callback_query(F.data == "support")
     async def support(callback: CallbackQuery):
-        await callback.message.answer("Поддержка:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🎫 Мои обращения", callback_data="support_my:1"),
-             InlineKeyboardButton(text="➕ Новое обращение", callback_data="support_new")],
-        ]))
+        await callback.message.answer("Поддержка:", reply_markup=support_user_keyboard())
         await callback.answer()
 
     @router.callback_query(F.data == "support_new")
@@ -389,15 +450,8 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         page = max(1, int(callback.data.rsplit(":", 1)[1]))
         result = await backend.user_support_tickets(callback.from_user.id, page=page)
         values = result.get("tickets", [])
-        summaries = [
-            f"{item['number']} · {support_category_text(item['category'])} · {support_status_text(item)}\n"
-            f"@{item.get('telegram_username') or 'без username'} · ID {item['telegram_user_id']} · "
-            f"сообщений {item.get('message_count', 0)} · новых {item.get('admin_unread_count', 0)}\n"
-            f"{item.get('last_activity_at', '')} · {item.get('last_preview', '')}"
-            for item in values
-        ]
         buttons = [[InlineKeyboardButton(
-            text=f"{item['number']} · {support_status_text(item)}",
+            text=f"{item['number']} · {support_status_text(item)} · {format_telegram_datetime(item.get('last_activity_at'))}",
             callback_data=f"support_user_ticket:{item['id']}",
         )] for item in values]
         nav = []
@@ -417,7 +471,9 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         lines = [f"{ticket['number']} · {support_status_text(ticket)}", ""]
         for item in ticket.get("messages", [])[-8:]:
             who = "Вы" if item.get("sender_type") == "user" else "Поддержка"
-            lines.append(f"{who}: {item.get('text', '')}")
+            lines.append(
+                f"{who} · {format_telegram_datetime(item.get('created_at'))}:\n{item.get('text', '')}"
+            )
         buttons = [[InlineKeyboardButton(text="Продолжить переписку", callback_data=f"support_continue:{ticket_id}")]]
         if ticket.get("status") == "CLOSED":
             buttons = [[InlineKeyboardButton(text="Создать новое обращение", callback_data="support_new")]]
@@ -563,11 +619,14 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             await callback.answer("Недоступно", show_alert=True); return
         log_support_callback(callback, "accepted")
         await callback.answer()
-        labels = [("Новые", "NEW"), ("Ждут администратора", "WAITING_ADMIN"),
-                  ("Ждут пользователя", "WAITING_USER"), ("Отвеченные", "ANSWERED"),
-                  ("Закрытые", "CLOSED"), ("Заблокированные", "BLOCKED"), ("Все", "ALL")]
-        buttons = [[InlineKeyboardButton(text=label, callback_data=f"support_admin_list:{status}:1")]
-                   for label, status in labels]
+        if (settings.support_forum_enabled
+                and callback.message.chat.id == settings.support_forum_chat_id):
+            summary = await backend.support_dashboard()
+            dashboard_thread_id = int(summary.get("message_thread_id") or 0)
+            if int(callback.message.message_thread_id or 0) != dashboard_thread_id:
+                await upsert_dashboard(callback.bot, backend, settings, settings.admin_telegram_id)
+                return
+        buttons = dashboard_keyboard().inline_keyboard[:-1]
         await callback.message.answer("Фильтр обращений:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
     @router.callback_query(F.data == "free_admin_config")
@@ -645,7 +704,22 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
 
     @router.callback_query(F.data.startswith("support_admin_list:"))
     async def support_admin_list(callback: CallbackQuery):
+        if (settings.support_forum_enabled
+                and callback.message and callback.message.chat.id == settings.support_forum_chat_id):
+            summary = await backend.support_dashboard()
+            dashboard_thread_id = int(summary.get("message_thread_id") or 0)
+            if int(callback.message.message_thread_id or 0) != dashboard_thread_id:
+                await callback.answer("Список открыт в панели поддержки.")
+                await upsert_dashboard(callback.bot, backend, settings, settings.admin_telegram_id)
+                return
         await handle_support_admin_list_callback(callback, backend, settings)
+
+    @router.callback_query(F.data == "support_dashboard_open")
+    async def support_dashboard_open(callback: CallbackQuery):
+        if not admin_only(callback.from_user.id):
+            await callback.answer("Недоступно", show_alert=True); return
+        await callback.answer("Панель поддержки обновлена")
+        await upsert_dashboard(callback.bot, backend, settings, settings.admin_telegram_id)
 
     @router.callback_query(F.data.startswith("support_ticket:"))
     async def support_ticket(callback: CallbackQuery):
@@ -653,20 +727,22 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             await callback.answer("Недоступно", show_alert=True)
             return
         ticket = await backend.support_ticket(callback.data.split(":", 1)[1])
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Ответить", callback_data=f"support_reply:{ticket['id']}"),
-             InlineKeyboardButton(text="Закрыть", callback_data=f"support_close:{ticket['id']}")],
-            [InlineKeyboardButton(text="Переоткрыть", callback_data=f"support_reopen:{ticket['id']}"),
-             InlineKeyboardButton(text="Заблокировать", callback_data=f"support_block_confirm:{ticket['id']}")],
-            [InlineKeyboardButton(text="Назад к обращениям", callback_data="support_admin_filters")],
-        ])
+        forum_context = bool(
+            settings.support_forum_enabled
+            and callback.message.chat.id == settings.support_forum_chat_id
+            and int(callback.message.message_thread_id or 0) == int(ticket.get("forum_message_thread_id") or 0)
+        )
+        keyboard = admin_ticket_keyboard(ticket, forum_context=forum_context)
         history = []
         for item in ticket.get("messages", [])[-10:]:
             who = {"user": "Пользователь", "admin": "Администратор", "system": "Система"}.get(item.get("sender_type"), "Сообщение")
-            history.append(f"{who}: {item.get('text', '')}")
+            history.append(
+                f"{who} · {format_telegram_datetime(item.get('created_at'))}:\n{item.get('text', '')}"
+            )
         await callback.message.answer(
-            f"{ticket['number']} · {support_status_text(ticket)}\n"
+            f"{ticket['number']} · {support_status_text(ticket, audience='admin')}\n"
             f"Категория: {support_category_text(ticket['category'])}\n"
+            f"Создано: {format_telegram_datetime(ticket.get('created_at'), full=True)}\n"
             f"Пользователь: @{ticket.get('telegram_username') or 'без username'} · ID {ticket['telegram_user_id']}\n"
             f"Сообщений: {ticket.get('message_count', 0)} · непрочитано: {ticket.get('admin_unread_count', 0)}\n"
             f"Вложение: {safe_attachment_text(ticket.get('attachment'))}\n\n"
@@ -680,6 +756,18 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
                     await callback.bot.send_photo(callback.from_user.id, attachment["file_id"])
                 else:
                     await callback.bot.send_document(callback.from_user.id, attachment["file_id"])
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("support_user_info:"))
+    async def support_user_info(callback: CallbackQuery):
+        if not admin_only(callback.from_user.id):
+            await callback.answer("Недоступно", show_alert=True); return
+        ticket = await backend.support_ticket(callback.data.split(":", 1)[1])
+        await callback.message.answer(
+            f"Пользователь обращения {ticket['number']}:\n"
+            f"@{ticket.get('telegram_username') or 'без username'}\n"
+            f"Telegram ID: {ticket['telegram_user_id']}"
+        )
         await callback.answer()
 
     @router.callback_query(F.data.startswith("support_reply:"))
@@ -728,6 +816,16 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         await state.clear()
         await message.answer(f"Ответ сохранён и поставлен в очередь доставки: {ticket['number']}.")
 
+    @router.callback_query(F.data.startswith("support_close_confirm:"))
+    async def support_close_confirm(callback: CallbackQuery):
+        if not admin_only(callback.from_user.id):
+            await callback.answer("Недоступно", show_alert=True); return
+        ticket_id = callback.data.split(":", 1)[1]
+        ticket = await backend.support_ticket(ticket_id)
+        text, markup = close_confirmation_view(ticket)
+        await callback.message.answer(text, reply_markup=markup)
+        await callback.answer()
+
     @router.callback_query(F.data.startswith("support_close:"))
     async def support_close(callback: CallbackQuery):
         if not admin_only(callback.from_user.id):
@@ -735,6 +833,13 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             return
         ticket = await backend.close_support_ticket(callback.from_user.id, callback.data.split(":", 1)[1])
         if settings.support_forum_enabled and callback.message.chat.id == settings.support_forum_chat_id:
+            if ticket.get("forum_initial_message_id"):
+                with contextlib.suppress(TelegramBadRequest):
+                    await callback.bot.edit_message_reply_markup(
+                        chat_id=settings.support_forum_chat_id,
+                        message_id=int(ticket["forum_initial_message_id"]),
+                        reply_markup=ticket_keyboard(str(ticket["id"]), closed=True),
+                    )
             await set_topic_closed(callback.bot, settings, ticket, closed=True)
         await callback.bot.send_message(
             int(ticket["telegram_user_id"]),
@@ -755,11 +860,16 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         if not admin_only(callback.from_user.id):
             await callback.answer("Недоступно", show_alert=True); return
         ticket_id = callback.data.split(":", 1)[1]
-        await callback.message.answer("Заблокировать пользователя только в поддержке?",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Да, заблокировать", callback_data=f"support_block:{ticket_id}"),
-                 InlineKeyboardButton(text="Отмена", callback_data=f"support_ticket:{ticket_id}")],
-            ])); await callback.answer()
+        ticket = await backend.support_ticket(ticket_id)
+        try:
+            text, markup = block_confirmation_view(ticket, settings.admin_telegram_id)
+        except ValueError:
+            await callback.answer("Основной аккаунт нельзя заблокировать.", show_alert=True); return
+        await callback.message.answer(text, reply_markup=markup); await callback.answer()
+
+    @router.callback_query(F.data == "support_action_cancel")
+    async def support_action_cancel(callback: CallbackQuery):
+        await callback.answer("Отменено")
 
     @router.callback_query(F.data.startswith("support_reopen:"))
     async def support_reopen(callback: CallbackQuery):
@@ -768,6 +878,13 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         ticket = await backend.reopen_support_ticket(callback.from_user.id, callback.data.split(":", 1)[1])
         if settings.support_forum_enabled and callback.message.chat.id == settings.support_forum_chat_id:
             await set_topic_closed(callback.bot, settings, ticket, closed=False)
+            if ticket.get("forum_initial_message_id"):
+                with contextlib.suppress(TelegramBadRequest):
+                    await callback.bot.edit_message_reply_markup(
+                        chat_id=settings.support_forum_chat_id,
+                        message_id=int(ticket["forum_initial_message_id"]),
+                        reply_markup=ticket_keyboard(str(ticket["id"]), closed=False),
+                    )
         await callback.answer("Обращение переоткрыто")
 
     @router.callback_query(F.data == "noop")

@@ -24,6 +24,7 @@ from .support_forum import (
     topic_name,
     validate_forum,
 )
+from .support_dashboard import upsert_dashboard
 
 
 async def relay_to_forum_with_recovery(bot, backend, settings, admin_telegram_id: int,
@@ -89,46 +90,7 @@ async def deliver_notification(
         if mock:
             return
         if notification_mode == "dashboard":
-            summary = await backend.support_dashboard()
-            dashboard_text = (
-                "🛠 Центр поддержки\n\n"
-                f"Новые: {summary.get('new', 0)}\n"
-                f"Ждут администратора: {summary.get('waiting_admin', 0)}\n"
-                f"Ожидают пользователя: {summary.get('waiting_user', 0)}\n"
-                f"Закрытые сегодня: {summary.get('closed_today', 0)}"
-            )
-            dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Открыть новые", callback_data="support_admin_list:NEW:1"),
-                 InlineKeyboardButton(text="Открыть ожидающие", callback_data="support_admin_list:WAITING_ADMIN:1")],
-                [InlineKeyboardButton(text="Обновить", callback_data="support_admin_filters")],
-            ])
-            dashboard_chat_id = admin_telegram_id
-            dashboard_thread_id = None
-            if forum_settings and forum_settings.support_forum_enabled:
-                dashboard_chat_id = forum_settings.support_forum_chat_id
-                dashboard_thread_id = await ensure_dashboard_topic(bot, forum_settings, summary)
-            message_id = int(summary.get("message_id") or 0)
-            if message_id:
-                try:
-                    await bot.edit_message_text(
-                        dashboard_text, chat_id=dashboard_chat_id, message_id=message_id,
-                        reply_markup=dashboard_keyboard,
-                    )
-                    return
-                except Exception as exc:
-                    # Telegram reports an unchanged edit as HTTP 400 even
-                    # though the stored dashboard is already exactly right.
-                    # Treat it as success so retries never create duplicates.
-                    if "message is not modified" in str(exc).casefold():
-                        return
-            sent = await bot.send_message(
-                dashboard_chat_id, dashboard_text, reply_markup=dashboard_keyboard,
-                message_thread_id=dashboard_thread_id,
-            )
-            await backend.save_support_dashboard_message(
-                admin_telegram_id, sent.message_id,
-                chat_id=dashboard_chat_id, message_thread_id=dashboard_thread_id,
-            )
+            await upsert_dashboard(bot, backend, forum_settings, admin_telegram_id)
         elif notification_mode == "compact":
             await bot.send_message(admin_telegram_id, f"Новое сообщение в {ticket['number']}", reply_markup=keyboard)
         else:

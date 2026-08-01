@@ -1,28 +1,34 @@
 from __future__ import annotations
 
 import pytest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from bot.config import BotSettings
 from bot.handlers import (
+    admin_ticket_keyboard,
     apply_support_category_selection,
+    block_confirmation_view,
+    close_confirmation_view,
     handle_support_admin_list_callback,
     handle_unknown_callback,
     is_admin_user,
     parse_support_admin_list_callback,
     support_admin_list_view,
     support_category_keyboard,
+    support_user_keyboard,
 )
 from bot.main import deliver_notification
+from bot.support_dashboard import dashboard_keyboard, dashboard_text
 from bot.support_forum import (
     create_ticket_topic, ensure_dashboard_topic, relay_forum_message_to_user,
-    relay_user_message, set_topic_closed, topic_idempotency_key, topic_name,
+    relay_user_message, set_topic_closed, ticket_keyboard, topic_idempotency_key, topic_name,
     validate_forum,
 )
 from bot.support_taxonomy import (
     SUPPORT_CATEGORIES, SupportCategory, parse_support_category_callback,
 )
-from bot.ui import support_category_text
+from bot.ui import format_telegram_datetime, support_category_text
 
 
 class Backend:
@@ -128,6 +134,75 @@ def test_admin_ticket_list_renders_empty_full_and_overflow_pages(count):
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
     assert "support_admin_list:NEW:2" in callbacks if count == 11 else "support_admin_list:NEW:2" not in callbacks
     assert "support_admin_filters" in callbacks
+
+
+def test_compact_admin_list_hides_telegram_id_formats_date_and_truncates_preview():
+    item = support_ticket(1)
+    item["last_preview"] = "очень длинное сообщение " * 20
+    text, _markup = support_admin_list_view({"tickets": [item], "pages": 1}, "NEW", 1)
+    assert "ID 1001" not in text
+    assert "2026-08-01T" not in text and "Z" not in text
+    assert "…" in text
+
+
+def test_support_time_formatter_uses_moscow_today_yesterday_and_year_boundaries():
+    now = datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc)
+    assert format_telegram_datetime("2026-08-02T08:07:00Z", now=now) == "Сегодня, 11:07"
+    assert format_telegram_datetime("2026-08-01T14:50:00Z", now=now) == "Вчера, 17:50"
+    assert format_telegram_datetime("2026-07-31T20:07:00Z", now=now) == "31 июля, 23:07"
+    assert format_telegram_datetime("2025-08-01T20:07:00Z", now=now) == "1 августа 2025, 23:07"
+    assert format_telegram_datetime("2026-08-01T20:07:00Z", now=now, full=True) == "1 августа 2026, 23:07"
+
+
+def test_forum_topic_has_only_ticket_actions_and_dashboard_link_without_reply_or_global_filters():
+    markup = ticket_keyboard("ticket-id")
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert "support_dashboard_open" in callbacks
+    assert "support_admin_filters" not in callbacks
+    assert "Ответить" not in labels
+    assert {"✅ Закрыть", "🚫 Заблокировать", "👤 Пользователь", "📊 К панели поддержки"} <= set(labels)
+
+
+def test_dm_admin_card_keeps_reply_and_closed_card_uses_reopen():
+    opened = {"id": "ticket-id", "status": "WAITING_ADMIN"}
+    labels = [button.text for row in admin_ticket_keyboard(opened, forum_context=False).inline_keyboard for button in row]
+    assert "Ответить" in labels
+    closed = {"id": "ticket-id", "status": "CLOSED"}
+    labels = [button.text for row in admin_ticket_keyboard(closed, forum_context=True).inline_keyboard for button in row]
+    assert labels[0] == "🔓 Переоткрыть" and "Ответить" not in labels
+
+
+def test_dashboard_has_global_filters_but_user_support_menu_does_not():
+    callbacks = [button.callback_data for row in dashboard_keyboard().inline_keyboard for button in row]
+    assert "support_admin_list:NEW:1" in callbacks
+    assert "support_admin_list:ANSWERED:1" not in callbacks
+    user_callbacks = [button.callback_data for row in support_user_keyboard().inline_keyboard for button in row]
+    assert user_callbacks == ["support_my:1", "support_new"]
+    assert not any("admin" in value for value in user_callbacks)
+
+
+def test_close_and_block_require_confirmation_and_owner_cannot_be_blocked():
+    ticket = {"id": "ticket-id", "number": "CA-12345678", "telegram_user_id": "100", "telegram_username": "user"}
+    close_text, close_markup = close_confirmation_view(ticket)
+    assert close_text == "Закрыть обращение CA-12345678?"
+    assert close_markup.inline_keyboard[0][0].callback_data == "support_close:ticket-id"
+    block_text, block_markup = block_confirmation_view(ticket, 424403653)
+    assert "Это не отключит его лицензию" in block_text
+    assert block_markup.inline_keyboard[0][0].callback_data == "support_block:ticket-id"
+    ticket["telegram_user_id"] = "424403653"
+    with pytest.raises(ValueError):
+        block_confirmation_view(ticket, 424403653)
+
+
+def test_dashboard_and_forum_cards_never_expose_iso_timestamp():
+    assert "T" not in dashboard_text({"new": 1, "waiting_admin": 2})
+    from bot.support_forum import initial_ticket_card
+    card = initial_ticket_card({
+        "number": "CA-TEST", "telegram_user_id": "42", "category": "application",
+        "status": "NEW", "created_at": "2026-08-01T20:07:08.639103Z", "message": "Тест",
+    })
+    assert "2026-08-01T" not in card and ".639103" not in card and "Z" not in card
 
 
 def test_admin_ticket_callback_parser_validates_status_page_and_legacy_page_default():

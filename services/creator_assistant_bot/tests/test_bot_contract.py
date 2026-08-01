@@ -228,10 +228,14 @@ async def test_support_notification_targets_only_configured_admin_with_actions()
     chat_id, text, kwargs = bot.calls[0]
     assert chat_id == 424403653
     assert "Центр поддержки" in text
-    assert "Ждут администратора: 2" in text
+    assert "Ждут моего ответа: 2" in text
     assert "file_id" not in text
     callbacks = [button.callback_data for row in kwargs["reply_markup"].inline_keyboard for button in row]
-    assert callbacks == ["support_admin_list:NEW:1", "support_admin_list:WAITING_ADMIN:1", "support_admin_filters"]
+    assert callbacks == [
+        "support_admin_list:NEW:1", "support_admin_list:WAITING_ADMIN:1",
+        "support_admin_list:WAITING_USER:1", "support_admin_list:CLOSED:1",
+        "support_admin_list:BLOCKED:1", "support_admin_list:ALL:1", "support_dashboard_open",
+    ]
 
 
 @pytest.mark.asyncio

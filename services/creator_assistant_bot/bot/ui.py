@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -28,6 +29,7 @@ MONTHS = (
     "января", "февраля", "марта", "апреля", "мая", "июня",
     "июля", "августа", "сентября", "октября", "ноября", "декабря",
 )
+MOSCOW_TIMEZONE = ZoneInfo("Europe/Moscow")
 
 STAGING_PAYMENT_DISABLED_TEXT = (
     "Оплата в тестовой версии пока отключена.\n\n"
@@ -51,13 +53,23 @@ def support_category_text(value: object) -> str:
     return support_category_label(value)
 
 
-def support_status_text(value: dict) -> str:
-    return {
-        "NEW": "новое", "WAITING_ADMIN": "ожидает ответа поддержки",
-        "WAITING_USER": "ожидает ответа пользователя", "ANSWERED": "отвечено",
-        "CLOSED": "закрыто", "BLOCKED": "заблокировано",
-        "OPEN": "ожидает ответа поддержки",
-    }.get(str(value.get("status") or "").upper(), "статус неизвестен")
+def support_status_text(value: dict, *, audience: str = "user") -> str:
+    status = str(value.get("status") or "").upper()
+    if audience == "admin":
+        labels = {
+            "NEW": "Новое", "WAITING_ADMIN": "Ждёт моего ответа",
+            "WAITING_USER": "Ждёт пользователя", "ANSWERED": "Ждёт пользователя",
+            "CLOSED": "Закрыто", "BLOCKED": "Заблокировано",
+            "OPEN": "Ждёт моего ответа",
+        }
+    else:
+        labels = {
+            "NEW": "ожидает ответа поддержки", "WAITING_ADMIN": "ожидает ответа поддержки",
+            "WAITING_USER": "ожидает вашего ответа", "ANSWERED": "ожидает вашего ответа",
+            "CLOSED": "закрыто", "BLOCKED": "заблокировано",
+            "OPEN": "ожидает ответа поддержки",
+        }
+    return labels.get(status, "статус неизвестен")
 
 
 def safe_attachment_text(value: object) -> str:
@@ -88,6 +100,28 @@ def _parse_datetime(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def format_telegram_datetime(
+    value: object, *, now: datetime | None = None, full: bool = False,
+) -> str:
+    parsed = _parse_datetime(value)
+    if parsed is None:
+        return "дата не указана"
+    local = parsed.astimezone(MOSCOW_TIMEZONE)
+    reference = now or datetime.now(MOSCOW_TIMEZONE)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=MOSCOW_TIMEZONE)
+    else:
+        reference = reference.astimezone(MOSCOW_TIMEZONE)
+    clock = local.strftime("%H:%M")
+    if not full and local.date() == reference.date():
+        return f"Сегодня, {clock}"
+    if not full and local.date() == (reference - timedelta(days=1)).date():
+        return f"Вчера, {clock}"
+    if not full and local.year == reference.year:
+        return f"{local.day} {MONTHS[local.month - 1]}, {clock}"
+    return f"{local.day} {MONTHS[local.month - 1]} {local.year}, {clock}"
 
 
 def russian_date(value: object) -> str:

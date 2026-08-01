@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from .config import BotSettings
-from .ui import support_category_text
+from .ui import format_telegram_datetime, support_category_text, support_status_text
 
 
 def is_missing_topic_error(error: Exception) -> bool:
@@ -28,27 +26,32 @@ def topic_idempotency_key(ticket: dict) -> str:
     return f"support-forum-topic:{ticket['number']}"
 
 
-def ticket_keyboard(ticket_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Закрыть", callback_data=f"support_close:{ticket_id}"),
+def ticket_keyboard(ticket_id: str, *, closed: bool = False) -> InlineKeyboardMarkup:
+    if closed:
+        rows = [[InlineKeyboardButton(text="🔓 Переоткрыть", callback_data=f"support_reopen:{ticket_id}")]]
+    else:
+        rows = [[
+            InlineKeyboardButton(text="✅ Закрыть", callback_data=f"support_close_confirm:{ticket_id}"),
             InlineKeyboardButton(text="🚫 Заблокировать", callback_data=f"support_block_confirm:{ticket_id}"),
-        ],
-        [InlineKeyboardButton(text="👤 Пользователь", callback_data=f"support_ticket:{ticket_id}")],
+        ]]
+    rows.extend([
+        [InlineKeyboardButton(text="👤 Пользователь", callback_data=f"support_user_info:{ticket_id}")],
+        [InlineKeyboardButton(text="📊 К панели поддержки", callback_data="support_dashboard_open")],
     ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def initial_ticket_card(ticket: dict) -> str:
     username = str(ticket.get("telegram_username") or "").strip()
     user_label = f"@{username.lstrip('@')}" if username else "без username"
-    created = str(ticket.get("created_at") or datetime.now(timezone.utc).isoformat())
+    created = format_telegram_datetime(ticket.get("created_at"), full=True)
     message = str(ticket.get("message") or "").strip()
     return (
         f"🎫 {ticket['number']}\n\n"
         f"Пользователь: {user_label}\n"
         f"Telegram ID: {ticket.get('telegram_user_id')}\n"
         f"Категория: {support_category_text(ticket.get('category'))}\n"
-        f"Статус: ожидает ответа\n"
+        f"Статус: {support_status_text(ticket, audience='admin')}\n"
         f"Создано: {created}\n\n"
         f"Сообщение пользователя:\n{message}"
     )[:4000]
