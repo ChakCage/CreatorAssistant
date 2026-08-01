@@ -107,14 +107,28 @@ class BackendClient:
         return await self._request("POST", f"/v1/bot/support/tickets/{ticket_id}/unblock", json={"telegram_user_id": str(admin_id)})
     async def support_dashboard(self):
         return await self._request("GET", "/v1/bot/support/dashboard")
-    async def save_support_dashboard_message(self, admin_id: int, message_id: int):
+    async def save_support_dashboard_message(self, admin_id: int, message_id: int,
+                                             chat_id: int | None = None,
+                                             message_thread_id: int | None = None):
         return await self._request("POST", "/v1/bot/support/dashboard/message", json={
             "telegram_user_id": str(admin_id), "message_id": message_id,
+            "chat_id": chat_id, "message_thread_id": message_thread_id,
         })
-    async def set_support_forum_thread(self, admin_id: int, ticket_id: str, message_thread_id: int):
+    async def set_support_forum_thread(self, admin_id: int, ticket_id: str, *, forum_chat_id: int,
+                                       message_thread_id: int, topic_name: str,
+                                       topic_state: str = "OPEN", initial_message_id: int | None = None,
+                                       idempotency_key: str):
         return await self._request("POST", f"/v1/bot/support/tickets/{ticket_id}/forum-thread", json={
-            "telegram_user_id": str(admin_id), "message_thread_id": message_thread_id,
+            "telegram_user_id": str(admin_id), "forum_chat_id": forum_chat_id,
+            "message_thread_id": message_thread_id, "topic_name": topic_name,
+            "topic_state": topic_state, "initial_message_id": initial_message_id,
+            "idempotency_key": idempotency_key,
         })
-    async def support_ticket_by_forum_thread(self, message_thread_id: int):
-        return await self._request("GET", f"/v1/bot/support/forum-threads/{message_thread_id}")
+    async def support_ticket_by_forum_thread(self, message_thread_id: int, forum_chat_id: int | None = None):
+        params = {"forum_chat_id": forum_chat_id} if forum_chat_id is not None else None
+        return await self._request("GET", f"/v1/bot/support/forum-threads/{message_thread_id}", params=params)
+    async def set_support_forum_message(self, admin_id: int, message_id: str, forum_message_id: int):
+        return await self._request("POST", f"/v1/bot/support/messages/{message_id}/forum-mapping", json={
+            "telegram_user_id": str(admin_id), "forum_message_id": forum_message_id,
+        })
     async def close(self): await self.client.aclose()

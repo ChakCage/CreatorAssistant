@@ -110,3 +110,43 @@ def test_owner_cannot_be_blocked(client):
                          json={"telegram_user_id": ADMIN_ID, "message": "mistake"})
     assert result.status_code == 409
     assert result.json()["error"]["code"] == "SUPPORT_OWNER_CANNOT_BE_BLOCKED"
+
+
+def test_forum_topic_metadata_is_idempotent_and_lookup_is_chat_scoped(client):
+    add_user("10009", "forum_user")
+    ticket = create_ticket(client, "10009")
+    payload = {
+        "telegram_user_id": ADMIN_ID,
+        "forum_chat_id": -1001234567890,
+        "message_thread_id": 77,
+        "topic_name": "CA-TEST • @forum_user • application",
+        "topic_state": "OPEN",
+        "initial_message_id": 88,
+        "idempotency_key": f"support-forum-topic:{ticket['id']}",
+    }
+    first = client.post(f"/v1/bot/support/tickets/{ticket['id']}/forum-thread",
+                        headers=headers("support:admin"), json=payload)
+    second = client.post(f"/v1/bot/support/tickets/{ticket['id']}/forum-thread",
+                         headers=headers("support:admin"), json=payload)
+    assert first.status_code == second.status_code == 200
+    assert second.json()["forum_chat_id"] == payload["forum_chat_id"]
+    assert second.json()["forum_message_thread_id"] == 77
+    assert second.json()["forum_topic_state"] == "OPEN"
+    detail = client.get(f"/v1/bot/support/tickets/{ticket['id']}",
+                        headers=headers("support:admin")).json()
+    message_id = detail["messages"][0]["id"]
+    mapping = {"telegram_user_id": ADMIN_ID, "forum_message_id": 89}
+    assert client.post(f"/v1/bot/support/messages/{message_id}/forum-mapping",
+                       headers=headers("support:admin"), json=mapping).status_code == 200
+    assert client.post(f"/v1/bot/support/messages/{message_id}/forum-mapping",
+                       headers=headers("support:admin"), json=mapping).json()["forum_message_id"] == "89"
+    found = client.get(
+        "/v1/bot/support/forum-threads/77",
+        headers=headers("support:admin"), params={"forum_chat_id": payload["forum_chat_id"]},
+    )
+    assert found.status_code == 200 and found.json()["id"] == ticket["id"]
+    missing = client.get(
+        "/v1/bot/support/forum-threads/77",
+        headers=headers("support:admin"), params={"forum_chat_id": -100999},
+    )
+    assert missing.status_code == 404

@@ -203,7 +203,7 @@ class _FakeNotificationBackend:
     async def support_dashboard(self):
         return {"new": 1, "waiting_admin": 2, "answered": 3, "message_id": 0}
 
-    async def save_support_dashboard_message(self, admin_id: int, message_id: int):
+    async def save_support_dashboard_message(self, admin_id: int, message_id: int, **_kwargs):
         self.saved = (admin_id, message_id)
 
 
@@ -231,7 +231,7 @@ async def test_support_notification_targets_only_configured_admin_with_actions()
     assert "Ждут администратора: 2" in text
     assert "file_id" not in text
     callbacks = [button.callback_data for row in kwargs["reply_markup"].inline_keyboard for button in row]
-    assert callbacks == ["support_admin_filters"]
+    assert callbacks == ["support_admin_list:NEW:1", "support_admin_list:WAITING_ADMIN:1", "support_admin_filters"]
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, JSON, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -335,6 +335,12 @@ class SupportTicket(Base):
     message_count: Mapped[int] = mapped_column(Integer, default=1)
     last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     forum_message_thread_id: Mapped[Optional[int]] = mapped_column(Integer, unique=True)
+    forum_chat_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    forum_topic_name: Mapped[str] = mapped_column(String(128), default="")
+    forum_topic_created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    forum_topic_state: Mapped[str] = mapped_column(String(24), default="")
+    forum_topic_creation_key: Mapped[Optional[str]] = mapped_column(String(160), unique=True)
+    forum_initial_message_id: Mapped[Optional[int]] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

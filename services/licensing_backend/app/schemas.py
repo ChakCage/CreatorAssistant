@@ -110,11 +110,23 @@ class SupportMessageRequest(BotUserRequest):
 class SupportDashboardStateRequest(BaseModel):
     telegram_user_id: str = Field(min_length=1, max_length=64)
     message_id: int = Field(ge=1)
+    chat_id: Optional[int] = None
+    message_thread_id: Optional[int] = Field(default=None, ge=1)
 
 
 class SupportForumThreadRequest(BaseModel):
     telegram_user_id: str = Field(min_length=1, max_length=64)
+    forum_chat_id: int
     message_thread_id: int = Field(ge=1)
+    topic_name: str = Field(min_length=1, max_length=128)
+    topic_state: str = Field(default="OPEN", pattern="^(CREATING|OPEN|CLOSED|DELETED|ERROR)$")
+    initial_message_id: Optional[int] = Field(default=None, ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=160)
+
+
+class SupportForumMessageRequest(BaseModel):
+    telegram_user_id: str = Field(min_length=1, max_length=64)
+    forum_message_id: int = Field(ge=1)
 
 
 class FreeMembershipRequest(BotUserRequest):

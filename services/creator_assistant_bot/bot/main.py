@@ -14,7 +14,41 @@ from .backend import BackendClient
 from .config import BotSettings
 from .handlers import build_router
 from .ui import safe_attachment_text, support_category_text
-from .support_forum import create_ticket_topic, relay_user_message
+from .support_forum import (
+    create_ticket_topic,
+    ensure_dashboard_topic,
+    relay_user_message,
+    is_missing_topic_error,
+    send_initial_ticket_card,
+    topic_idempotency_key,
+    topic_name,
+)
+
+
+async def relay_to_forum_with_recovery(bot, backend, settings, admin_telegram_id: int,
+                                       ticket: dict, message: dict) -> int | None:
+    try:
+        sent_id = await relay_user_message(bot, settings, ticket, message)
+        if sent_id and message.get("id"):
+            await backend.set_support_forum_message(admin_telegram_id, message["id"], sent_id)
+        return sent_id
+    except Exception as exc:
+        if not is_missing_topic_error(exc):
+            raise
+    replacement = int(await create_ticket_topic(bot, settings, ticket) or 0)
+    if not replacement:
+        raise RuntimeError("SUPPORT_FORUM_REPLACEMENT_TOPIC_FAILED")
+    initial_message_id = await send_initial_ticket_card(bot, settings, ticket, replacement)
+    await backend.set_support_forum_thread(
+        admin_telegram_id, ticket["id"], forum_chat_id=settings.support_forum_chat_id,
+        message_thread_id=replacement, topic_name=topic_name(ticket), topic_state="OPEN",
+        initial_message_id=initial_message_id, idempotency_key=topic_idempotency_key(ticket),
+    )
+    ticket["forum_message_thread_id"] = replacement
+    sent_id = await relay_user_message(bot, settings, ticket, message)
+    if sent_id and message.get("id"):
+        await backend.set_support_forum_message(admin_telegram_id, message["id"], sent_id)
+    return sent_id
 
 
 async def deliver_notification(
@@ -59,21 +93,35 @@ async def deliver_notification(
                 "🛠 Центр поддержки\n\n"
                 f"Новые: {summary.get('new', 0)}\n"
                 f"Ждут администратора: {summary.get('waiting_admin', 0)}\n"
-                f"Отвеченные: {summary.get('answered', 0)}"
+                f"Ожидают пользователя: {summary.get('waiting_user', 0)}\n"
+                f"Закрытые сегодня: {summary.get('closed_today', 0)}"
             )
-            dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Открыть обращения", callback_data="support_admin_filters")
-            ]])
+            dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Открыть новые", callback_data="support_admin_list:NEW:1"),
+                 InlineKeyboardButton(text="Открыть ожидающие", callback_data="support_admin_list:WAITING_ADMIN:1")],
+                [InlineKeyboardButton(text="Обновить", callback_data="support_admin_filters")],
+            ])
+            dashboard_chat_id = admin_telegram_id
+            dashboard_thread_id = None
+            if forum_settings and forum_settings.support_forum_enabled:
+                dashboard_chat_id = forum_settings.support_forum_chat_id
+                dashboard_thread_id = await ensure_dashboard_topic(bot, forum_settings, summary)
             message_id = int(summary.get("message_id") or 0)
             if message_id:
                 try:
-                    await bot.edit_message_text(dashboard_text, admin_telegram_id, message_id,
+                    await bot.edit_message_text(dashboard_text, dashboard_chat_id, message_id,
                                                 reply_markup=dashboard_keyboard)
                     return
                 except Exception:
                     pass
-            sent = await bot.send_message(admin_telegram_id, dashboard_text, reply_markup=dashboard_keyboard)
-            await backend.save_support_dashboard_message(admin_telegram_id, sent.message_id)
+            sent = await bot.send_message(
+                dashboard_chat_id, dashboard_text, reply_markup=dashboard_keyboard,
+                message_thread_id=dashboard_thread_id,
+            )
+            await backend.save_support_dashboard_message(
+                admin_telegram_id, sent.message_id,
+                chat_id=dashboard_chat_id, message_thread_id=dashboard_thread_id,
+            )
         elif notification_mode == "compact":
             await bot.send_message(admin_telegram_id, f"Новое сообщение в {ticket['number']}", reply_markup=keyboard)
         else:
@@ -102,12 +150,36 @@ async def deliver_notification(
             return
         ticket_id = str((item.get("payload") or {}).get("ticket_id") or "")
         ticket = await backend.support_ticket(ticket_id)
-        thread_id = await create_ticket_topic(bot, forum_settings, ticket)
+        thread_id = int(ticket.get("forum_message_thread_id") or 0)
+        initial_message_id = int(ticket.get("forum_initial_message_id") or 0) or None
+        created_now = False
+        if not thread_id:
+            thread_id = int(await create_ticket_topic(bot, forum_settings, ticket) or 0)
+            if thread_id:
+                created_now = True
+                initial_message_id = await send_initial_ticket_card(bot, forum_settings, ticket, thread_id)
         if thread_id:
-            await backend.set_support_forum_thread(admin_telegram_id, ticket_id, thread_id)
+            await backend.set_support_forum_thread(
+                admin_telegram_id, ticket_id,
+                forum_chat_id=forum_settings.support_forum_chat_id,
+                message_thread_id=thread_id,
+                topic_name=topic_name(ticket),
+                topic_state="OPEN",
+                initial_message_id=initial_message_id,
+                idempotency_key=topic_idempotency_key(ticket),
+            )
             ticket["forum_message_thread_id"] = thread_id
             if ticket.get("messages"):
-                await relay_user_message(bot, forum_settings, ticket, ticket["messages"][0])
+                first_message = ticket["messages"][0]
+                if not first_message.get("forum_message_id"):
+                    if created_now and initial_message_id:
+                        await backend.set_support_forum_message(
+                            admin_telegram_id, first_message["id"], initial_message_id
+                        )
+                    else:
+                        await relay_to_forum_with_recovery(
+                            bot, backend, forum_settings, admin_telegram_id, ticket, first_message
+                        )
         return
     if notification_type == "SUPPORT_FORUM_USER_MESSAGE":
         if not forum_settings or not forum_settings.support_forum_enabled:
@@ -115,7 +187,9 @@ async def deliver_notification(
         payload = item.get("payload") or {}; ticket = await backend.support_ticket(str(payload.get("ticket_id") or ""))
         message = next((value for value in ticket.get("messages", []) if value.get("id") == payload.get("message_id")), None)
         if not message: raise RuntimeError("Support forum message not found")
-        await relay_user_message(bot, forum_settings, ticket, message)
+        if message.get("forum_message_id"):
+            return
+        await relay_to_forum_with_recovery(bot, backend, forum_settings, admin_telegram_id, ticket, message)
         return
     if not mock:
         await bot.send_message(

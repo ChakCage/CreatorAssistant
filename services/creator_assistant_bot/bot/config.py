@@ -37,6 +37,17 @@ class BotSettings(BaseSettings):
     support_forum_topic_mode: str = Field(
         default="per_ticket", validation_alias=AliasChoices("SUPPORT_FORUM_TOPIC_MODE", "CREATOR_BOT_SUPPORT_FORUM_TOPIC_MODE")
     )
+    support_forum_dashboard_topic_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "SUPPORT_FORUM_DASHBOARD_TOPIC_ENABLED",
+            "CREATOR_BOT_SUPPORT_FORUM_DASHBOARD_TOPIC_ENABLED",
+        ),
+    )
+    support_forum_relay_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("SUPPORT_FORUM_RELAY_ENABLED", "CREATOR_BOT_SUPPORT_FORUM_RELAY_ENABLED"),
+    )
 
     @property
     def production(self) -> bool:
@@ -47,6 +58,8 @@ class BotSettings(BaseSettings):
             raise RuntimeError("Invalid support admin notification mode")
         if self.support_forum_enabled and not self.support_forum_chat_id:
             raise RuntimeError("Support forum chat ID is required when forum integration is enabled")
+        if self.support_forum_topic_mode != "per_ticket":
+            raise RuntimeError("Only per_ticket support forum topic mode is supported")
         if self.production:
             if not self.public_url.startswith("https://"):
                 raise RuntimeError("Production bot webhook requires HTTPS")

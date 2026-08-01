@@ -12,6 +12,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 
 from .backend import BackendClient
 from .config import BotSettings
+from .support_forum import set_topic_closed
 from .ui import (
     STAGING_PAYMENT_DISABLED_TEXT,
     DOWNLOAD_WARNING_TEXT,
@@ -619,6 +620,8 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             await callback.answer("Недоступно", show_alert=True)
             return
         ticket = await backend.close_support_ticket(callback.from_user.id, callback.data.split(":", 1)[1])
+        if settings.support_forum_enabled and callback.message.chat.id == settings.support_forum_chat_id:
+            await set_topic_closed(callback.bot, settings, ticket, closed=True)
         await callback.bot.send_message(
             int(ticket["telegram_user_id"]),
             f"Обращение {ticket['number']} закрыто.\nСтатус: закрыто.",
@@ -648,7 +651,9 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
     async def support_reopen(callback: CallbackQuery):
         if not admin_only(callback.from_user.id):
             await callback.answer("Недоступно", show_alert=True); return
-        await backend.reopen_support_ticket(callback.from_user.id, callback.data.split(":", 1)[1])
+        ticket = await backend.reopen_support_ticket(callback.from_user.id, callback.data.split(":", 1)[1])
+        if settings.support_forum_enabled and callback.message.chat.id == settings.support_forum_chat_id:
+            await set_topic_closed(callback.bot, settings, ticket, closed=False)
         await callback.answer("Обращение переоткрыто")
 
     @router.callback_query(F.data == "noop")
@@ -667,7 +672,12 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         async def support_forum_reply(message: Message):
             # Forum messages are an optional adapter over the same backend
             # conversation. Only the configured owner can produce replies.
-            if not admin_only(message.from_user.id) or not message.message_thread_id:
+            if (not message.from_user or message.from_user.is_bot
+                    or not admin_only(message.from_user.id) or not message.message_thread_id):
+                return
+            if any((message.forum_topic_created, message.forum_topic_closed,
+                    message.forum_topic_reopened, message.forum_topic_edited,
+                    message.general_forum_topic_hidden, message.general_forum_topic_unhidden)):
                 return
             text = (message.text or message.caption or "").strip()
             attachment = {}
@@ -684,7 +694,24 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
                 text = text or "Вложение от поддержки"
             if not text: return
             try:
-                ticket = await backend.support_ticket_by_forum_thread(message.message_thread_id)
+                ticket = await backend.support_ticket_by_forum_thread(message.message_thread_id, message.chat.id)
+                command = text.split(None, 1)[0].split("@", 1)[0].casefold()
+                if command in {"/close", "/reopen", "/block", "/unblock", "/status"}:
+                    if command == "/close":
+                        await backend.close_support_ticket(message.from_user.id, ticket["id"])
+                        await set_topic_closed(message.bot, settings, ticket, closed=True)
+                    elif command == "/reopen":
+                        await backend.reopen_support_ticket(message.from_user.id, ticket["id"])
+                        await set_topic_closed(message.bot, settings, ticket, closed=False)
+                    elif command == "/block":
+                        await backend.block_support_user(message.from_user.id, ticket["id"])
+                    elif command == "/unblock":
+                        await backend.unblock_support_user(message.from_user.id, ticket["id"])
+                    else:
+                        await message.reply(f"{ticket['number']}: {ticket['status']}")
+                    return
+                if text.startswith("/"):
+                    return
                 await backend.reply_support_ticket(
                     message.from_user.id, ticket["id"], text,
                     idempotency_key=f"forum:{message.chat.id}:{message.message_id}",

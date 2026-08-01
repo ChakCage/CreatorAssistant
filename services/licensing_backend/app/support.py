@@ -60,7 +60,13 @@ def ticket_payload(row: SupportTicket, user: User | None = None, last_message: S
         "user_unread_count": row.user_unread_count or 0,
         "message_count": row.message_count or 0,
         "last_preview": (last_message.text if last_message else row.message)[:160],
+        "forum_chat_id": row.forum_chat_id,
         "forum_message_thread_id": row.forum_message_thread_id,
+        "forum_topic_name": row.forum_topic_name,
+        "forum_topic_created_at": iso(row.forum_topic_created_at) if row.forum_topic_created_at else None,
+        "forum_topic_state": row.forum_topic_state,
+        "forum_topic_creation_key": row.forum_topic_creation_key,
+        "forum_initial_message_id": row.forum_initial_message_id,
         "created_at": iso(row.created_at), "updated_at": iso(row.updated_at),
         "last_activity_at": iso(row.last_activity_at or row.updated_at),
         "closed_at": iso(row.closed_at) if row.closed_at else None,
@@ -152,6 +158,11 @@ class SupportService:
         message = SupportMessage(ticket_id=row.id, sender_type="admin", sender_telegram_user_id=str(admin_id),
                                  text=text, content_type="attachment" if clean else "text", attachment=clean, delivery_status="PENDING",
                                  idempotency_key=idempotency_key)
+        if idempotency_key and idempotency_key.startswith("forum:"):
+            forum_message_id = idempotency_key.rsplit(":", 1)[-1]
+            if forum_message_id.isdigit():
+                message.forum_message_id = forum_message_id
+                message.telegram_admin_message_id = forum_message_id
         db.add(message)
         row.admin_reply = text
         row.status = SupportTicketStatus.WAITING_USER.value
@@ -166,8 +177,10 @@ class SupportService:
         old = str(row.status.value if hasattr(row.status, "value") else row.status)
         if action == "close":
             row.status, row.closed_at = SupportTicketStatus.CLOSED.value, utcnow()
+            row.forum_topic_state = "CLOSED" if row.forum_message_thread_id else row.forum_topic_state
         elif action == "reopen":
             row.status, row.closed_at = SupportTicketStatus.WAITING_ADMIN.value, None
+            row.forum_topic_state = "OPEN" if row.forum_message_thread_id else row.forum_topic_state
         elif action == "block":
             if row.telegram_user_id == str(admin_id):
                 raise LicenseError("SUPPORT_OWNER_CANNOT_BE_BLOCKED", 409)
@@ -175,10 +188,12 @@ class SupportService:
             if not block:
                 db.add(SupportBlock(user_id=row.user_id, reason=reason or "spam", admin_telegram_user_id=str(admin_id)))
             row.status = SupportTicketStatus.BLOCKED.value
+            row.forum_topic_state = "CLOSED" if row.forum_message_thread_id else row.forum_topic_state
         elif action == "unblock":
             block = db.scalar(select(SupportBlock).where(SupportBlock.user_id == row.user_id))
             if block: db.delete(block)
             row.status = SupportTicketStatus.WAITING_ADMIN.value
+            row.forum_topic_state = "OPEN" if row.forum_message_thread_id else row.forum_topic_state
         else:
             raise LicenseError("INVALID_SUPPORT_ACTION", 422)
         row.last_activity_at = utcnow()
@@ -237,8 +252,14 @@ class SupportService:
         counts = {status: int(db.scalar(select(func.count()).select_from(SupportTicket)
                                         .where(SupportTicket.status == status)) or 0)
                   for status in ALL_STATUSES}
+        today = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        closed_today = int(db.scalar(select(func.count()).select_from(SupportTicket).where(
+            SupportTicket.closed_at >= today,
+        )) or 0)
         return {"new": counts.get("NEW", 0), "waiting_admin": counts.get("WAITING_ADMIN", 0),
-                "answered": counts.get("WAITING_USER", 0) + counts.get("ANSWERED", 0), "counts": counts}
+                "waiting_user": counts.get("WAITING_USER", 0),
+                "answered": counts.get("WAITING_USER", 0) + counts.get("ANSWERED", 0),
+                "closed_today": closed_today, "counts": counts}
 
 
 support_service = SupportService()

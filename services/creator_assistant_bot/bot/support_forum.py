@@ -1,8 +1,56 @@
 from __future__ import annotations
 
-from aiogram.types import Message
+from datetime import datetime, timezone
+
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from .config import BotSettings
+
+
+def is_missing_topic_error(error: Exception) -> bool:
+    value = str(error).casefold()
+    return any(marker in value for marker in (
+        "message thread not found", "topic_deleted", "message_thread_invalid",
+        "topic was closed", "forum topic not found",
+    ))
+
+
+def topic_name(ticket: dict, *, closed: bool = False) -> str:
+    username = str(ticket.get("telegram_username") or "").strip().lstrip("@")
+    identity = f"@{username}" if username else f"ID {ticket.get('telegram_user_id', 'unknown')}"
+    category = str(ticket.get("category") or "support").replace("\n", " ").strip()
+    prefix = "✅ " if closed else ""
+    return f"{prefix}{ticket['number']} • {identity} • {category}"[:128]
+
+
+def topic_idempotency_key(ticket: dict) -> str:
+    return f"support-forum-topic:{ticket['id']}"
+
+
+def ticket_keyboard(ticket_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Закрыть", callback_data=f"support_close:{ticket_id}"),
+            InlineKeyboardButton(text="🚫 Заблокировать", callback_data=f"support_block_confirm:{ticket_id}"),
+        ],
+        [InlineKeyboardButton(text="👤 Пользователь", callback_data=f"support_ticket:{ticket_id}")],
+    ])
+
+
+def initial_ticket_card(ticket: dict) -> str:
+    username = str(ticket.get("telegram_username") or "").strip()
+    user_label = f"@{username.lstrip('@')}" if username else "без username"
+    created = str(ticket.get("created_at") or datetime.now(timezone.utc).isoformat())
+    message = str(ticket.get("message") or "").strip()
+    return (
+        f"🎫 {ticket['number']}\n\n"
+        f"Пользователь: {user_label}\n"
+        f"Telegram ID: {ticket.get('telegram_user_id')}\n"
+        f"Категория: {ticket.get('category', 'support')}\n"
+        f"Статус: ожидает ответа\n"
+        f"Создано: {created}\n\n"
+        f"Сообщение пользователя:\n{message}"
+    )[:4000]
 
 
 async def validate_forum(bot, settings: BotSettings) -> bool:
@@ -23,17 +71,50 @@ async def validate_forum(bot, settings: BotSettings) -> bool:
 async def create_ticket_topic(bot, settings: BotSettings, ticket: dict) -> int | None:
     if not await validate_forum(bot, settings):
         return None
-    topic = await bot.create_forum_topic(
-        settings.support_forum_chat_id,
-        name=f"{ticket['number']} • @{ticket.get('telegram_username') or 'no_username'} • {ticket.get('category', 'support')}"[:128],
-    )
+    topic = await bot.create_forum_topic(settings.support_forum_chat_id, name=topic_name(ticket))
     return int(topic.message_thread_id)
 
 
+async def send_initial_ticket_card(bot, settings: BotSettings, ticket: dict, thread_id: int) -> int:
+    sent = await bot.send_message(
+        settings.support_forum_chat_id,
+        initial_ticket_card(ticket),
+        message_thread_id=thread_id,
+        reply_markup=ticket_keyboard(str(ticket["id"])),
+    )
+    return int(sent.message_id)
+
+
+async def ensure_dashboard_topic(bot, settings: BotSettings, summary: dict) -> int | None:
+    if not settings.support_forum_dashboard_topic_enabled:
+        return None
+    existing = int(summary.get("message_thread_id") or 0)
+    if existing:
+        return existing
+    topic = await bot.create_forum_topic(settings.support_forum_chat_id, name="📊 Панель поддержки")
+    return int(topic.message_thread_id)
+
+
+async def set_topic_closed(bot, settings: BotSettings, ticket: dict, *, closed: bool) -> None:
+    thread_id = int(ticket.get("forum_message_thread_id") or 0)
+    if not thread_id:
+        return
+    if closed:
+        await bot.edit_forum_topic(
+            settings.support_forum_chat_id, thread_id, name=topic_name(ticket, closed=True)
+        )
+        await bot.close_forum_topic(settings.support_forum_chat_id, thread_id)
+    else:
+        await bot.reopen_forum_topic(settings.support_forum_chat_id, thread_id)
+        await bot.edit_forum_topic(
+            settings.support_forum_chat_id, thread_id, name=topic_name(ticket, closed=False)
+        )
+
+
 async def relay_user_message(bot, settings: BotSettings, ticket: dict, message: dict) -> int | None:
-    """Relay only the safe Telegram file_id metadata; never expose file URLs."""
+    """Relay only safe Telegram file_id metadata; never expose file URLs."""
     thread_id = ticket.get("forum_message_thread_id")
-    if not settings.support_forum_enabled or not thread_id:
+    if not settings.support_forum_enabled or not settings.support_forum_relay_enabled or not thread_id:
         return None
     text = f"{ticket['number']} · пользователь\n\n{message.get('text', '')}"
     attachment = message.get("attachment") or {}
@@ -49,7 +130,8 @@ async def relay_user_message(bot, settings: BotSettings, ticket: dict, message: 
 
 
 async def relay_forum_message_to_user(bot, settings: BotSettings, ticket: dict, message: Message) -> int:
-    if not settings.support_forum_enabled or message.chat.id != settings.support_forum_chat_id:
+    if (not settings.support_forum_enabled or not settings.support_forum_relay_enabled
+            or message.chat.id != settings.support_forum_chat_id):
         raise RuntimeError("SUPPORT_FORUM_RELAY_REFUSED")
     text = f"Ответ поддержки по {ticket['number']}:\n\n{message.text or message.caption or ''}"
     if getattr(message, "photo", None):

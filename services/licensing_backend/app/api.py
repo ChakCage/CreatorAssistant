@@ -7,6 +7,7 @@ import json
 import logging
 import uuid
 from datetime import timedelta
+from typing import Optional
 from urllib.parse import parse_qs
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -26,7 +27,8 @@ from .schemas import (ActivateRequest, AdminCodeRequest, AdminGrantRequest, Admi
                       AdminReleaseRequest, AdminUserRequest, BetaRedeemRequest, BotDeviceRequest, BotUserRequest,
                       CheckoutRequest, DeactivateRequest, NotificationResultRequest,
                       FreeBlockRequest, FreeConfigUpdateRequest, FreeEventRequest, FreeMembershipRequest, FreeQuotaFinishRequest,
-                      FreeQuotaRequest, RefreshRequest, SupportDashboardStateRequest, SupportForumThreadRequest,
+                      FreeQuotaRequest, RefreshRequest, SupportDashboardStateRequest, SupportForumMessageRequest,
+                      SupportForumThreadRequest,
                       SupportMessageRequest, SupportTicketActionRequest,
                       SupportTicketCreateRequest, TelegramUserRequest)
 from .security import verify_service_token
@@ -610,7 +612,10 @@ def bot_support_dashboard(_identity: dict = Depends(require_service("support:adm
                           db: Session = Depends(get_db)):
     result = support_service.dashboard(db)
     state = db.get(ServerSetting, "support_admin_dashboard")
-    result["message_id"] = int((state.value or {}).get("message_id", 0)) if state else 0
+    stored = state.value or {} if state else {}
+    result["message_id"] = int(stored.get("message_id", 0))
+    result["chat_id"] = stored.get("chat_id")
+    result["message_thread_id"] = stored.get("message_thread_id")
     return result
 
 
@@ -619,7 +624,12 @@ def bot_support_dashboard_message(value: SupportDashboardStateRequest,
                                   _identity: dict = Depends(require_service("support:admin")),
                                   db: Session = Depends(get_db)):
     state = db.get(ServerSetting, "support_admin_dashboard")
-    payload = {"message_id": value.message_id, "telegram_user_id": value.telegram_user_id}
+    payload = {
+        "message_id": value.message_id,
+        "telegram_user_id": value.telegram_user_id,
+        "chat_id": value.chat_id,
+        "message_thread_id": value.message_thread_id,
+    }
     if state is None:
         state = ServerSetting(key="support_admin_dashboard", value=payload); db.add(state)
     else:
@@ -633,25 +643,61 @@ def bot_support_forum_thread(ticket_id: str, value: SupportForumThreadRequest,
                              db: Session = Depends(get_db)):
     row = db.get(SupportTicket, ticket_id)
     if not row: raise LicenseError("SUPPORT_TICKET_NOT_FOUND", 404)
+    if (row.forum_topic_creation_key == value.idempotency_key
+            and row.forum_chat_id == value.forum_chat_id
+            and row.forum_message_thread_id == value.message_thread_id):
+        return ticket_payload(row, db.get(User, row.user_id))
     collision = db.scalar(select(SupportTicket).where(
+        SupportTicket.forum_chat_id == value.forum_chat_id,
         SupportTicket.forum_message_thread_id == value.message_thread_id,
         SupportTicket.id != ticket_id,
     ))
     if collision: raise LicenseError("SUPPORT_FORUM_THREAD_ALREADY_LINKED", 409)
+    if row.forum_topic_creation_key and row.forum_topic_creation_key != value.idempotency_key:
+        raise LicenseError("SUPPORT_FORUM_TOPIC_KEY_MISMATCH", 409)
+    row.forum_chat_id = value.forum_chat_id
     row.forum_message_thread_id = value.message_thread_id
+    row.forum_topic_name = value.topic_name
+    row.forum_topic_created_at = row.forum_topic_created_at or utcnow()
+    row.forum_topic_state = value.topic_state
+    row.forum_topic_creation_key = value.idempotency_key
+    row.forum_initial_message_id = value.initial_message_id
     db.add(AdminAction(admin_id="telegram-admin:" + value.telegram_user_id,
                        action="link-support-forum-topic", target_type="support-ticket", target_id=row.id,
-                       action_metadata={"message_thread_id": value.message_thread_id}))
+                       action_metadata={"forum_chat_id": value.forum_chat_id,
+                                        "message_thread_id": value.message_thread_id,
+                                        "topic_state": value.topic_state}))
     db.commit(); return ticket_payload(row, db.get(User, row.user_id))
 
 
 @app.get("/v1/bot/support/forum-threads/{message_thread_id}")
-def bot_support_by_forum_thread(message_thread_id: int,
+def bot_support_by_forum_thread(message_thread_id: int, forum_chat_id: Optional[int] = None,
                                 _identity: dict = Depends(require_service("support:admin")),
                                 db: Session = Depends(get_db)):
-    row = db.scalar(select(SupportTicket).where(SupportTicket.forum_message_thread_id == message_thread_id))
+    filters = [SupportTicket.forum_message_thread_id == message_thread_id]
+    if forum_chat_id is not None:
+        filters.append(SupportTicket.forum_chat_id == forum_chat_id)
+    row = db.scalar(select(SupportTicket).where(*filters))
     if not row: raise LicenseError("SUPPORT_TICKET_NOT_FOUND", 404)
     return support_service.detail(db, row.id, admin_view=True)
+
+
+@app.post("/v1/bot/support/messages/{message_id}/forum-mapping")
+def bot_support_forum_message(message_id: str, value: SupportForumMessageRequest,
+                              _identity: dict = Depends(require_service("support:admin")),
+                              db: Session = Depends(get_db)):
+    row = db.get(SupportMessage, message_id)
+    if not row: raise LicenseError("SUPPORT_MESSAGE_NOT_FOUND", 404)
+    incoming = str(value.forum_message_id)
+    if row.forum_message_id and row.forum_message_id != incoming:
+        raise LicenseError("SUPPORT_FORUM_MESSAGE_ALREADY_LINKED", 409)
+    if not row.forum_message_id:
+        row.forum_message_id = incoming
+        db.add(AdminAction(admin_id="telegram-admin:" + value.telegram_user_id,
+                           action="link-support-forum-message", target_type="support-message",
+                           target_id=row.id, action_metadata={"forum_message_id": incoming}))
+        db.commit()
+    return {"message_id": row.id, "forum_message_id": row.forum_message_id}
 
 
 @app.post("/v1/admin/prices")
