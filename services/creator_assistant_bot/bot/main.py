@@ -22,6 +22,7 @@ from .support_forum import (
     send_initial_ticket_card,
     topic_idempotency_key,
     topic_name,
+    validate_forum,
 )
 
 
@@ -109,11 +110,17 @@ async def deliver_notification(
             message_id = int(summary.get("message_id") or 0)
             if message_id:
                 try:
-                    await bot.edit_message_text(dashboard_text, dashboard_chat_id, message_id,
-                                                reply_markup=dashboard_keyboard)
+                    await bot.edit_message_text(
+                        dashboard_text, chat_id=dashboard_chat_id, message_id=message_id,
+                        reply_markup=dashboard_keyboard,
+                    )
                     return
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Telegram reports an unchanged edit as HTTP 400 even
+                    # though the stored dashboard is already exactly right.
+                    # Treat it as success so retries never create duplicates.
+                    if "message is not modified" in str(exc).casefold():
+                        return
             sent = await bot.send_message(
                 dashboard_chat_id, dashboard_text, reply_markup=dashboard_keyboard,
                 message_thread_id=dashboard_thread_id,
@@ -251,6 +258,8 @@ async def run() -> None:
         return web.json_response({"status": "ready", "backend": "ready", **metadata})
     app.router.add_get("/ready", ready)
     bot = Bot(settings.token or "123456:LOCAL_TEST_TOKEN")
+    if settings.support_forum_enabled:
+        await validate_forum(bot, settings)
     dispatcher = Dispatcher(); dispatcher.include_router(build_router(backend, settings))
     worker = (
         asyncio.create_task(notification_worker(

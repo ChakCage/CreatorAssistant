@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import httpx
 
 from aiogram import F, Router
@@ -26,6 +27,102 @@ from .ui import (
     support_category_text,
     support_status_text,
 )
+
+
+LOGGER = logging.getLogger(__name__)
+SUPPORT_ADMIN_STATUSES = {
+    "NEW", "WAITING_ADMIN", "WAITING_USER", "ANSWERED", "CLOSED", "BLOCKED", "ALL",
+}
+
+
+def parse_support_admin_list_callback(data: str | None) -> tuple[str, int]:
+    parts = str(data or "").split(":")
+    if len(parts) not in {2, 3} or parts[0] != "support_admin_list":
+        raise ValueError("invalid callback format")
+    status = parts[1].upper()
+    if status not in SUPPORT_ADMIN_STATUSES:
+        raise ValueError("invalid support status")
+    try:
+        page = int(parts[2]) if len(parts) == 3 else 1
+    except ValueError as exc:
+        raise ValueError("invalid page") from exc
+    if page < 1:
+        raise ValueError("invalid page")
+    return status, page
+
+
+def support_admin_ticket_summaries(values: list[dict]) -> list[str]:
+    return [
+        f"{item['number']} · {support_category_text(item['category'])} · {support_status_text(item)}\n"
+        f"@{item.get('telegram_username') or 'без username'} · ID {item['telegram_user_id']} · "
+        f"сообщений {item.get('message_count', 0)} · новых {item.get('admin_unread_count', 0)}\n"
+        f"{item.get('last_activity_at', '')} · {item.get('last_preview', '')}"
+        for item in values
+    ]
+
+
+def support_admin_list_view(result: dict, status: str, page: int) -> tuple[str, InlineKeyboardMarkup]:
+    values = result.get("tickets", [])
+    summaries = support_admin_ticket_summaries(values)
+    buttons = [
+        [InlineKeyboardButton(
+            text=f"{item['number']} · {support_category_text(item['category'])} · {item.get('admin_unread_count', 0)} новых",
+            callback_data=f"support_ticket:{item['id']}",
+        )] for item in values
+    ]
+    pages = max(1, int(result.get("pages", 1)))
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton(text="←", callback_data=f"support_admin_list:{status}:{page - 1}"))
+    nav.append(InlineKeyboardButton(text=f"{page} из {pages}", callback_data="noop"))
+    if page < pages:
+        nav.append(InlineKeyboardButton(text="→", callback_data=f"support_admin_list:{status}:{page + 1}"))
+    buttons.append(nav)
+    buttons.append([InlineKeyboardButton(text="Фильтры", callback_data="support_admin_filters")])
+    text = "Обращения:\n\n" + "\n\n".join(summaries) if values else "Обращений нет."
+    return text, InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def log_support_callback(callback: CallbackQuery, outcome: str) -> None:
+    message = getattr(callback, "message", None)
+    LOGGER.info(
+        "support_admin_callback callback_query_id=%s callback_data=%s telegram_user_id=%s "
+        "message_id=%s message_date=%s outcome=%s",
+        getattr(callback, "id", None), getattr(callback, "data", None),
+        getattr(getattr(callback, "from_user", None), "id", None),
+        getattr(message, "message_id", None), getattr(message, "date", None), outcome,
+    )
+
+
+async def handle_support_admin_list_callback(
+        callback: CallbackQuery, backend: BackendClient, settings: BotSettings) -> None:
+    if not is_admin_user(settings, callback.from_user.id):
+        log_support_callback(callback, "forbidden")
+        await callback.answer("Недоступно", show_alert=True)
+        return
+    try:
+        status, page = parse_support_admin_list_callback(callback.data)
+    except ValueError:
+        log_support_callback(callback, "invalid")
+        await callback.answer("Кнопка устарела. Откройте панель поддержки заново.", show_alert=True)
+        return
+    log_support_callback(callback, "accepted")
+    # Telegram's spinner must stop before a backend request can time out or fail.
+    await callback.answer()
+    if callback.message is None:
+        log_support_callback(callback, "message-unavailable")
+        return
+    result = await backend.support_tickets(status, page)
+    text, markup = support_admin_list_view(result, status, page)
+    await callback.message.answer(text, reply_markup=markup)
+
+
+async def handle_unknown_callback(callback: CallbackQuery) -> None:
+    LOGGER.warning(
+        "unknown_callback callback_query_id=%s callback_data=%s telegram_user_id=%s",
+        callback.id, callback.data, getattr(callback.from_user, "id", None),
+    )
+    await callback.answer("Кнопка устарела. Откройте меню заново.", show_alert=True)
 
 
 class SupportFlow(StatesGroup):
@@ -427,14 +524,16 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
     @router.callback_query(F.data == "support_admin_filters")
     async def support_admin_filters(callback: CallbackQuery):
         if not admin_only(callback.from_user.id):
+            log_support_callback(callback, "forbidden")
             await callback.answer("Недоступно", show_alert=True); return
+        log_support_callback(callback, "accepted")
+        await callback.answer()
         labels = [("Новые", "NEW"), ("Ждут администратора", "WAITING_ADMIN"),
                   ("Ждут пользователя", "WAITING_USER"), ("Отвеченные", "ANSWERED"),
                   ("Закрытые", "CLOSED"), ("Заблокированные", "BLOCKED"), ("Все", "ALL")]
         buttons = [[InlineKeyboardButton(text=label, callback_data=f"support_admin_list:{status}:1")]
                    for label, status in labels]
         await callback.message.answer("Фильтр обращений:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-        await callback.answer()
 
     @router.callback_query(F.data == "free_admin_config")
     async def free_admin_config(callback: CallbackQuery):
@@ -511,27 +610,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
 
     @router.callback_query(F.data.startswith("support_admin_list:"))
     async def support_admin_list(callback: CallbackQuery):
-        if not admin_only(callback.from_user.id):
-            await callback.answer("Недоступно", show_alert=True)
-            return
-        parts = callback.data.split(":")
-        status, page = parts[1], int(parts[2]) if len(parts) > 2 else 1
-        result = await backend.support_tickets(status, page)
-        values = result.get("tickets", [])
-        buttons = [
-            [InlineKeyboardButton(
-                text=f"{item['number']} · {support_category_text(item['category'])} · {item.get('admin_unread_count', 0)} новых",
-                callback_data=f"support_ticket:{item['id']}",
-            )] for item in values]
-        nav = []
-        if page > 1: nav.append(InlineKeyboardButton(text="←", callback_data=f"support_admin_list:{status}:{page - 1}"))
-        nav.append(InlineKeyboardButton(text=f"{page} из {result.get('pages', 1)}", callback_data="noop"))
-        if page < int(result.get("pages", 1)): nav.append(InlineKeyboardButton(text="→", callback_data=f"support_admin_list:{status}:{page + 1}"))
-        if nav: buttons.append(nav)
-        buttons.append([InlineKeyboardButton(text="Фильтры", callback_data="support_admin_filters")])
-        await callback.message.answer(("Обращения:\n\n" + "\n\n".join(summaries)) if values else "Обращений нет.",
-                                      reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-        await callback.answer()
+        await handle_support_admin_list_callback(callback, backend, settings)
 
     @router.callback_query(F.data.startswith("support_ticket:"))
     async def support_ticket(callback: CallbackQuery):
@@ -666,6 +745,10 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             "• версия приложения и Diagnostic ID\n• AI-модель и характеристики ПК\n"
             "• что делали и какая ошибка возникла\n\nSupport ZIP прикладывайте только по своему выбору."
         ); await callback.answer()
+
+    @router.callback_query()
+    async def unknown_callback(callback: CallbackQuery):
+        await handle_unknown_callback(callback)
 
     if settings.support_forum_enabled:
         @router.message(F.chat.id == settings.support_forum_chat_id)

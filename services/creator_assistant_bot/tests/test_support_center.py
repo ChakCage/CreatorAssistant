@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 
 from bot.config import BotSettings
-from bot.handlers import is_admin_user
+from bot.handlers import (
+    handle_support_admin_list_callback,
+    handle_unknown_callback,
+    is_admin_user,
+    parse_support_admin_list_callback,
+    support_admin_list_view,
+)
 from bot.main import deliver_notification
 from bot.support_forum import (
     create_ticket_topic, ensure_dashboard_topic, relay_forum_message_to_user,
@@ -23,11 +30,13 @@ class Backend:
 
 
 class Bot:
-    def __init__(self, edit_fails=False): self.calls, self.edit_fails = [], edit_fails
+    def __init__(self, edit_fails=False, edit_unchanged=False):
+        self.calls, self.edit_fails, self.edit_unchanged = [], edit_fails, edit_unchanged
     async def send_message(self, chat_id, text, **kwargs):
         self.calls.append(("send", chat_id, text, kwargs)); return type("Sent", (), {"message_id": 99})()
-    async def edit_message_text(self, text, chat_id, message_id, **kwargs):
+    async def edit_message_text(self, text, *, chat_id, message_id, **kwargs):
         self.calls.append(("edit", chat_id, text, kwargs))
+        if self.edit_unchanged: raise RuntimeError("Bad Request: message is not modified")
         if self.edit_fails: raise RuntimeError("deleted")
 
 
@@ -44,11 +53,173 @@ async def test_dashboard_edits_saved_message_and_falls_back_to_new_message():
     assert backend.saved == (424403653, 99)
 
 
+@pytest.mark.asyncio
+async def test_unchanged_dashboard_edit_is_idempotent_and_does_not_send_duplicate():
+    backend = Backend(message_id=77); bot = Bot(edit_unchanged=True)
+    await deliver_notification(bot, backend, {"type": "SUPPORT_DASHBOARD_REFRESH", "payload": {"ticket_id": "id"}},
+                               mock=False, admin_telegram_id=424403653)
+    assert [call[0] for call in bot.calls] == ["edit"]
+    assert backend.saved is None
+
+
 def test_only_exact_owner_id_is_admin():
     settings = BotSettings(service_secret="x" * 32, admin_telegram_id=424403653)
     assert is_admin_user(settings, 424403653)
     assert not is_admin_user(settings, 421403653)
     assert not is_admin_user(settings, 0)
+
+
+def support_ticket(index: int) -> dict:
+    return {
+        "id": f"ticket-{index}", "number": f"CA-{index:08d}", "category": "application",
+        "status": "NEW", "telegram_user_id": str(1000 + index), "telegram_username": f"user{index}",
+        "message_count": 1, "admin_unread_count": 1,
+        "last_activity_at": "2026-08-01T20:00:00Z", "last_preview": f"message {index}",
+    }
+
+
+@pytest.mark.parametrize("count", [0, 1, 10, 11])
+def test_admin_ticket_list_renders_empty_full_and_overflow_pages(count):
+    page_values = [support_ticket(index) for index in range(min(count, 10))]
+    pages = 2 if count == 11 else 1
+    text, markup = support_admin_list_view({"tickets": page_values, "pages": pages}, "NEW", 1)
+    assert (text == "Обращений нет.") is (count == 0)
+    ticket_buttons = [row for row in markup.inline_keyboard if row[0].callback_data.startswith("support_ticket:")]
+    assert len(ticket_buttons) == min(count, 10)
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "support_admin_list:NEW:2" in callbacks if count == 11 else "support_admin_list:NEW:2" not in callbacks
+    assert "support_admin_filters" in callbacks
+
+
+def test_admin_ticket_callback_parser_validates_status_page_and_legacy_page_default():
+    assert parse_support_admin_list_callback("support_admin_list:NEW:1") == ("NEW", 1)
+    assert parse_support_admin_list_callback("support_admin_list:WAITING_ADMIN") == ("WAITING_ADMIN", 1)
+    for value in ("support_admin_list:UNKNOWN:1", "support_admin_list:NEW:zero", "support_admin_list:NEW:0"):
+        with pytest.raises(ValueError):
+            parse_support_admin_list_callback(value)
+
+
+class CallbackMessage:
+    def __init__(self):
+        self.message_id, self.date, self.answers = 77, "2026-08-01T20:00:00Z", []
+
+    async def answer(self, text, **kwargs):
+        self.answers.append((text, kwargs))
+
+
+class Callback:
+    def __init__(self, user_id=424403653, data="support_admin_list:NEW:1", message=True):
+        self.id, self.data = "callback-id", data
+        self.from_user = SimpleNamespace(id=user_id)
+        self.message = CallbackMessage() if message else None
+        self.answers = []
+
+    async def answer(self, text=None, **kwargs):
+        self.answers.append((text, kwargs))
+
+
+class TicketListBackend:
+    def __init__(self, result=None, fail=False):
+        self.result = result or {"tickets": [], "pages": 1}
+        self.fail, self.calls = fail, []
+
+    async def support_tickets(self, status, page):
+        self.calls.append((status, page))
+        if self.fail:
+            raise RuntimeError("backend unavailable")
+        return self.result
+
+
+@pytest.mark.asyncio
+async def test_admin_list_callback_answers_immediately_and_opens_expected_filters():
+    settings = BotSettings(service_secret="x" * 32, admin_telegram_id=424403653)
+    for data, expected in (("support_admin_list:NEW:1", ("NEW", 1)),
+                           ("support_admin_list:WAITING_ADMIN:1", ("WAITING_ADMIN", 1))):
+        callback, backend = Callback(data=data), TicketListBackend()
+        await handle_support_admin_list_callback(callback, backend, settings)
+        assert callback.answers == [(None, {})]
+        assert backend.calls == [expected]
+        assert callback.message.answers[0][0] == "Обращений нет."
+
+
+@pytest.mark.asyncio
+async def test_admin_list_callback_rejects_wrong_owner_and_ordinary_user():
+    settings = BotSettings(service_secret="x" * 32, admin_telegram_id=424403653)
+    for user_id in (421403653, 777):
+        callback, backend = Callback(user_id=user_id), TicketListBackend()
+        await handle_support_admin_list_callback(callback, backend, settings)
+        assert callback.answers == [("Недоступно", {"show_alert": True})]
+        assert backend.calls == []
+
+
+@pytest.mark.asyncio
+async def test_admin_list_callback_answers_before_backend_failure_and_handles_stale_message():
+    settings = BotSettings(service_secret="x" * 32, admin_telegram_id=424403653)
+    failing = Callback(); backend = TicketListBackend(fail=True)
+    with pytest.raises(RuntimeError):
+        await handle_support_admin_list_callback(failing, backend, settings)
+    assert failing.answers == [(None, {})]
+    stale = Callback(message=False); backend = TicketListBackend()
+    await handle_support_admin_list_callback(stale, backend, settings)
+    assert stale.answers == [(None, {})] and backend.calls == []
+
+
+@pytest.mark.asyncio
+async def test_admin_list_repeated_click_is_idempotent_and_pagination_is_preserved():
+    settings = BotSettings(service_secret="x" * 32, admin_telegram_id=424403653)
+    backend = TicketListBackend({"tickets": [support_ticket(11)], "pages": 2})
+    for _ in range(2):
+        callback = Callback(data="support_admin_list:NEW:2")
+        await handle_support_admin_list_callback(callback, backend, settings)
+        callbacks = [button.callback_data for row in callback.message.answers[0][1]["reply_markup"].inline_keyboard for button in row]
+        assert "support_admin_list:NEW:1" in callbacks
+    assert backend.calls == [("NEW", 2), ("NEW", 2)]
+
+
+@pytest.mark.asyncio
+async def test_unknown_callback_is_answered_without_crashing_bot_process():
+    callback = Callback(data="legacy:removed:button")
+    await handle_unknown_callback(callback)
+    assert callback.answers == [("Кнопка устарела. Откройте меню заново.", {"show_alert": True})]
+
+
+@pytest.mark.asyncio
+async def test_notification_worker_receives_forum_settings(monkeypatch):
+    import bot.worker as worker_module
+
+    settings = SimpleNamespace(
+        release_version="test", release_commit="commit", token="token", mock_telegram=True,
+        admin_telegram_id=424403653, support_admin_notification_mode="dashboard",
+        support_forum_enabled=True,
+        validate_runtime=lambda: None,
+    )
+    calls = []
+
+    class FakeBackend:
+        async def close(self): calls.append("backend-close")
+
+    class FakeSession:
+        async def close(self): calls.append("bot-close")
+
+    class FakeBot:
+        def __init__(self, _token): self.session = FakeSession()
+
+    async def fake_validate(bot, value):
+        calls.append(("validate", bot, value))
+        return True
+
+    async def fake_worker(bot, backend, mock, admin_id, mode, forum_settings):
+        calls.append(("worker", mock, admin_id, mode, forum_settings))
+
+    monkeypatch.setattr(worker_module, "BotSettings", lambda: settings)
+    monkeypatch.setattr(worker_module, "BackendClient", lambda _settings: FakeBackend())
+    monkeypatch.setattr(worker_module, "Bot", FakeBot)
+    monkeypatch.setattr(worker_module, "validate_forum", fake_validate)
+    monkeypatch.setattr(worker_module, "notification_worker", fake_worker)
+    await worker_module.run()
+    assert calls[0][0] == "validate"
+    assert calls[1] == ("worker", True, 424403653, "dashboard", settings)
+    assert calls[-2:] == ["backend-close", "bot-close"]
 
 
 class ForumBot:
@@ -85,8 +256,8 @@ async def test_topic_metadata_dashboard_and_close_reopen_contract():
     settings = BotSettings(service_secret="x" * 32, support_forum_enabled=True, support_forum_chat_id=-100123)
     ticket = {"id": "abc", "number": "CA-ABC", "telegram_user_id": "42", "category": "application",
               "forum_message_thread_id": 44}
-    assert topic_name(ticket) == "CA-ABC • ID 42 • application"
-    assert topic_idempotency_key(ticket) == "support-forum-topic:abc"
+    assert topic_name(ticket) == "CA-ABC • ID 42 • Работа приложения"
+    assert topic_idempotency_key(ticket) == "support-forum-topic:CA-ABC"
     bot = ForumBot()
     assert await ensure_dashboard_topic(bot, settings, {}) == 44
     assert bot.created == 1

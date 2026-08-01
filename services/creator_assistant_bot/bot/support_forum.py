@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from .config import BotSettings
+from .ui import support_category_text
 
 
 def is_missing_topic_error(error: Exception) -> bool:
@@ -18,13 +19,13 @@ def is_missing_topic_error(error: Exception) -> bool:
 def topic_name(ticket: dict, *, closed: bool = False) -> str:
     username = str(ticket.get("telegram_username") or "").strip().lstrip("@")
     identity = f"@{username}" if username else f"ID {ticket.get('telegram_user_id', 'unknown')}"
-    category = str(ticket.get("category") or "support").replace("\n", " ").strip()
+    category = support_category_text(str(ticket.get("category") or "other")).replace("\n", " ").strip()
     prefix = "✅ " if closed else ""
     return f"{prefix}{ticket['number']} • {identity} • {category}"[:128]
 
 
 def topic_idempotency_key(ticket: dict) -> str:
-    return f"support-forum-topic:{ticket['id']}"
+    return f"support-forum-topic:{ticket['number']}"
 
 
 def ticket_keyboard(ticket_id: str) -> InlineKeyboardMarkup:
@@ -46,7 +47,7 @@ def initial_ticket_card(ticket: dict) -> str:
         f"🎫 {ticket['number']}\n\n"
         f"Пользователь: {user_label}\n"
         f"Telegram ID: {ticket.get('telegram_user_id')}\n"
-        f"Категория: {ticket.get('category', 'support')}\n"
+        f"Категория: {support_category_text(ticket.get('category'))}\n"
         f"Статус: ожидает ответа\n"
         f"Создано: {created}\n\n"
         f"Сообщение пользователя:\n{message}"
