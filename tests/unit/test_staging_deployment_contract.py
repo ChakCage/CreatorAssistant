@@ -24,6 +24,16 @@ def test_staging_compose_does_not_publish_database_redis_or_admin_api():
     assert "handle @installer" in caddy
 
 
+def test_staging_compose_maps_release_metadata_to_each_settings_prefix():
+    compose = (STAGING / "docker-compose.yml").read_text(encoding="utf-8")
+    backend_env = compose.split("x-backend-env:", 1)[1].split("x-bot-env:", 1)[0]
+    bot_env = compose.split("x-bot-env:", 1)[1].split("services:", 1)[0]
+    assert "CREATOR_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION" in backend_env
+    assert "CREATOR_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT" in backend_env
+    assert "CREATOR_BOT_RELEASE_VERSION: ${CREATOR_RELEASE_VERSION" in bot_env
+    assert "CREATOR_BOT_RELEASE_COMMIT: ${CREATOR_RELEASE_COMMIT" in bot_env
+
+
 def test_staging_secrets_template_contains_no_values_or_private_keys():
     template = (STAGING / ".env.staging.example").read_text(encoding="utf-8")
     for name in (
