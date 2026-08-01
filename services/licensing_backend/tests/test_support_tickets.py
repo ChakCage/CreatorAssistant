@@ -119,7 +119,7 @@ def test_support_rejects_unsafe_attachment_and_blocked_spam(client):
 
 def test_support_categories_are_stored_and_returned_without_remapping(client):
     user("421400002")
-    expected = ("activation", "application", "render", "other")
+    expected = ("activation", "application", "render_export", "other")
     created_ids = []
     for category in expected:
         response = client.post(

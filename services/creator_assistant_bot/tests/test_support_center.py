@@ -5,11 +5,13 @@ from types import SimpleNamespace
 
 from bot.config import BotSettings
 from bot.handlers import (
+    apply_support_category_selection,
     handle_support_admin_list_callback,
     handle_unknown_callback,
     is_admin_user,
     parse_support_admin_list_callback,
     support_admin_list_view,
+    support_category_keyboard,
 )
 from bot.main import deliver_notification
 from bot.support_forum import (
@@ -17,6 +19,10 @@ from bot.support_forum import (
     relay_user_message, set_topic_closed, topic_idempotency_key, topic_name,
     validate_forum,
 )
+from bot.support_taxonomy import (
+    SUPPORT_CATEGORIES, SupportCategory, parse_support_category_callback,
+)
+from bot.ui import support_category_text
 
 
 class Backend:
@@ -67,6 +73,39 @@ def test_only_exact_owner_id_is_admin():
     assert is_admin_user(settings, 424403653)
     assert not is_admin_user(settings, 421403653)
     assert not is_admin_user(settings, 0)
+
+
+@pytest.mark.parametrize("spec", SUPPORT_CATEGORIES)
+def test_each_support_category_has_one_typed_callback_label_and_forum_name(spec):
+    keyboard = support_category_keyboard()
+    rendered = [(row[0].text, row[0].callback_data) for row in keyboard.inline_keyboard]
+    assert (spec.label, spec.callback_data) in rendered
+    assert parse_support_category_callback(spec.callback_data) is spec.value
+    assert support_category_text(spec.value.value) == spec.label
+    ticket = {"number": "CA-CATEGORY", "telegram_user_id": "42", "category": spec.value.value}
+    assert topic_name(ticket).endswith(" • " + spec.label)
+
+
+def test_application_callback_can_never_resolve_to_activation():
+    assert parse_support_category_callback("support_category:application") is SupportCategory.APPLICATION
+    assert parse_support_category_callback("support_category:application") is not SupportCategory.ACTIVATION
+    with pytest.raises(ValueError):
+        parse_support_category_callback("support_category:unknown")
+
+
+@pytest.mark.asyncio
+async def test_cancelled_activation_selection_does_not_leak_into_new_application_ticket():
+    class State:
+        def __init__(self): self.data = {}; self.state = None
+        async def set_state(self, value): self.state = value
+        async def update_data(self, **values): self.data.update(values)
+        async def clear(self): self.data = {}; self.state = None
+
+    state = State()
+    assert await apply_support_category_selection(state, "support_category:activation") == "activation"
+    await state.clear()
+    assert await apply_support_category_selection(state, "support_category:application") == "application"
+    assert state.data == {"category": "application"}
 
 
 def support_ticket(index: int) -> dict:

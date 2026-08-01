@@ -33,6 +33,46 @@ def create_ticket(client, telegram_id: str, index: int = 0) -> dict:
     return response.json()
 
 
+@pytest.mark.parametrize("category", ["activation", "application", "render_export", "other"])
+def test_each_support_category_is_stored_and_audited_without_remapping(client, category):
+    telegram_id = "category-" + category
+    add_user(telegram_id, category)
+    response = client.post("/v1/bot/support/tickets", headers=headers("support:write"), json={
+        "telegram_user_id": telegram_id,
+        "category": category,
+        "message": "category contract",
+        "idempotency_key": "category:" + category,
+    })
+    assert response.status_code == 200
+    assert response.json()["category"] == category
+    with SessionLocal() as db:
+        ticket = db.get(SupportTicket, response.json()["id"])
+        assert ticket.category == category
+        audit = db.scalar(select(AdminAction).where(
+            AdminAction.target_id == ticket.id,
+            AdminAction.action == "create-support-ticket",
+        ))
+        assert audit is not None
+        assert audit.action_metadata["category"] == category
+
+
+def test_application_is_never_stored_as_activation_and_unknown_category_is_rejected(client):
+    add_user("category-application-only", "application_only")
+    response = client.post("/v1/bot/support/tickets", headers=headers("support:write"), json={
+        "telegram_user_id": "category-application-only",
+        "category": "application",
+        "message": "application issue",
+        "idempotency_key": "category:application-only",
+    })
+    assert response.status_code == 200
+    with SessionLocal() as db:
+        assert db.get(SupportTicket, response.json()["id"]).category == "application"
+    rejected = client.post("/v1/bot/support/tickets", headers=headers("support:write"), json={
+        "telegram_user_id": "category-application-only", "category": "unknown", "message": "bad category",
+    })
+    assert rejected.status_code == 422
+
+
 @pytest.mark.parametrize(("count", "pages"), [(0, 1), (1, 1), (10, 1), (11, 2), (25, 3)])
 def test_admin_list_paginates_ten_per_page(client, count, pages):
     for index in range(count):

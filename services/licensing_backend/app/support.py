@@ -16,6 +16,7 @@ from .service import LicenseError, iso
 
 PAGE_SIZE = 10
 ALL_STATUSES = {item.value for item in SupportTicketStatus}
+SUPPORT_CATEGORIES = {"activation", "application", "render_export", "other"}
 
 
 def sanitize_attachment(value: dict | None) -> dict:
@@ -88,6 +89,8 @@ class SupportService:
 
     def create(self, db: Session, user: User, category: str, text: str, attachment: dict | None,
                idempotency_key: str | None = None) -> SupportTicket:
+        if category not in SUPPORT_CATEGORIES:
+            raise LicenseError("INVALID_SUPPORT_CATEGORY", 422)
         if db.scalar(select(SupportBlock).where(SupportBlock.user_id == user.id)):
             raise LicenseError("SUPPORT_BLOCKED", 403)
         clean = sanitize_attachment(attachment)
@@ -99,7 +102,8 @@ class SupportService:
         db.add(SupportMessage(ticket_id=row.id, sender_type="user", sender_telegram_user_id=str(user.telegram_user_id),
                               text=text, content_type="attachment" if clean else "text", attachment=clean,
                               delivery_status="DELIVERED", idempotency_key=idempotency_key or f"ticket-created:{row.id}"))
-        self._audit(db, "telegram-user:" + str(user.telegram_user_id), "create-support-ticket", row)
+        self._audit(db, "telegram-user:" + str(user.telegram_user_id), "create-support-ticket", row,
+                    category=category)
         self._queue_dashboard(db, row, "created")
         db.add(BotNotification(user_id=row.user_id, telegram_user_id=row.telegram_user_id,
                                notification_type="SUPPORT_FORUM_NEW_TICKET", payload={"ticket_id": row.id},

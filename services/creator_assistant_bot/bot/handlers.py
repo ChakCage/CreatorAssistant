@@ -14,6 +14,11 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from .backend import BackendClient
 from .config import BotSettings
 from .support_forum import set_topic_closed
+from .support_taxonomy import (
+    SUPPORT_CATEGORIES,
+    parse_support_category_callback,
+    parse_support_category_value,
+)
 from .ui import (
     STAGING_PAYMENT_DISABLED_TEXT,
     DOWNLOAD_WARNING_TEXT,
@@ -131,6 +136,20 @@ class SupportFlow(StatesGroup):
     admin_reply = State()
 
 
+def support_category_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=item.label, callback_data=item.callback_data)]
+        for item in SUPPORT_CATEGORIES
+    ])
+
+
+async def apply_support_category_selection(state: FSMContext, callback_data: object) -> str:
+    category = parse_support_category_callback(callback_data)
+    await state.set_state(SupportFlow.message)
+    await state.update_data(category=category.value)
+    return category.value
+
+
 def is_admin_user(settings: BotSettings, user_id: int) -> bool:
     return bool(settings.admin_telegram_id and user_id == settings.admin_telegram_id)
 
@@ -172,24 +191,20 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         await backend.upsert_user(user.id, user.username, user.first_name, user.language_code)
 
     def support_categories() -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Активация и лицензия", callback_data="support_category:activation")],
-            [InlineKeyboardButton(text="Работа приложения", callback_data="support_category:application")],
-            [InlineKeyboardButton(text="Рендер и экспорт", callback_data="support_category:render")],
-            [InlineKeyboardButton(text="Другое", callback_data="support_category:other")],
-        ])
+        return support_category_keyboard()
 
     def admin_only(user_id: int) -> bool:
         return is_admin_user(settings, user_id)
 
     @router.message(CommandStart())
-    async def start(message: Message):
+    async def start(message: Message, state: FSMContext):
         await ensure_user(message.from_user)
         free_enabled = False
         with contextlib.suppress(Exception):
             free_enabled = bool((await backend.free_config()).get("enabled"))
         payload = (message.text or "").partition(" ")[2].strip().casefold()
         if payload == "support":
+            await state.clear()
             await message.answer("Выберите категорию обращения:", reply_markup=support_categories())
             return
         if payload == "buy":
@@ -347,7 +362,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         await callback.answer()
 
     @router.callback_query(F.data == "support_new")
-    async def support_new(callback: CallbackQuery):
+    async def support_new(callback: CallbackQuery, state: FSMContext):
         existing = (await backend.user_support_tickets(callback.from_user.id, status="OPEN")).get("tickets", [])
         if existing:
             ticket = existing[0]
@@ -359,11 +374,13 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
                 ]),
             )
             await callback.answer(); return
+        await state.clear()
         await callback.message.answer("Выберите категорию обращения:", reply_markup=support_categories())
         await callback.answer()
 
     @router.callback_query(F.data == "support_new_confirm")
-    async def support_new_confirm(callback: CallbackQuery):
+    async def support_new_confirm(callback: CallbackQuery, state: FSMContext):
+        await state.clear()
         await callback.message.answer("Выберите категорию обращения:", reply_markup=support_categories())
         await callback.answer()
 
@@ -441,12 +458,17 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
 
     @router.callback_query(F.data.startswith("support_category:"))
     async def support_category(callback: CallbackQuery, state: FSMContext):
-        category = callback.data.split(":", 1)[1]
-        if category not in {"activation", "application", "render", "other"}:
-            await callback.answer("Неизвестная категория", show_alert=True)
+        try:
+            category = await apply_support_category_selection(state, callback.data)
+        except ValueError:
+            LOGGER.warning(
+                "support_category_rejected callback_data=%s telegram_user_id=%s",
+                callback.data, getattr(callback.from_user, "id", None),
+            )
+            await state.clear()
+            await callback.answer("Категория не распознана. Выберите её повторно.", show_alert=True)
+            await callback.message.answer("Выберите категорию обращения:", reply_markup=support_categories())
             return
-        await state.set_state(SupportFlow.message)
-        await state.update_data(category=category)
         await callback.message.answer(
             "Опишите проблему одним сообщением. Можно приложить один скриншот, TXT или ZIP до 5 МБ. "
             "Не отправляйте пароли, коды активации и другие секреты."
@@ -456,6 +478,19 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
     @router.message(SupportFlow.message)
     async def support_message(message: Message, state: FSMContext):
         data = await state.get_data()
+        try:
+            category = parse_support_category_value(data.get("category"))
+        except ValueError:
+            LOGGER.warning(
+                "support_category_state_rejected telegram_user_id=%s state_category=%r",
+                getattr(message.from_user, "id", None), data.get("category"),
+            )
+            await state.clear()
+            await message.answer(
+                "Категория обращения потеряна или устарела. Выберите её повторно.",
+                reply_markup=support_categories(),
+            )
+            return
         text = (message.text or message.caption or "").strip()
         attachment = {}
         if message.photo:
@@ -479,7 +514,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             return
         try:
             ticket = await backend.create_support_ticket(
-                message.from_user.id, str(data.get("category", "other")), text, attachment,
+                message.from_user.id, category.value, text, attachment,
             )
         except httpx.HTTPStatusError as exc:
             await message.answer(backend_message(exc))

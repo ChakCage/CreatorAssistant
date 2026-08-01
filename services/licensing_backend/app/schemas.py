@@ -88,7 +88,7 @@ class NotificationResultRequest(BaseModel):
 
 
 class SupportTicketCreateRequest(BotUserRequest):
-    category: str = Field(pattern="^(activation|application|render|other)$")
+    category: str = Field(pattern="^(activation|application|render_export|other)$")
     message: str = Field(min_length=3, max_length=4000)
     attachment: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: Optional[str] = Field(default=None, max_length=160)

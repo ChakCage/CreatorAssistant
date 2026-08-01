@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from .support_taxonomy import support_category_label
+
 
 STATUS_TEXT = {
     "ACTIVE": "✅ Подписка активна",
@@ -45,16 +47,8 @@ PUBLIC_HELP_TEXT = (
     "Поддержка доступна только через кнопку «🛟 Поддержка» в этом боте."
 )
 
-SUPPORT_CATEGORY_TEXT = {
-    "activation": "Активация и лицензия",
-    "application": "Работа приложения",
-    "render": "Рендер и экспорт",
-    "other": "Другое",
-}
-
-
 def support_category_text(value: object) -> str:
-    return SUPPORT_CATEGORY_TEXT.get(str(value or "").strip().casefold(), "Другое")
+    return support_category_label(value)
 
 
 def support_status_text(value: dict) -> str:
