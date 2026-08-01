@@ -146,7 +146,13 @@ class LicenseService:
                 namespace = os.environ.get("CREATOR_ASSISTANT_E2E_CREDENTIAL_NAMESPACE", namespace)
             storage = SecureLicenseStorage(WindowsSecureCredentialStore(namespace=namespace))
         self.storage = storage
-        self.endpoint = (endpoint or build.license_backend_url).rstrip("/")
+        e2e_endpoint = ""
+        if endpoint is None and os.environ.get("CREATOR_ASSISTANT_E2E") == "1":
+            e2e_endpoint = os.environ.get("CREATOR_ASSISTANT_E2E_LICENSE_URL", "").strip()
+            e2e_host = (urlsplit(e2e_endpoint).hostname or "").casefold()
+            if e2e_endpoint and e2e_host not in {"127.0.0.1", "localhost", "::1"}:
+                raise RuntimeError("E2E license endpoint must be localhost")
+        self.endpoint = (endpoint or e2e_endpoint or build.license_backend_url).rstrip("/")
         self.public_keys = dict(public_keys if public_keys is not None else build.license_public_keys)
         self.opener = opener or urllib.request.urlopen
         self.wall_clock = wall_clock or (lambda: datetime.now(timezone.utc))

@@ -451,9 +451,16 @@ def _update_e2e_verification(container: ServiceContainer, report_path: Path) -> 
     build = current_build_info()
     report = {"success": False, "from": build.__dict__}
     try:
-        host = urlparse(build.update_backend_url).hostname or ""
+        endpoint = build.update_backend_url
+        if os.environ.get("CREATOR_ASSISTANT_E2E") == "1":
+            candidate = os.environ.get("CREATOR_ASSISTANT_E2E_UPDATE_URL", "").strip()
+            candidate_host = (urlparse(candidate).hostname or "").casefold()
+            if candidate and candidate_host not in {"127.0.0.1", "localhost", "::1"}:
+                raise RuntimeError("E2E update endpoint must be localhost")
+            endpoint = candidate or endpoint
+        host = urlparse(endpoint).hostname or ""
         service = ReleaseUpdateService(
-            build.update_backend_url,
+            endpoint,
             UpdatePolicy(
                 edition=build.edition, channel=build.channel, architecture=build.architecture,
                 current_version=build.version, current_build=build.build_number,

@@ -39,6 +39,7 @@ $Previous = @{}
 foreach ($Name in @('APPDATA','LOCALAPPDATA','TEMP','TMP','PYTHONPATH','LICENSE_ENV','LICENSE_DATABASE_URL',
     'LICENSE_ACTIVATION_PEPPER','LICENSE_SIGNING_KEY_ID','LICENSE_SIGNING_PRIVATE_KEY',
     'LICENSE_ADMIN_TOKEN_HASH','LICENSE_PUBLIC_BASE_URL','CREATOR_ASSISTANT_E2E',
+    'CREATOR_ASSISTANT_E2E_LICENSE_URL','CREATOR_ASSISTANT_E2E_UPDATE_URL',
     'CREATOR_ASSISTANT_E2E_CREDENTIAL_NAMESPACE','CREATOR_ASSISTANT_E2E_PRESERVE_LICENSE',
     'CREATOR_ASSISTANT_E2E_INSTALL_UPDATE')) {
     $Previous[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
@@ -83,12 +84,14 @@ try {
     $env:LICENSE_ENV = 'local'
     $env:LICENSE_DATABASE_URL = 'sqlite+pysqlite:///' + ((Join-Path $E2ERoot 'licensing.db') -replace '\\','/')
     $env:LICENSE_ACTIVATION_PEPPER = 'creator-assistant-e2e-pepper-not-production'
-    $env:LICENSE_SIGNING_KEY_ID = 'staging-license-local'
+    $env:LICENSE_SIGNING_KEY_ID = 'staging-license-v1'
     $env:LICENSE_SIGNING_PRIVATE_KEY = (Get-Content -Raw -LiteralPath $LicensePrivateKey).Trim()
     $AdminToken = 'creator-assistant-e2e-admin'
     $env:LICENSE_ADMIN_TOKEN_HASH = (& $Python -c "import hashlib;print(hashlib.sha256(b'$AdminToken').hexdigest())").Trim()
     $env:LICENSE_PUBLIC_BASE_URL = 'http://127.0.0.1:8765'
     $env:CREATOR_ASSISTANT_E2E = '1'
+    $env:CREATOR_ASSISTANT_E2E_LICENSE_URL = 'http://127.0.0.1:8765'
+    $env:CREATOR_ASSISTANT_E2E_UPDATE_URL = 'http://127.0.0.1:8765'
     $env:CREATOR_ASSISTANT_E2E_CREDENTIAL_NAMESPACE = 'CreatorAssistant/E2E/' + [Guid]::NewGuid().ToString('N')
     $env:CREATOR_ASSISTANT_E2E_PRESERVE_LICENSE = '1'
 
