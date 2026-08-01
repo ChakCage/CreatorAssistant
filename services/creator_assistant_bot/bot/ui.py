@@ -157,13 +157,37 @@ def devices_text(value: dict) -> str:
 
 def main_menu() -> InlineKeyboardMarkup:
     labels = [
-        ("🎟 Получить тестовый доступ", "beta_access"), ("📅 Моя подписка", "subscription"),
+        ("🎁 Попробовать бесплатно", "free_offer"), ("🎟 Получить тестовый доступ", "beta_access"),
+        ("📅 Моя подписка", "subscription"),
         ("🔑 Код активации", "activation"), ("💻 Мои устройства", "devices"),
         ("⬇️ Скачать Creator Assistant", "download"), ("📖 Инструкция", "help"),
         ("🐞 Сообщить об ошибке", "feedback"), ("🛟 Поддержка", "support"),
     ]
     buttons = [InlineKeyboardButton(text=text, callback_data=data) for text, data in labels]
     return InlineKeyboardMarkup(inline_keyboard=[buttons[index:index + 2] for index in range(0, len(buttons), 2)])
+
+
+def free_status_text(value: dict) -> str:
+    projects = value.get("projects") or {"used": 0, "limit": 2}
+    shorts = value.get("shorts_sources") or {"used": 0, "limit": 2}
+    devices = value.get("devices") or {"used": 0, "limit": 1}
+    membership = value.get("membership") or {}
+    state = str(value.get("state") or "ELIGIBLE")
+    state_text = {
+        "ELIGIBLE": "доступ ещё не выдан", "ACTIVE": "активен",
+        "PAUSED_UNSUBSCRIBED": "приостановлен: подпишитесь снова",
+        "EXHAUSTED": "лимиты исчерпаны", "BLOCKED": "заблокирован",
+        "CONVERTED_TO_PAID": "используется платная подписка",
+    }.get(state, "состояние неизвестно")
+    subscribed = "подтверждена" if membership.get("status") in {"creator", "administrator", "member", "restricted"} else "не подтверждена"
+    return (
+        "🎁 Бесплатный тариф\n\n"
+        f"Состояние: {state_text}\n"
+        f"Подготовка проектов: {projects.get('used', 0)} из {projects.get('limit', 0)}\n"
+        f"Исходные видео для Shorts: {shorts.get('used', 0)} из {shorts.get('limit', 0)}\n"
+        f"Устройства: {devices.get('used', 0)} из {devices.get('limit', 0)}\n"
+        f"Подписка на канал: {subscribed}"
+    )
 
 
 def checkout_keyboard(url: str) -> InlineKeyboardMarkup:

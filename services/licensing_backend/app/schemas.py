@@ -98,6 +98,43 @@ class SupportTicketActionRequest(BaseModel):
     message: str = Field(default="", max_length=4000)
 
 
+class FreeMembershipRequest(BotUserRequest):
+    status: str = Field(min_length=1, max_length=40)
+    is_member: Optional[bool] = None
+
+
+class FreeConfigUpdateRequest(BaseModel):
+    telegram_user_id: str = Field(min_length=1, max_length=64)
+    enabled: Optional[bool] = None
+    channel_chat_id: Optional[int] = None
+    channel_title: Optional[str] = Field(default=None, max_length=200)
+    channel_invite_url: Optional[str] = Field(default=None, max_length=600)
+    recheck_enabled: Optional[bool] = None
+    project_limit: Optional[int] = Field(default=None, ge=0, le=1000)
+    shorts_source_limit: Optional[int] = Field(default=None, ge=0, le=1000)
+    device_limit: Optional[int] = Field(default=None, ge=1, le=100)
+    offer_version: Optional[str] = Field(default=None, max_length=40)
+
+
+class FreeBlockRequest(BotUserRequest):
+    blocked: bool = True
+
+
+class FreeQuotaRequest(BaseModel):
+    kind: str = Field(pattern="^(PROJECT|SHORTS_SOURCE)$")
+    operation_key: str = Field(min_length=8, max_length=160)
+
+
+class FreeQuotaFinishRequest(BaseModel):
+    success: bool
+
+
+class FreeEventRequest(BotUserRequest):
+    event: str = Field(pattern="^(free_offer_opened|channel_link_clicked|membership_check_started|membership_check_failed)$")
+    result: str = Field(default="SUCCESS", max_length=40)
+    reason: str = Field(default="", max_length=80)
+
+
 class AdminPriceRequest(BaseModel):
     plan_code: str = "beta"
     provider: str = Field(default="fake", max_length=40)

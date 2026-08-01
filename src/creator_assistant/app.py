@@ -128,6 +128,15 @@ class ServiceContainer:
     def require_entitlement(self, feature: str) -> None:
         self.feature_gate.require(feature)
 
+    def acquire_free_quota(self, kind: str, operation_key: str) -> str:
+        service = getattr(self, "licensing", None)
+        return service.acquire_free_quota(kind, operation_key) if service else ""
+
+    def finish_free_quota(self, reservation_id: str, success: bool) -> None:
+        service = getattr(self, "licensing", None)
+        if service:
+            service.finish_free_quota(reservation_id, success)
+
     def rebuild(self) -> None:
         self.youtube_auth = YtDlpAuthContext.from_settings(self.settings)
         self.dependency_resolutions = self.detector.discover(self.settings)

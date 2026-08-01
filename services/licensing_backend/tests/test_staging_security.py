@@ -36,6 +36,7 @@ def test_staging_refuses_payments_and_placeholder_secrets(monkeypatch):
     monkeypatch.setenv("LICENSE_BOT_SERVICE_SECRET", "b" * 40)
     monkeypatch.setenv("LICENSE_ADMIN_TOKEN_HASH", "c" * 64)
     monkeypatch.setenv("LICENSE_PAYMENTS_ENABLED", "false")
+    monkeypatch.setenv("LICENSE_FREE_ACCESS_ENABLED", "false")
     assert load_settings().payments_enabled is False
     monkeypatch.setenv("LICENSE_PAYMENTS_ENABLED", "true")
     with pytest.raises(RuntimeError, match="Payments must remain disabled"):
@@ -43,6 +44,20 @@ def test_staging_refuses_payments_and_placeholder_secrets(monkeypatch):
     monkeypatch.setenv("LICENSE_PAYMENTS_ENABLED", "false")
     monkeypatch.setenv("LICENSE_ACTIVATION_PEPPER", "change-me-" + "a" * 32)
     with pytest.raises(RuntimeError, match="placeholder"):
+        load_settings()
+
+
+def test_staging_refuses_enabling_free_without_verified_numeric_channel(monkeypatch):
+    monkeypatch.setenv("LICENSE_ENV", "staging")
+    monkeypatch.setenv("LICENSE_DATABASE_URL", "postgresql+psycopg://user:pass@postgres/db")
+    monkeypatch.setenv("LICENSE_PUBLIC_BASE_URL", "https://api-staging.example.test")
+    monkeypatch.setenv("LICENSE_ACTIVATION_PEPPER", "a" * 40)
+    monkeypatch.setenv("LICENSE_BOT_SERVICE_SECRET", "b" * 40)
+    monkeypatch.setenv("LICENSE_ADMIN_TOKEN_HASH", "c" * 64)
+    monkeypatch.setenv("LICENSE_PAYMENTS_ENABLED", "false")
+    monkeypatch.setenv("LICENSE_FREE_ACCESS_ENABLED", "true")
+    monkeypatch.setenv("LICENSE_FREE_ACCESS_CHANNEL_CHAT_ID", "0")
+    with pytest.raises(RuntimeError, match="verified numeric channel"):
         load_settings()
 
 
@@ -61,3 +76,9 @@ def test_inline_and_file_signing_keys_are_mutually_exclusive(monkeypatch, tmp_pa
     monkeypatch.setenv("LICENSE_SIGNING_PRIVATE_KEY_FILE", str(secret_file))
     with pytest.raises(RuntimeError, match="cannot both be set"):
         load_settings()
+
+
+def test_free_channel_verifier_never_prints_bot_token():
+    script = (__import__("pathlib").Path(__file__).parents[3] / "deployment" / "staging" / "ops" / "verify-free-channel.py").read_text(encoding="utf-8")
+    assert "CREATOR_BOT_TOKEN" in script
+    assert "print(token" not in script and "json.dumps(token" not in script

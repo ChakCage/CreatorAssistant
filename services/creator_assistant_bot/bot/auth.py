@@ -13,6 +13,7 @@ BOT_PERMISSIONS = [
     "activation:create", "devices:write", "release:read",
     "notifications:read", "notifications:write", "beta:redeem",
     "support:write", "support:admin",
+    "free:read", "free:write", "free:admin",
 ]
 
 

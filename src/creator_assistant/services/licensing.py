@@ -334,6 +334,32 @@ class LicenseService:
         stored = self.storage.load(); result = self._request("GET", "/v1/licenses/devices", credential=str(stored.get("refresh_credential", "")))
         return list(result.get("devices", []))
 
+    def free_status(self) -> dict:
+        stored = self.storage.load()
+        return self._request("GET", "/v1/licenses/free/status", credential=str(stored.get("refresh_credential", "")))
+
+    def acquire_free_quota(self, kind: str, operation_key: str) -> str:
+        if self.status().plan != "free_channel":
+            return ""
+        stored = self.storage.load()
+        try:
+            result = self._request("POST", "/v1/licenses/free/quotas/acquire", {
+                "kind": kind, "operation_key": operation_key,
+            }, str(stored.get("refresh_credential", "")), timeout=30)
+        except LicenseClientError as exc:
+            if exc.code == "FREE_QUOTA_NOT_REQUIRED":
+                return ""
+            raise
+        return str(result.get("reservation_id") or "")
+
+    def finish_free_quota(self, reservation_id: str, success: bool) -> None:
+        if not reservation_id:
+            return
+        stored = self.storage.load()
+        self._request("POST", f"/v1/licenses/free/quotas/{reservation_id}/finish", {
+            "success": bool(success),
+        }, str(stored.get("refresh_credential", "")), timeout=30)
+
     def deactivate_device(self, device_id: str) -> None:
         stored = self.storage.load(); self._request("POST", f"/v1/licenses/devices/{device_id}/deactivate", {"reason": "user_request"}, str(stored.get("refresh_credential", "")))
         if device_id == str((stored.get("device") or {}).get("id", "")): self.storage.clear()
@@ -372,4 +398,7 @@ def _friendly_error(code: str) -> str:
         "DEVICE_LIMIT_REACHED": "Достигнут лимит устройств. Отключите старое устройство",
         "DEVICE_REVOKED": "Это устройство отключено или заблокировано",
         "REFRESH_SESSION_INVALID": "Сеанс лицензии отозван. Выполните активацию снова",
+        "FREE_ACCESS_INACTIVE": "Бесплатный доступ приостановлен. Подтвердите подписку на канал в Telegram-боте",
+        "FREE_QUOTA_EXHAUSTED": "Лимит бесплатного тарифа исчерпан",
+        "FREE_MEMBERSHIP_RECHECK_REQUIRED": "Повторно подтвердите подписку на канал в Telegram-боте",
     }.get(code, "Сервер лицензий отклонил запрос")

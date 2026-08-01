@@ -34,6 +34,25 @@ class BackendClient:
         return await self._request("POST", "/v1/bot/beta/redeem", json={
             "telegram_user_id": str(telegram_user_id), "invite_code": invite_code,
         })
+    async def free_config(self): return await self._request("GET", "/v1/bot/free/config")
+    async def free_status(self, telegram_user_id: int):
+        return await self._request("GET", f"/v1/bot/free/status/{telegram_user_id}")
+    async def free_membership(self, telegram_user_id: int, status: str, is_member: bool | None = None):
+        return await self._request("POST", "/v1/bot/free/membership", json={
+            "telegram_user_id": str(telegram_user_id), "status": status, "is_member": is_member,
+        })
+    async def free_event(self, telegram_user_id: int, event: str, result: str = "SUCCESS", reason: str = ""):
+        return await self._request("POST", "/v1/bot/free/events", json={
+            "telegram_user_id": str(telegram_user_id), "event": event, "result": result, "reason": reason,
+        })
+    async def free_admin_entitlements(self, admin_id: int):
+        return await self._request("GET", "/v1/bot/free/admin/entitlements", params={"telegram_user_id": str(admin_id)})
+    async def free_admin_config(self, admin_id: int, values: dict):
+        return await self._request("POST", "/v1/bot/free/admin/config", json={"telegram_user_id": str(admin_id), **values})
+    async def free_admin_block(self, admin_id: int, entitlement_id: str, blocked: bool):
+        return await self._request("POST", f"/v1/bot/free/admin/entitlements/{entitlement_id}/block", json={
+            "telegram_user_id": str(admin_id), "blocked": blocked,
+        })
     async def create_checkout(self, telegram_user_id: int, plan_id: str, price_id: str, idempotency_key: str):
         return await self._request("POST", "/v1/billing/checkout", json={
             "telegram_user_id": str(telegram_user_id), "plan_id": plan_id,

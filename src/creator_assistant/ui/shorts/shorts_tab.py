@@ -702,6 +702,13 @@ class ShortsTab(QWidget):
             return
         if not self._require_paid("shorts_analysis"):
             return
+        quota_key = hashlib.sha256(f"shorts-source:{self.source.fingerprint}".encode("utf-8")).hexdigest()
+        try:
+            acquire_quota = getattr(self.container, "acquire_free_quota", None)
+            self._free_quota_reservation = acquire_quota("SHORTS_SOURCE", quota_key) if acquire_quota else ""
+        except Exception as exc:
+            QMessageBox.warning(self, "Бесплатный тариф", str(exc))
+            return
         self.candidate_editor.release_media()
         self._token = CancellationToken()
         capabilities = self.container.shorts_transcription_backend.capabilities()
@@ -740,6 +747,12 @@ class ShortsTab(QWidget):
 
     @Slot(object)
     def _analysis_finished(self, payload) -> None:
+        try:
+            finish_quota = getattr(self.container, "finish_free_quota", None)
+            if finish_quota: finish_quota(getattr(self, "_free_quota_reservation", ""), True)
+        except Exception as exc:
+            self.progress_panel.update_state("Анализ готов", "Сервер не подтвердил расход квоты: " + str(exc), 92)
+        self._free_quota_reservation = ""
         candidates = payload["candidates"]
         self.transcript = payload["transcript"]
         tails_changed = self._align_candidate_tails(candidates)
@@ -1252,6 +1265,12 @@ class ShortsTab(QWidget):
 
     @Slot()
     def _analysis_cancelled(self) -> None:
+        try:
+            finish_quota = getattr(self.container, "finish_free_quota", None)
+            if finish_quota: finish_quota(getattr(self, "_free_quota_reservation", ""), False)
+        except Exception:
+            pass
+        self._free_quota_reservation = ""
         self.progress_panel.update_state("Анализ отменён", "Готовые этапы сохранены. Можно нажать «Запустить анализ» и продолжить.", self.progress_panel.progress.value())
 
     @Slot()
@@ -1357,6 +1376,12 @@ class ShortsTab(QWidget):
 
     @Slot(str, str)
     def _probe_failed(self, message: str, details: str) -> None:
+        try:
+            finish_quota = getattr(self.container, "finish_free_quota", None)
+            if finish_quota: finish_quota(getattr(self, "_free_quota_reservation", ""), False)
+        except Exception:
+            pass
+        self._free_quota_reservation = ""
         self.progress_panel.update_state("Ошибка проверки", message, 0)
         ErrorDialog(message, details, self).exec()
 

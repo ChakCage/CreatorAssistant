@@ -240,9 +240,7 @@ class BillingService:
         user = db.scalar(select(User).where(User.telegram_user_id == telegram_user_id))
         if not user:
             return {"status": "NONE", "devices": []}
-        sub = db.scalar(select(Subscription).where(
-            Subscription.user_id == user.id,
-        ).order_by(Subscription.expires_at.desc()))
+        sub = self._preferred_subscription(db, user.id, active_only=False)
         if not sub:
             return {"status": "NONE", "devices": []}
         devices = db.scalars(select(Device).where(Device.subscription_id == sub.id)).all()
@@ -257,10 +255,7 @@ class BillingService:
         user = db.scalar(select(User).where(User.telegram_user_id == telegram_user_id))
         if not user:
             raise LicenseError("USER_NOT_FOUND", 404)
-        sub = db.scalar(select(Subscription).where(
-            Subscription.user_id == user.id,
-            Subscription.status.in_([SubscriptionStatus.ACTIVE, SubscriptionStatus.GRACE]),
-        ).order_by(Subscription.expires_at.desc()))
+        sub = self._preferred_subscription(db, user.id, active_only=True)
         if not sub or aware(sub.expires_at) <= utcnow():
             raise LicenseError("SUBSCRIPTION_INACTIVE", 409)
         db.execute(update(ActivationCode).where(
@@ -270,6 +265,15 @@ class BillingService:
         code = self.manager.new_code(db, sub, 30)
         self.manager.audit(db, "BOT_ACTIVATION_CODE", "SUCCESS", user_id=user.id, subscription_id=sub.id)
         return {"activation_code": code, "expires_in_minutes": 30}
+
+    @staticmethod
+    def _preferred_subscription(db: Session, user_id: str, *, active_only: bool) -> Subscription | None:
+        statement = select(Subscription).where(Subscription.user_id == user_id)
+        if active_only:
+            statement = statement.where(Subscription.status.in_([SubscriptionStatus.ACTIVE, SubscriptionStatus.GRACE]))
+        rows = db.scalars(statement.order_by(Subscription.expires_at.desc())).all()
+        # A paid/beta subscription always wins over the long-lived FREE carrier subscription.
+        return next((row for row in rows if row.plan.code != "free_channel"), rows[0] if rows else None)
 
     def deactivate_device(self, db: Session, telegram_user_id: str, device_id: str, confirmed: bool) -> dict:
         if not confirmed:

@@ -34,6 +34,7 @@ class LicenseDialog(QDialog):
             button = QPushButton(text); button.clicked.connect(callback); actions.addWidget(button)
         layout.addLayout(actions)
         links = QHBoxLayout(); telegram = QPushButton("Получить код в Telegram"); purchase = QPushButton("Купить или продлить подписку"); open_bot = QPushButton("Открыть Telegram-бота"); support = QPushButton("Открыть поддержку")
+        free_access = QPushButton("Попробовать бесплатно")
         bot_url = current_build_info().telegram_bot_url
         telegram.setEnabled(bool(bot_url)); purchase.setEnabled(bool(bot_url)); open_bot.setEnabled(bool(bot_url))
         telegram.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(bot_url + "?start=activation")))
@@ -41,16 +42,27 @@ class LicenseDialog(QDialog):
         open_bot.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(bot_url)))
         support.setEnabled(bool(bot_url))
         support.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(bot_url + "?start=support")))
-        links.addWidget(telegram); links.addWidget(purchase); links.addWidget(open_bot); links.addWidget(support); links.addStretch(1); layout.addLayout(links)
+        free_access.setEnabled(bool(bot_url)); free_access.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(bot_url + "?start=free")))
+        links.addWidget(free_access); links.addWidget(telegram); links.addWidget(purchase); links.addWidget(open_bot); links.addWidget(support); links.addStretch(1); layout.addLayout(links)
         self.devices = QTableWidget(0, 4); self.devices.setHorizontalHeaderLabels(("Устройство", "Статус", "Первый вход", "Последняя проверка")); layout.addWidget(self.devices, 1)
         self.technical = QLabel(); self.technical.setWordWrap(True); self.technical.setTextInteractionFlags(self.technical.textInteractionFlags()); layout.addWidget(self.technical)
         close = QPushButton("Закрыть"); close.clicked.connect(self.accept); layout.addWidget(close); self.update_status()
 
     def update_status(self) -> None:
         value = self.service.status(); state = value.state.value if hasattr(value.state, "value") else str(value.state)
+        free_text = ""
+        if value.plan == "free_channel" and value.active:
+            try:
+                free = self.service.free_status()
+                projects, shorts, devices = free.get("projects", {}), free.get("shorts_sources", {}), free.get("devices", {})
+                free_text = (f"\nFREE-квоты (сервер): проекты {projects.get('used', 0)} из {projects.get('limit', 0)}; "
+                             f"Shorts-источники {shorts.get('used', 0)} из {shorts.get('limit', 0)}; "
+                             f"устройства {devices.get('used', 0)} из {devices.get('limit', 0)}")
+            except Exception as exc:
+                free_text = "\nFREE-квоты временно не синхронизированы: " + str(exc)
         self.status_label.setText(f"Статус: {state}\nТариф: {value.plan or '—'}\nОкончание: {value.expires_at or '—'}\n"
                                   f"Следующая проверка: раз в 24 часа\nOffline до: {value.offline_grace_until or '—'}\n"
-                                  f"Последняя синхронизация: {value.last_refresh or '—'}\n{value.message}")
+                                  f"Последняя синхронизация: {value.last_refresh or '—'}{free_text}\n{value.message}")
         self.technical.setText(self.service.last_diagnostics.safe_text())
 
     def _error(self, exc: Exception) -> None:

@@ -29,6 +29,16 @@ class Settings:
     webhook_max_bytes: int
     checkout_ttl_minutes: int
     payments_enabled: bool
+    free_access_enabled: bool
+    free_access_channel_chat_id: int
+    free_access_channel_title: str
+    free_access_channel_invite_url: str
+    free_access_recheck_enabled: bool
+    free_access_project_limit: int
+    free_access_shorts_source_limit: int
+    free_access_device_limit: int
+    free_access_offer_version: str
+    free_access_admin_telegram_id: int
 
     @property
     def production(self) -> bool:
@@ -61,6 +71,10 @@ def load_settings() -> Settings:
     fake_payment_secret = os.getenv("LICENSE_FAKE_PAYMENT_SECRET", "")
     bot_service_secret = os.getenv("LICENSE_BOT_SERVICE_SECRET", "")
     payments_enabled = os.getenv("LICENSE_PAYMENTS_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
+    free_access_enabled = os.getenv("LICENSE_FREE_ACCESS_ENABLED", "true").strip().lower() in {"1", "true", "yes"}
+    free_channel_chat_id = int(os.getenv("LICENSE_FREE_ACCESS_CHANNEL_CHAT_ID", "0"))
+    free_channel_title = os.getenv("LICENSE_FREE_ACCESS_CHANNEL_TITLE", "Чак").strip()
+    free_channel_invite_url = os.getenv("LICENSE_FREE_ACCESS_CHANNEL_INVITE_URL", "https://t.me/+SZ9UVmrWHkNhMjhi").strip()
     if environment in {"production", "staging"}:
         if not database_url.startswith("postgresql+"):
             raise RuntimeError("Production/staging licensing backend requires PostgreSQL")
@@ -76,6 +90,8 @@ def load_settings() -> Settings:
             raise RuntimeError("Production/staging refuses placeholder secrets")
         if environment == "staging" and payments_enabled:
             raise RuntimeError("Payments must remain disabled in staging")
+        if free_access_enabled and (free_channel_chat_id >= 0 or not free_channel_title or not free_channel_invite_url.startswith("https://t.me/")):
+            raise RuntimeError("Enabled FREE access requires a verified numeric channel chat_id, title and Telegram invite URL")
     else:
         # Ephemeral values are safe for one-process local/test use only and are never persisted.
         pepper = pepper or secrets.token_urlsafe(32)
@@ -100,6 +116,16 @@ def load_settings() -> Settings:
         webhook_max_bytes=int(os.getenv("LICENSE_WEBHOOK_MAX_BYTES", "262144")),
         checkout_ttl_minutes=int(os.getenv("LICENSE_CHECKOUT_TTL_MINUTES", "30")),
         payments_enabled=payments_enabled,
+        free_access_enabled=free_access_enabled,
+        free_access_channel_chat_id=free_channel_chat_id,
+        free_access_channel_title=free_channel_title,
+        free_access_channel_invite_url=free_channel_invite_url,
+        free_access_recheck_enabled=os.getenv("LICENSE_FREE_ACCESS_RECHECK_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
+        free_access_project_limit=int(os.getenv("LICENSE_FREE_ACCESS_PROJECT_LIMIT", "2")),
+        free_access_shorts_source_limit=int(os.getenv("LICENSE_FREE_ACCESS_SHORTS_SOURCE_LIMIT", "2")),
+        free_access_device_limit=int(os.getenv("LICENSE_FREE_ACCESS_DEVICE_LIMIT", "1")),
+        free_access_offer_version=os.getenv("LICENSE_FREE_ACCESS_OFFER_VERSION", "1").strip(),
+        free_access_admin_telegram_id=int(os.getenv("LICENSE_FREE_ACCESS_ADMIN_TELEGRAM_ID", "421403653")),
     )
 
 

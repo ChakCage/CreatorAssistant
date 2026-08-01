@@ -169,3 +169,27 @@ def test_timeout_is_distinct_from_other_transport_failures():
         service._request("GET", "/health", timeout=8)
     assert caught.value.code == "REQUEST_TIMEOUT"
     assert service.last_diagnostics.timeout_seconds == 8
+
+
+def test_free_quota_client_uses_server_reservation_and_finish(monkeypatch):
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc); service, _, _ = service_at(now)
+    service.storage.save({"refresh_credential": "r" * 64})
+    service.status = lambda: type("Status", (), {"plan": "free_channel"})()
+    calls = []
+    def request(method, path, payload=None, credential="", timeout=20):
+        calls.append((method, path, payload, credential))
+        return {"reservation_id": "reservation-1", "status": "RESERVED"}
+    monkeypatch.setattr(service, "_request", request)
+    reservation = service.acquire_free_quota("PROJECT", "operation-key-123")
+    service.finish_free_quota(reservation, True)
+    assert reservation == "reservation-1"
+    assert calls[0][1] == "/v1/licenses/free/quotas/acquire"
+    assert calls[1][1] == "/v1/licenses/free/quotas/reservation-1/finish"
+    assert calls[1][2] == {"success": True}
+
+
+def test_paid_client_does_not_contact_free_quota_endpoint(monkeypatch):
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc); service, _, _ = service_at(now)
+    service.status = lambda: type("Status", (), {"plan": "beta"})()
+    monkeypatch.setattr(service, "_request", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("network called")))
+    assert service.acquire_free_quota("PROJECT", "operation-key-123") == ""

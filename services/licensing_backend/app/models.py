@@ -31,6 +31,20 @@ class PaymentEventStatus(str, enum.Enum): RECEIVED = "RECEIVED"; PROCESSED = "PR
 class NotificationStatus(str, enum.Enum): PENDING = "PENDING"; PROCESSING = "PROCESSING"; SENT = "SENT"; FAILED = "FAILED"; CANCELLED = "CANCELLED"
 class PaymentPurpose(str, enum.Enum): DIRECT_SUBSCRIPTION_PURCHASE = "DIRECT_SUBSCRIPTION_PURCHASE"
 class SupportTicketStatus(str, enum.Enum): OPEN = "OPEN"; CLOSED = "CLOSED"
+class FreeAccessState(str, enum.Enum):
+    ELIGIBLE = "ELIGIBLE"
+    ACTIVE = "ACTIVE"
+    PAUSED_UNSUBSCRIBED = "PAUSED_UNSUBSCRIBED"
+    EXHAUSTED = "EXHAUSTED"
+    BLOCKED = "BLOCKED"
+    CONVERTED_TO_PAID = "CONVERTED_TO_PAID"
+class FreeQuotaKind(str, enum.Enum):
+    PROJECT = "PROJECT"
+    SHORTS_SOURCE = "SHORTS_SOURCE"
+class FreeQuotaUseStatus(str, enum.Enum):
+    RESERVED = "RESERVED"
+    COMMITTED = "COMMITTED"
+    RELEASED = "RELEASED"
 
 
 class TimestampMixin:
@@ -319,6 +333,41 @@ class SupportBlock(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
     reason: Mapped[str] = mapped_column(String(300), default="spam")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ServerSetting(TimestampMixin, Base):
+    __tablename__ = "server_settings"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class FreeEntitlement(TimestampMixin, Base):
+    __tablename__ = "free_entitlements"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+    subscription_id: Mapped[Optional[str]] = mapped_column(ForeignKey("subscriptions.id"), unique=True)
+    state: Mapped[FreeAccessState] = mapped_column(Enum(FreeAccessState), default=FreeAccessState.ELIGIBLE, index=True)
+    free_granted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    free_offer_version: Mapped[str] = mapped_column(String(40), default="1")
+    projects_limit: Mapped[int] = mapped_column(Integer, default=2)
+    projects_used: Mapped[int] = mapped_column(Integer, default=0)
+    shorts_sources_limit: Mapped[int] = mapped_column(Integer, default=2)
+    shorts_sources_used: Mapped[int] = mapped_column(Integer, default=0)
+    device_limit: Mapped[int] = mapped_column(Integer, default=1)
+    channel_membership_last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    channel_membership_last_status: Mapped[str] = mapped_column(String(40), default="")
+    user: Mapped[User] = relationship()
+
+
+class FreeQuotaUse(TimestampMixin, Base):
+    __tablename__ = "free_quota_uses"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    entitlement_id: Mapped[str] = mapped_column(ForeignKey("free_entitlements.id"), index=True)
+    kind: Mapped[FreeQuotaKind] = mapped_column(Enum(FreeQuotaKind), index=True)
+    operation_key: Mapped[str] = mapped_column(String(160))
+    status: Mapped[FreeQuotaUseStatus] = mapped_column(Enum(FreeQuotaUseStatus), default=FreeQuotaUseStatus.RESERVED, index=True)
+    committed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("entitlement_id", "kind", "operation_key", name="uq_free_quota_operation"),)
 
 
 Index("ix_devices_active_subscription", Device.subscription_id, Device.status)

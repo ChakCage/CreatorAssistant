@@ -18,21 +18,23 @@ from .config import hash_admin_token, load_settings
 from .db import get_db
 from .billing import BillingService
 from .models import (ActivationCode, ActivationCodeStatus, AdminAction, BotNotification, Device, DeviceStatus,
-                     LicenseEvent, LicenseSession, Plan, Price, Release, SessionStatus, Subscription,
+                     FreeEntitlement, FreeQuotaKind, LicenseEvent, LicenseSession, Plan, Price, Release, SessionStatus, Subscription,
                      SubscriptionStatus, SupportBlock, SupportTicket, SupportTicketStatus, User, UserStatus, utcnow)
 from .rate_limit import RateLimiter
 from .schemas import (ActivateRequest, AdminCodeRequest, AdminGrantRequest, AdminPriceRequest,
                       AdminReleaseRequest, AdminUserRequest, BetaRedeemRequest, BotDeviceRequest, BotUserRequest,
                       CheckoutRequest, DeactivateRequest, NotificationResultRequest,
-                      RefreshRequest, SupportTicketActionRequest, SupportTicketCreateRequest, TelegramUserRequest)
+                      FreeBlockRequest, FreeConfigUpdateRequest, FreeEventRequest, FreeMembershipRequest, FreeQuotaFinishRequest,
+                      FreeQuotaRequest, RefreshRequest, SupportTicketActionRequest, SupportTicketCreateRequest, TelegramUserRequest)
 from .security import verify_service_token
 from .service import LicenseError, LicenseManager, aware, iso
 from .release_signing import release_manifest
 from .beta_access import BetaAccessService
 from .redaction import SecretRedactionFilter
+from .free_access import FreeAccessService
 
 
-settings = load_settings(); manager = LicenseManager(settings); billing = BillingService(settings, manager); beta_access = BetaAccessService(manager); limiter = RateLimiter(settings.redis_url)
+settings = load_settings(); manager = LicenseManager(settings); billing = BillingService(settings, manager); beta_access = BetaAccessService(manager); free_access = FreeAccessService(settings, manager); limiter = RateLimiter(settings.redis_url)
 app = FastAPI(title="Creator Assistant Licensing", version="1.0.0")
 audit_log = logging.getLogger("creator_assistant.requests")
 audit_log.addFilter(SecretRedactionFilter())
@@ -93,6 +95,11 @@ def require_service(permission: str):
     return dependency
 
 
+def require_free_admin(telegram_user_id: str) -> None:
+    if str(settings.free_access_admin_telegram_id) != str(telegram_user_id):
+        raise LicenseError("FREE_ADMIN_FORBIDDEN", 403)
+
+
 @app.get("/health")
 def health(): return {"status": "ok"}
 
@@ -150,7 +157,10 @@ def activate(value: ActivateRequest, request: Request, db: Session = Depends(get
     key = f"activate:{client_ip(request)}:{value.installation_id[:16]}:{code_key}"
     if not limiter.allow(key, 12, 300): raise LicenseError("TOO_MANY_ATTEMPTS", 429)
     try:
-        result = manager.activate(db, value, ip=client_ip(request), user_agent=request.headers.get("user-agent", "")); db.commit(); return result
+        result = manager.activate(db, value, ip=client_ip(request), user_agent=request.headers.get("user-agent", ""))
+        if (result.get("subscription") or {}).get("plan") == "free_channel":
+            manager.audit(db, "FREE_DESKTOP_ACTIVATED", "SUCCESS", subscription_id=result["subscription"].get("id"))
+        db.commit(); return result
     except Exception:
         db.commit(); raise
 
@@ -340,6 +350,85 @@ def bot_beta_redeem(value: BetaRedeemRequest, _identity: dict = Depends(require_
     subscription = beta_access.redeem(db, value.telegram_user_id, value.invite_code)
     db.commit()
     return {"status": subscription.status.value, "expires_at": iso(subscription.expires_at)}
+
+
+@app.get("/v1/bot/free/config")
+def bot_free_config(_identity: dict = Depends(require_service("free:read")), db: Session = Depends(get_db)):
+    return free_access.config(db)
+
+
+@app.get("/v1/bot/free/status/{telegram_user_id}")
+def bot_free_status(telegram_user_id: str, _identity: dict = Depends(require_service("free:read")),
+                    db: Session = Depends(get_db)):
+    user = db.scalar(select(User).where(User.telegram_user_id == telegram_user_id))
+    if not user:
+        return {"state": "ELIGIBLE", "granted": False, "config": free_access.config(db)}
+    return free_access.payload(db, user)
+
+
+@app.post("/v1/bot/free/membership")
+def bot_free_membership(value: FreeMembershipRequest, request: Request,
+                        _identity: dict = Depends(require_service("free:write")), db: Session = Depends(get_db)):
+    if not limiter.allow(f"free-membership:{value.telegram_user_id}:{client_ip(request)}", 6, 300):
+        raise LicenseError("FREE_MEMBERSHIP_RATE_LIMIT", 429)
+    user = db.scalar(select(User).where(User.telegram_user_id == value.telegram_user_id))
+    if not user: raise LicenseError("USER_NOT_FOUND", 404)
+    row = free_access.membership_result(db, user, status=value.status, is_member=value.is_member)
+    db.commit()
+    return free_access.payload(db, user)
+
+
+@app.post("/v1/bot/free/events")
+def bot_free_event(value: FreeEventRequest, _identity: dict = Depends(require_service("free:write")),
+                   db: Session = Depends(get_db)):
+    user = db.scalar(select(User).where(User.telegram_user_id == value.telegram_user_id))
+    manager.audit(db, value.event.upper(), value.result.upper(), reason=value.reason.upper(),
+                  user_id=user.id if user else None)
+    db.commit(); return {"status": "RECORDED"}
+
+
+@app.get("/v1/bot/free/admin/entitlements")
+def bot_free_admin_list(telegram_user_id: str, _identity: dict = Depends(require_service("free:admin")),
+                        db: Session = Depends(get_db)):
+    require_free_admin(telegram_user_id)
+    rows = db.scalars(select(FreeEntitlement).order_by(FreeEntitlement.created_at.desc()).limit(200)).all()
+    return {"entitlements": [free_access.payload(db, row.user) for row in rows]}
+
+
+@app.post("/v1/bot/free/admin/config")
+def bot_free_admin_config(value: FreeConfigUpdateRequest,
+                          _identity: dict = Depends(require_service("free:admin")), db: Session = Depends(get_db)):
+    require_free_admin(value.telegram_user_id)
+    values = value.model_dump(exclude={"telegram_user_id"}, exclude_none=True)
+    result = free_access.update_config(db, values, "telegram-admin:" + value.telegram_user_id)
+    db.commit(); return result
+
+
+@app.post("/v1/bot/free/admin/entitlements/{entitlement_id}/block")
+def bot_free_admin_block(entitlement_id: str, value: FreeBlockRequest,
+                         _identity: dict = Depends(require_service("free:admin")), db: Session = Depends(get_db)):
+    require_free_admin(value.telegram_user_id)
+    row = free_access.set_blocked(db, entitlement_id, value.blocked, "telegram-admin:" + value.telegram_user_id)
+    db.commit(); return {"id": row.id, "state": row.state.value}
+
+
+@app.get("/v1/licenses/free/status")
+def license_free_status(session: LicenseSession = Depends(refresh_session), db: Session = Depends(get_db)):
+    return free_access.payload(db, session.device.user)
+
+
+@app.post("/v1/licenses/free/quotas/acquire")
+def license_free_quota_acquire(value: FreeQuotaRequest, session: LicenseSession = Depends(refresh_session),
+                               db: Session = Depends(get_db)):
+    row = free_access.acquire_quota(db, session.device.user_id, FreeQuotaKind(value.kind), value.operation_key)
+    db.commit(); return {"reservation_id": row.id, "status": row.status.value}
+
+
+@app.post("/v1/licenses/free/quotas/{reservation_id}/finish")
+def license_free_quota_finish(reservation_id: str, value: FreeQuotaFinishRequest,
+                              session: LicenseSession = Depends(refresh_session), db: Session = Depends(get_db)):
+    row = free_access.finish_quota(db, session.device.user_id, reservation_id, value.success)
+    db.commit(); return {"reservation_id": row.id, "status": row.status.value}
 
 
 @app.post("/v1/bot/devices/deactivate")

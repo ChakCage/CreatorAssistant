@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import hashlib
 import subprocess
 import re
 import time
@@ -1826,6 +1827,13 @@ class ProjectPrepTab(QWidget):
             if new_project_path.exists():
                 self._detect_existing_project(self.metadata.video_id)
                 return
+        quota_key = hashlib.sha256(f"project:{self.metadata.video_id}".encode("utf-8")).hexdigest()
+        try:
+            acquire_quota = getattr(self.container, "acquire_free_quota", None)
+            self._free_quota_reservation = acquire_quota("PROJECT", quota_key) if acquire_quota else ""
+        except Exception as exc:
+            QMessageBox.warning(self, "Бесплатный тариф", str(exc))
+            return
         self._job_generation += 1
         self.active_job_id = uuid.uuid4().hex
         options.job_id = self.active_job_id
@@ -2150,6 +2158,12 @@ class ProjectPrepTab(QWidget):
         self._last_painted_stage = ""
 
     def _project_ready(self, result) -> None:
+        try:
+            finish_quota = getattr(self.container, "finish_free_quota", None)
+            if finish_quota: finish_quota(getattr(self, "_free_quota_reservation", ""), True)
+        except Exception as exc:
+            self.log.appendPlainText("Проект готов, но сервер не подтвердил квоту: " + str(exc))
+        self._free_quota_reservation = ""
         self.token = None
         self._set_job_state(UiJobState.COMPLETED)
         self._set_busy(False)
@@ -2188,6 +2202,12 @@ class ProjectPrepTab(QWidget):
         QMessageBox.information(self, "Creator Assistant", f"Проект готов:\n{path}")
 
     def _task_failed(self, message: str, details: str) -> None:
+        try:
+            finish_quota = getattr(self.container, "finish_free_quota", None)
+            if finish_quota: finish_quota(getattr(self, "_free_quota_reservation", ""), False)
+        except Exception:
+            pass
+        self._free_quota_reservation = ""
         cancelled = bool(self.token and self.token.is_cancelled)
         self.token = None
         self._set_job_state(UiJobState.CANCELLED if cancelled else UiJobState.FAILED)
