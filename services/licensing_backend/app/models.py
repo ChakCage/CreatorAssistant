@@ -347,6 +347,7 @@ class SupportTicket(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    closed_by_telegram_id: Mapped[Optional[str]] = mapped_column(String(64))
 
 
 class SupportBlock(Base):

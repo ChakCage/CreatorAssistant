@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from .config import BotSettings
@@ -103,16 +104,24 @@ async def set_topic_closed(bot, settings: BotSettings, ticket: dict, *, closed: 
     thread_id = int(ticket.get("forum_message_thread_id") or 0)
     if not thread_id:
         return
+    async def tolerate_idempotent(call) -> None:
+        try:
+            await call
+        except TelegramBadRequest as exc:
+            message = str(exc).upper()
+            if not any(code in message for code in ("TOPIC_NOT_MODIFIED", "TOPIC_CLOSED", "TOPIC_NOT_CLOSED")):
+                raise
+
     if closed:
-        await bot.edit_forum_topic(
+        await tolerate_idempotent(bot.edit_forum_topic(
             settings.support_forum_chat_id, thread_id, name=topic_name(ticket, closed=True)
-        )
-        await bot.close_forum_topic(settings.support_forum_chat_id, thread_id)
+        ))
+        await tolerate_idempotent(bot.close_forum_topic(settings.support_forum_chat_id, thread_id))
     else:
-        await bot.reopen_forum_topic(settings.support_forum_chat_id, thread_id)
-        await bot.edit_forum_topic(
+        await tolerate_idempotent(bot.reopen_forum_topic(settings.support_forum_chat_id, thread_id))
+        await tolerate_idempotent(bot.edit_forum_topic(
             settings.support_forum_chat_id, thread_id, name=topic_name(ticket, closed=False)
-        )
+        ))
 
 
 async def relay_user_message(bot, settings: BotSettings, ticket: dict, message: dict) -> int | None:

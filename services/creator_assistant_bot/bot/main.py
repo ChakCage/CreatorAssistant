@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
@@ -23,6 +24,8 @@ from .support_forum import (
     topic_idempotency_key,
     topic_name,
     validate_forum,
+    set_topic_closed,
+    ticket_keyboard,
 )
 from .support_dashboard import upsert_dashboard
 
@@ -159,6 +162,35 @@ async def deliver_notification(
         if message.get("forum_message_id"):
             return
         await relay_to_forum_with_recovery(bot, backend, forum_settings, admin_telegram_id, ticket, message)
+        return
+    if notification_type in {"SUPPORT_TICKET_CLOSED", "SUPPORT_TICKET_REOPENED"}:
+        ticket_id = str((item.get("payload") or {}).get("ticket_id") or "")
+        ticket = await backend.support_ticket(ticket_id)
+        if not mock:
+            if notification_type == "SUPPORT_TICKET_CLOSED":
+                text = (
+                    f"Обращение {ticket['number']} закрыто.\n"
+                    "Если проблема осталась, откройте новое обращение через раздел «Поддержка»."
+                )
+            else:
+                text = f"Обращение {ticket['number']} переоткрыто.\nСтатус: ожидает ответа поддержки."
+            await bot.send_message(int(ticket["telegram_user_id"]), text)
+        return
+    if notification_type in {"SUPPORT_FORUM_TICKET_CLOSED", "SUPPORT_FORUM_TICKET_REOPENED"}:
+        if not forum_settings or not forum_settings.support_forum_enabled:
+            return
+        ticket_id = str((item.get("payload") or {}).get("ticket_id") or "")
+        ticket = await backend.support_ticket(ticket_id)
+        closed = notification_type == "SUPPORT_FORUM_TICKET_CLOSED"
+        if not mock:
+            if ticket.get("forum_initial_message_id"):
+                with contextlib.suppress(TelegramBadRequest):
+                    await bot.edit_message_reply_markup(
+                        chat_id=forum_settings.support_forum_chat_id,
+                        message_id=int(ticket["forum_initial_message_id"]),
+                        reply_markup=ticket_keyboard(str(ticket["id"]), closed=closed),
+                    )
+            await set_topic_closed(bot, forum_settings, ticket, closed=closed)
         return
     if not mock:
         await bot.send_message(

@@ -187,7 +187,7 @@ def close_confirmation_view(ticket: dict) -> tuple[str, InlineKeyboardMarkup]:
         f"Закрыть обращение {ticket['number']}?",
         InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="✅ Да, закрыть", callback_data=f"support_close:{ticket_id}"),
-            InlineKeyboardButton(text="Отмена", callback_data="support_action_cancel"),
+            InlineKeyboardButton(text="Отмена", callback_data=f"support_action_cancel:{ticket_id}"),
         ]]),
     )
 
@@ -202,7 +202,7 @@ def block_confirmation_view(ticket: dict, owner_telegram_id: int) -> tuple[str, 
         "Это не отключит его лицензию.",
         InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="🚫 Заблокировать", callback_data=f"support_block:{ticket_id}"),
-            InlineKeyboardButton(text="Отмена", callback_data="support_action_cancel"),
+            InlineKeyboardButton(text="Отмена", callback_data=f"support_action_cancel:{ticket_id}"),
         ]]),
     )
 
@@ -216,6 +216,96 @@ async def apply_support_category_selection(state: FSMContext, callback_data: obj
 
 def is_admin_user(settings: BotSettings, user_id: int) -> bool:
     return bool(settings.admin_telegram_id and user_id == settings.admin_telegram_id)
+
+
+async def handle_support_close_callback(
+        callback: CallbackQuery, backend: BackendClient, settings: BotSettings) -> None:
+    """Acknowledge first and leave all external side effects to durable outbox jobs."""
+    if not is_admin_user(settings, callback.from_user.id):
+        log_support_callback(callback, "forbidden")
+        await callback.answer("Недоступно", show_alert=True)
+        return
+    parts = str(callback.data or "").split(":", 1)
+    if len(parts) != 2 or parts[0] != "support_close" or not parts[1]:
+        log_support_callback(callback, "invalid")
+        await callback.answer("Кнопка устарела. Откройте обращение заново.", show_alert=True)
+        return
+    ticket_id = parts[1]
+    log_support_callback(callback, "accepted")
+    # Never leave Telegram's callback spinner waiting for API or forum operations.
+    await callback.answer("Закрываю…")
+    if callback.message is None:
+        log_support_callback(callback, "message-unavailable")
+        return
+    try:
+        before = await backend.support_ticket(ticket_id)
+        if str(before.get("status")) == "CLOSED":
+            await callback.message.edit_text(
+                f"Обращение {before['number']} уже закрыто.",
+                reply_markup=ticket_keyboard(ticket_id, closed=True),
+            )
+            log_support_callback(callback, "already-closed")
+            return
+        ticket = await backend.close_support_ticket(callback.from_user.id, ticket_id)
+        await callback.message.edit_text(
+            f"Обращение {ticket['number']} закрыто.",
+            reply_markup=ticket_keyboard(ticket_id, closed=True),
+        )
+        log_support_callback(callback, "closed")
+    except Exception:
+        log_support_callback(callback, "failed")
+        LOGGER.exception(
+            "support_close_failed ticket_id=%s telegram_user_id=%s",
+            ticket_id, callback.from_user.id,
+        )
+        await callback.message.answer(
+            "Не удалось закрыть обращение. Ошибка записана в журнал; попробуйте ещё раз."
+        )
+
+
+async def handle_support_action_cancel_callback(
+        callback: CallbackQuery, backend: BackendClient, settings: BotSettings) -> None:
+    if not is_admin_user(settings, callback.from_user.id):
+        await callback.answer("Недоступно", show_alert=True)
+        return
+    await callback.answer("Отменено")
+    if callback.message is None:
+        return
+    parts = str(callback.data or "").split(":", 1)
+    if len(parts) != 2 or not parts[1]:
+        return
+    try:
+        ticket = await backend.support_ticket(parts[1])
+        closed = str(ticket.get("status")) == "CLOSED"
+        await callback.message.edit_text(
+            f"Действие отменено. Обращение {ticket['number']}.",
+            reply_markup=ticket_keyboard(str(ticket["id"]), closed=closed),
+        )
+    except Exception:
+        LOGGER.exception("support_action_cancel_failed ticket_id=%s", parts[1])
+
+
+async def handle_support_reopen_callback(
+        callback: CallbackQuery, backend: BackendClient, settings: BotSettings) -> None:
+    if not is_admin_user(settings, callback.from_user.id):
+        await callback.answer("Недоступно", show_alert=True)
+        return
+    parts = str(callback.data or "").split(":", 1)
+    if len(parts) != 2 or not parts[1]:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    await callback.answer("Переоткрываю…")
+    if callback.message is None:
+        return
+    try:
+        ticket = await backend.reopen_support_ticket(callback.from_user.id, parts[1])
+        await callback.message.edit_text(
+            f"Обращение {ticket['number']} переоткрыто.",
+            reply_markup=ticket_keyboard(parts[1], closed=False),
+        )
+    except Exception:
+        LOGGER.exception("support_reopen_failed ticket_id=%s", parts[1])
+        await callback.message.answer("Не удалось переоткрыть обращение. Ошибка записана в журнал.")
 
 
 async def telegram_membership_snapshot(bot, chat_id: int, user_id: int) -> tuple[str, bool | None, dict]:
@@ -828,24 +918,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
 
     @router.callback_query(F.data.startswith("support_close:"))
     async def support_close(callback: CallbackQuery):
-        if not admin_only(callback.from_user.id):
-            await callback.answer("Недоступно", show_alert=True)
-            return
-        ticket = await backend.close_support_ticket(callback.from_user.id, callback.data.split(":", 1)[1])
-        if settings.support_forum_enabled and callback.message.chat.id == settings.support_forum_chat_id:
-            if ticket.get("forum_initial_message_id"):
-                with contextlib.suppress(TelegramBadRequest):
-                    await callback.bot.edit_message_reply_markup(
-                        chat_id=settings.support_forum_chat_id,
-                        message_id=int(ticket["forum_initial_message_id"]),
-                        reply_markup=ticket_keyboard(str(ticket["id"]), closed=True),
-                    )
-            await set_topic_closed(callback.bot, settings, ticket, closed=True)
-        await callback.bot.send_message(
-            int(ticket["telegram_user_id"]),
-            f"Обращение {ticket['number']} закрыто.\nСтатус: закрыто.",
-        )
-        await callback.answer("Закрыто")
+        await handle_support_close_callback(callback, backend, settings)
 
     @router.callback_query(F.data.startswith("support_block:"))
     async def support_block(callback: CallbackQuery):
@@ -867,25 +940,13 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             await callback.answer("Основной аккаунт нельзя заблокировать.", show_alert=True); return
         await callback.message.answer(text, reply_markup=markup); await callback.answer()
 
-    @router.callback_query(F.data == "support_action_cancel")
+    @router.callback_query(F.data.startswith("support_action_cancel:"))
     async def support_action_cancel(callback: CallbackQuery):
-        await callback.answer("Отменено")
+        await handle_support_action_cancel_callback(callback, backend, settings)
 
     @router.callback_query(F.data.startswith("support_reopen:"))
     async def support_reopen(callback: CallbackQuery):
-        if not admin_only(callback.from_user.id):
-            await callback.answer("Недоступно", show_alert=True); return
-        ticket = await backend.reopen_support_ticket(callback.from_user.id, callback.data.split(":", 1)[1])
-        if settings.support_forum_enabled and callback.message.chat.id == settings.support_forum_chat_id:
-            await set_topic_closed(callback.bot, settings, ticket, closed=False)
-            if ticket.get("forum_initial_message_id"):
-                with contextlib.suppress(TelegramBadRequest):
-                    await callback.bot.edit_message_reply_markup(
-                        chat_id=settings.support_forum_chat_id,
-                        message_id=int(ticket["forum_initial_message_id"]),
-                        reply_markup=ticket_keyboard(str(ticket["id"]), closed=False),
-                    )
-        await callback.answer("Обращение переоткрыто")
+        await handle_support_reopen_callback(callback, backend, settings)
 
     @router.callback_query(F.data == "noop")
     async def noop(callback: CallbackQuery):

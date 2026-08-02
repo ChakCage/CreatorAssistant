@@ -11,6 +11,9 @@ from bot.handlers import (
     block_confirmation_view,
     close_confirmation_view,
     handle_support_admin_list_callback,
+    handle_support_action_cancel_callback,
+    handle_support_close_callback,
+    handle_support_reopen_callback,
     handle_unknown_callback,
     is_admin_user,
     parse_support_admin_list_callback,
@@ -215,10 +218,13 @@ def test_admin_ticket_callback_parser_validates_status_page_and_legacy_page_defa
 
 class CallbackMessage:
     def __init__(self):
-        self.message_id, self.date, self.answers = 77, "2026-08-01T20:00:00Z", []
+        self.message_id, self.date, self.answers, self.edits = 77, "2026-08-01T20:00:00Z", [], []
 
     async def answer(self, text, **kwargs):
         self.answers.append((text, kwargs))
+
+    async def edit_text(self, text, **kwargs):
+        self.edits.append((text, kwargs))
 
 
 class Callback:
@@ -297,6 +303,78 @@ async def test_unknown_callback_is_answered_without_crashing_bot_process():
     assert callback.answers == [("Кнопка устарела. Откройте меню заново.", {"show_alert": True})]
 
 
+class CloseBackend:
+    def __init__(self, status="WAITING_ADMIN", fail=False):
+        self.status, self.fail, self.closed = status, fail, []
+
+    async def support_ticket(self, ticket_id):
+        if self.fail:
+            raise RuntimeError("backend unavailable")
+        return {"id": ticket_id, "number": "CA-TEST", "status": self.status}
+
+    async def close_support_ticket(self, admin_id, ticket_id):
+        self.closed.append((admin_id, ticket_id))
+        return {"id": ticket_id, "number": "CA-TEST", "status": "CLOSED"}
+
+    async def reopen_support_ticket(self, admin_id, ticket_id):
+        return {"id": ticket_id, "number": "CA-TEST", "status": "WAITING_ADMIN"}
+
+
+@pytest.mark.asyncio
+async def test_close_callback_answers_before_backend_and_duplicate_is_noop():
+    settings = BotSettings(service_secret="x" * 32, admin_telegram_id=424403653)
+    callback = Callback(data="support_close:ticket-id")
+    backend = CloseBackend()
+    await handle_support_close_callback(callback, backend, settings)
+    assert callback.answers == [("Закрываю…", {})]
+    assert backend.closed == [(424403653, "ticket-id")]
+    assert "закрыто" in callback.message.edits[0][0]
+
+    duplicate = Callback(data="support_close:ticket-id")
+    backend = CloseBackend(status="CLOSED")
+    await handle_support_close_callback(duplicate, backend, settings)
+    assert duplicate.answers == [("Закрываю…", {})]
+    assert backend.closed == []
+    assert "уже закрыто" in duplicate.message.edits[0][0]
+
+
+@pytest.mark.asyncio
+async def test_close_callback_answers_on_failure_and_rejects_other_users():
+    settings = BotSettings(service_secret="x" * 32, admin_telegram_id=424403653)
+    failed = Callback(data="support_close:ticket-id")
+    await handle_support_close_callback(failed, CloseBackend(fail=True), settings)
+    assert failed.answers == [("Закрываю…", {})]
+    assert "Не удалось закрыть" in failed.message.answers[0][0]
+    for user_id in (421403653, 777):
+        forbidden = Callback(user_id=user_id, data="support_close:ticket-id")
+        await handle_support_close_callback(forbidden, CloseBackend(), settings)
+        assert forbidden.answers == [("Недоступно", {"show_alert": True})]
+
+
+@pytest.mark.asyncio
+async def test_close_cancel_restores_ticket_actions_without_transition():
+    settings = BotSettings(service_secret="x" * 32, admin_telegram_id=424403653)
+    callback = Callback(data="support_action_cancel:ticket-id")
+    backend = CloseBackend()
+    await handle_support_action_cancel_callback(callback, backend, settings)
+    assert callback.answers == [("Отменено", {})]
+    assert backend.closed == []
+    callbacks = [button.callback_data for row in callback.message.edits[0][1]["reply_markup"].inline_keyboard
+                 for button in row]
+    assert "support_close_confirm:ticket-id" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_reopen_callback_answers_immediately_and_restores_open_actions():
+    settings = BotSettings(service_secret="x" * 32, admin_telegram_id=424403653)
+    callback = Callback(data="support_reopen:ticket-id")
+    await handle_support_reopen_callback(callback, CloseBackend(status="CLOSED"), settings)
+    assert callback.answers == [("Переоткрываю…", {})]
+    callbacks = [button.callback_data for row in callback.message.edits[0][1]["reply_markup"].inline_keyboard
+                 for button in row]
+    assert "support_close_confirm:ticket-id" in callbacks
+
+
 @pytest.mark.asyncio
 async def test_notification_worker_receives_forum_settings(monkeypatch):
     import bot.worker as worker_module
@@ -348,6 +426,7 @@ class ForumBot:
     async def send_photo(self, chat_id, file_id, **kwargs): return type("Sent", (), {"message_id": 56})()
     async def send_document(self, chat_id, file_id, **kwargs): return type("Sent", (), {"message_id": 57})()
     async def edit_forum_topic(self, *args, **kwargs): self.calls.append(("edit", args, kwargs))
+    async def edit_message_reply_markup(self, *args, **kwargs): self.calls.append(("markup", args, kwargs))
     async def close_forum_topic(self, *args): self.calls.append(("close", args))
     async def reopen_forum_topic(self, *args): self.calls.append(("reopen", args))
 
@@ -406,3 +485,37 @@ async def test_notification_retry_reuses_linked_topic_instead_of_creating_duplic
                                mock=False, admin_telegram_id=424403653, forum_settings=settings)
     assert bot.created == 0
     assert len(backend.links) == 1
+
+
+@pytest.mark.asyncio
+async def test_close_outbox_notifies_user_and_updates_forum_card_and_topic():
+    class Backend:
+        async def support_ticket(self, ticket_id):
+            return {
+                "id": ticket_id, "number": "CA-TEST", "telegram_user_id": "42",
+                "status": "CLOSED", "forum_message_thread_id": 17,
+                "forum_initial_message_id": 55,
+            }
+
+    class Bot(ForumBot):
+        def __init__(self): super().__init__(); self.user_messages = []
+        async def send_message(self, chat_id, text, **kwargs):
+            self.user_messages.append((chat_id, text, kwargs))
+            return type("Sent", (), {"message_id": 56})()
+
+    settings = BotSettings(service_secret="x" * 32, support_forum_enabled=True,
+                           support_forum_chat_id=-1004450197049)
+    bot, backend = Bot(), Backend()
+    await deliver_notification(
+        bot, backend,
+        {"type": "SUPPORT_TICKET_CLOSED", "payload": {"ticket_id": "ticket-id"}},
+        mock=False, admin_telegram_id=424403653, forum_settings=settings,
+    )
+    assert len(bot.user_messages) == 1
+    assert bot.user_messages[0][0] == 42 and "CA-TEST закрыто" in bot.user_messages[0][1]
+    await deliver_notification(
+        bot, backend,
+        {"type": "SUPPORT_FORUM_TICKET_CLOSED", "payload": {"ticket_id": "ticket-id"}},
+        mock=False, admin_telegram_id=424403653, forum_settings=settings,
+    )
+    assert [item[0] for item in bot.calls] == ["markup", "edit", "close"]

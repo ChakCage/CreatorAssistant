@@ -494,11 +494,15 @@ def bot_notification_result(notification_id: str, value: NotificationResultReque
         message = db.get(SupportMessage, message_id) if message_id else None
         if message:
             message.delivery_status = "DELIVERED" if value.success else "FAILED"
-    if row.notification_type in {"SUPPORT_TICKET_CREATED", "SUPPORT_DASHBOARD_REFRESH", "SUPPORT_ADMIN_REPLY"}:
+    if row.notification_type.startswith("SUPPORT_"):
         ticket_id = str((row.payload or {}).get("ticket_id") or "")
+        admin_notification = row.notification_type in {
+            "SUPPORT_TICKET_CREATED", "SUPPORT_DASHBOARD_REFRESH", "SUPPORT_ADMIN_REPLY",
+        }
+        action_prefix = "support-admin-notification" if admin_notification else "support-notification"
         db.add(AdminAction(
             admin_id="system:telegram-notification-worker",
-            action="support-admin-notification-sent" if value.success else "support-admin-notification-failed",
+            action=action_prefix + ("-sent" if value.success else "-failed"),
             target_type="support-ticket", target_id=ticket_id,
             reason="" if value.success else str(value.error or "delivery failed")[:300],
             action_metadata={"notification_id": row.id, "attempts": row.attempts},

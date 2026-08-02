@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 from dataclasses import dataclass
 from math import ceil
 
@@ -71,6 +72,7 @@ def ticket_payload(row: SupportTicket, user: User | None = None, last_message: S
         "created_at": iso(row.created_at), "updated_at": iso(row.updated_at),
         "last_activity_at": iso(row.last_activity_at or row.updated_at),
         "closed_at": iso(row.closed_at) if row.closed_at else None,
+        "closed_by_telegram_id": row.closed_by_telegram_id,
     }
 
 
@@ -111,13 +113,29 @@ class SupportService:
         return row
 
     @staticmethod
-    def _queue_dashboard(db: Session, ticket: SupportTicket, event: str) -> None:
+    def _queue_once(db: Session, ticket: SupportTicket, notification_type: str,
+                    payload: dict, dedupe_key: str) -> None:
+        if db.scalar(select(BotNotification.id).where(BotNotification.dedupe_key == dedupe_key)):
+            return
+        db.add(BotNotification(
+            user_id=ticket.user_id,
+            telegram_user_id=ticket.telegram_user_id,
+            notification_type=notification_type,
+            payload=payload,
+            dedupe_key=dedupe_key,
+        ))
+
+    @classmethod
+    def _queue_dashboard(cls, db: Session, ticket: SupportTicket, event: str,
+                         transition_key: str | None = None) -> None:
         # One event per transition; the Telegram worker coalesces it into the
         # stored dashboard message instead of sending ticket contents as spam.
-        db.add(BotNotification(user_id=ticket.user_id, telegram_user_id=ticket.telegram_user_id,
-                               notification_type="SUPPORT_DASHBOARD_REFRESH",
-                               payload={"ticket_id": ticket.id, "event": event},
-                               dedupe_key=f"support-dashboard:{ticket.id}:{event}:{ticket.message_count}"))
+        suffix = transition_key or str(ticket.message_count)
+        cls._queue_once(
+            db, ticket, "SUPPORT_DASHBOARD_REFRESH",
+            {"ticket_id": ticket.id, "event": event},
+            f"support-dashboard:{ticket.id}:{event}:{suffix}",
+        )
 
     def add_user_message(self, db: Session, ticket_id: str, telegram_user_id: str, text: str,
                          attachment: dict | None = None, idempotency_key: str | None = None) -> SupportTicket:
@@ -177,13 +195,21 @@ class SupportService:
         return row, message
 
     def transition(self, db: Session, ticket_id: str, admin_id: str, action: str, reason: str = "") -> SupportTicket:
-        row = self._ticket(db, ticket_id)
+        row = db.scalar(select(SupportTicket).where(SupportTicket.id == ticket_id).with_for_update())
+        if not row:
+            raise LicenseError("SUPPORT_TICKET_NOT_FOUND", 404)
         old = str(row.status.value if hasattr(row.status, "value") else row.status)
         if action == "close":
+            if old == SupportTicketStatus.CLOSED.value:
+                return row
             row.status, row.closed_at = SupportTicketStatus.CLOSED.value, utcnow()
+            row.closed_by_telegram_id = str(admin_id)
             row.forum_topic_state = "CLOSED" if row.forum_message_thread_id else row.forum_topic_state
         elif action == "reopen":
+            if old == SupportTicketStatus.WAITING_ADMIN.value and row.closed_at is None:
+                return row
             row.status, row.closed_at = SupportTicketStatus.WAITING_ADMIN.value, None
+            row.closed_by_telegram_id = None
             row.forum_topic_state = "OPEN" if row.forum_message_thread_id else row.forum_topic_state
         elif action == "block":
             if row.telegram_user_id == str(admin_id):
@@ -201,9 +227,24 @@ class SupportService:
         else:
             raise LicenseError("INVALID_SUPPORT_ACTION", 422)
         row.last_activity_at = utcnow()
+        transition_key = uuid.uuid4().hex
         self._audit(db, "telegram-admin:" + str(admin_id), action + "-support-ticket", row,
-                    reason=reason, previous_status=old, new_status=str(row.status))
-        self._queue_dashboard(db, row, action)
+                    reason=reason, previous_status=old, new_status=str(row.status),
+                    transition_key=transition_key)
+        self._queue_dashboard(db, row, action, transition_key)
+        if action in {"close", "reopen"}:
+            result_name = "CLOSED" if action == "close" else "REOPENED"
+            self._queue_once(
+                db, row, f"SUPPORT_TICKET_{result_name}",
+                {"ticket_id": row.id, "transition_key": transition_key},
+                f"support-user:{row.id}:{action}:{transition_key}",
+            )
+            if row.forum_message_thread_id:
+                self._queue_once(
+                    db, row, f"SUPPORT_FORUM_TICKET_{result_name}",
+                    {"ticket_id": row.id, "transition_key": transition_key},
+                    f"support-forum:{row.id}:{action}:{transition_key}",
+                )
         return row
 
     def list(self, db: Session, status: str, page: int = 1, page_size: int = PAGE_SIZE,

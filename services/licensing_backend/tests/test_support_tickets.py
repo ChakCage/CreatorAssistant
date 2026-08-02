@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from sqlalchemy import select
 
 from app.api import settings
@@ -85,13 +87,134 @@ def test_support_ticket_lifecycle_and_audit_routes(client):
     )
     assert closed.json()["status"] == SupportTicketStatus.CLOSED.value
     with SessionLocal() as db:
-        assert db.get(SupportTicket, ticket["id"]).closed_at is not None
+        stored_ticket = db.get(SupportTicket, ticket["id"])
+        assert stored_ticket.closed_at is not None
+        assert stored_ticket.closed_by_telegram_id == "424403653"
         actions = set(db.scalars(select(AdminAction.action).where(
             AdminAction.target_id.in_([ticket["id"], db.get(SupportTicket, ticket["id"]).user_id]),
         )).all())
         assert {"create-support-ticket", "reply-support-ticket",
                 "close-support-ticket", "block-support-ticket"} <= actions
         assert len(db.scalars(select(SupportMessage).where(SupportMessage.ticket_id == ticket["id"])).all()) == 2
+
+
+def test_close_is_idempotent_and_queues_each_side_effect_once(client):
+    user("421400099")
+    ticket = client.post(
+        "/v1/bot/support/tickets", headers=headers("support:write"),
+        json={"telegram_user_id": "421400099", "category": "application", "message": "close me"},
+    ).json()
+    with SessionLocal() as db:
+        row = db.get(SupportTicket, ticket["id"])
+        row.forum_message_thread_id = 17
+        row.forum_chat_id = -1004450197049
+        db.commit()
+
+    endpoint = f"/v1/bot/support/tickets/{ticket['id']}/close"
+    first = client.post(endpoint, headers=headers("support:admin"), json={"telegram_user_id": "424403653"})
+    second = client.post(endpoint, headers=headers("support:admin"), json={"telegram_user_id": "424403653"})
+    assert first.status_code == second.status_code == 200
+    assert first.json()["status"] == second.json()["status"] == "CLOSED"
+
+    with SessionLocal() as db:
+        actions = db.scalars(select(AdminAction).where(
+            AdminAction.target_id == ticket["id"], AdminAction.action == "close-support-ticket",
+        )).all()
+        notifications = db.scalars(select(BotNotification).where(
+            BotNotification.payload["ticket_id"].as_string() == ticket["id"],
+            BotNotification.notification_type.in_([
+                "SUPPORT_TICKET_CLOSED", "SUPPORT_FORUM_TICKET_CLOSED",
+            ]),
+        )).all()
+        assert len(actions) == 1
+        assert sorted(item.notification_type for item in notifications) == [
+            "SUPPORT_FORUM_TICKET_CLOSED", "SUPPORT_TICKET_CLOSED",
+        ]
+
+
+def test_reopen_is_idempotent_and_clears_closer(client):
+    user("421400098")
+    ticket = client.post(
+        "/v1/bot/support/tickets", headers=headers("support:write"),
+        json={"telegram_user_id": "421400098", "category": "other", "message": "reopen me"},
+    ).json()
+    close_url = f"/v1/bot/support/tickets/{ticket['id']}/close"
+    reopen_url = f"/v1/bot/support/tickets/{ticket['id']}/reopen"
+    client.post(close_url, headers=headers("support:admin"), json={"telegram_user_id": "424403653"})
+    one = client.post(reopen_url, headers=headers("support:admin"), json={"telegram_user_id": "424403653"})
+    two = client.post(reopen_url, headers=headers("support:admin"), json={"telegram_user_id": "424403653"})
+    assert one.status_code == two.status_code == 200
+    with SessionLocal() as db:
+        row = db.get(SupportTicket, ticket["id"])
+        assert row.status == "WAITING_ADMIN" and row.closed_at is None
+        assert row.closed_by_telegram_id is None
+        assert len(db.scalars(select(AdminAction).where(
+            AdminAction.target_id == ticket["id"], AdminAction.action == "reopen-support-ticket",
+        )).all()) == 1
+
+
+def test_close_accepts_new_waiting_admin_and_waiting_user(client):
+    for index, status in enumerate(("NEW", "WAITING_ADMIN", "WAITING_USER"), start=1):
+        telegram_id = f"4214010{index}"
+        user(telegram_id)
+        ticket = client.post(
+            "/v1/bot/support/tickets", headers=headers("support:write"),
+            json={"telegram_user_id": telegram_id, "category": "other", "message": status},
+        ).json()
+        with SessionLocal() as db:
+            db.get(SupportTicket, ticket["id"]).status = status
+            db.commit()
+        result = client.post(
+            f"/v1/bot/support/tickets/{ticket['id']}/close",
+            headers=headers("support:admin"), json={"telegram_user_id": "424403653"},
+        )
+        assert result.status_code == 200 and result.json()["status"] == "CLOSED"
+
+
+def test_close_unknown_ticket_returns_not_found_without_outbox(client):
+    before = None
+    with SessionLocal() as db:
+        before = len(db.scalars(select(BotNotification)).all())
+    result = client.post(
+        "/v1/bot/support/tickets/00000000-0000-0000-0000-000000000000/close",
+        headers=headers("support:admin"), json={"telegram_user_id": "424403653"},
+    )
+    assert result.status_code == 404
+    with SessionLocal() as db:
+        assert len(db.scalars(select(BotNotification)).all()) == before
+
+
+def test_failed_support_outbox_is_retryable(client):
+    user("421400097")
+    ticket = client.post(
+        "/v1/bot/support/tickets", headers=headers("support:write"),
+        json={"telegram_user_id": "421400097", "category": "other", "message": "retry"},
+    ).json()
+    client.post(
+        f"/v1/bot/support/tickets/{ticket['id']}/close",
+        headers=headers("support:admin"), json={"telegram_user_id": "424403653"},
+    )
+    with SessionLocal() as db:
+        notification = db.scalar(select(BotNotification).where(
+            BotNotification.notification_type == "SUPPORT_TICKET_CLOSED",
+            BotNotification.payload["ticket_id"].as_string() == ticket["id"],
+        ))
+        notification_id = notification.id
+    claimed = client.get("/v1/bot/notifications", headers=headers("notifications:read")).json()["notifications"]
+    assert notification_id in {item["id"] for item in claimed}
+    failed = client.post(
+        f"/v1/bot/notifications/{notification_id}/result",
+        headers=headers("notifications:write"),
+        json={"success": False, "error": "temporary Telegram failure"},
+    )
+    assert failed.status_code == 200 and failed.json()["status"] == "FAILED"
+    with SessionLocal() as db:
+        notification = db.get(BotNotification, notification_id)
+        assert notification.attempts == 1 and "temporary" in notification.last_error
+        notification.next_attempt_at = notification.next_attempt_at - timedelta(hours=1)
+        db.commit()
+    retried = client.get("/v1/bot/notifications", headers=headers("notifications:read")).json()["notifications"]
+    assert notification_id in {item["id"] for item in retried}
 
 
 def test_support_rejects_unsafe_attachment_and_blocked_spam(client):
