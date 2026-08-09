@@ -243,3 +243,29 @@ def test_membership_route_grants_only_once_and_returns_server_quota(client):
     assert first.status_code == second.status_code == 200
     assert first.json()["id"] == second.json()["id"]
     assert first.json()["projects"] == {"used": 0, "limit": 2}
+
+
+def test_activated_free_device_can_read_desktop_quota_status(client):
+    user = add_user("70008")
+    with SessionLocal() as db:
+        entitlement = free_access.membership_result(
+            db, db.get(User, user.id), status="member", is_member=True,
+        )
+        code = manager.new_code(db, db.get(Subscription, entitlement.subscription_id))
+        db.commit()
+    activated = client.post("/v1/licenses/activate", json={
+        "activation_code": code,
+        "installation_id": "free-desktop-installation-0001",
+        "device_name": "FREE E2E",
+        "os_version": "Windows",
+        "app_version": "0.3.1-beta.5",
+        "edition": "commercial",
+    })
+    assert activated.status_code == 200
+    response = client.get("/v1/licenses/free/status", headers={
+        "Authorization": "Bearer " + activated.json()["refresh_credential"],
+    })
+    assert response.status_code == 200
+    assert response.json()["state"] == "ACTIVE"
+    assert response.json()["projects"] == {"used": 0, "limit": 2}
+    assert response.json()["shorts_sources"] == {"used": 0, "limit": 2}

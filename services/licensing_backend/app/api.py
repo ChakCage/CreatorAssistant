@@ -445,7 +445,10 @@ def bot_free_admin_block(entitlement_id: str, value: FreeBlockRequest,
 
 @app.get("/v1/licenses/free/status")
 def license_free_status(session: LicenseSession = Depends(refresh_session), db: Session = Depends(get_db)):
-    return free_access.payload(db, session.device.user)
+    user = db.get(User, session.device.user_id)
+    if not user:
+        raise LicenseError("USER_NOT_FOUND", 404)
+    return free_access.payload(db, user)
 
 
 @app.post("/v1/licenses/free/quotas/acquire")
