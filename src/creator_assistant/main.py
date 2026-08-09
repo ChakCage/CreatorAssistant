@@ -637,8 +637,14 @@ def main() -> int:
             )
         if project_fixture_arg:
             def verify_project_fixture() -> None:
-                from creator_assistant.infrastructure.packaged_project_fixture import run_packaged_project_fixture
-                run_packaged_project_fixture(container.feature_gate, Path(project_fixture_arg))
+                from creator_assistant.infrastructure.packaged_project_fixture import (
+                    run_live_free_project_fixture,
+                    run_packaged_project_fixture,
+                )
+                if os.environ.get("CREATOR_ASSISTANT_E2E_LIVE_FREE") == "1":
+                    run_live_free_project_fixture(container, Path(project_fixture_arg))
+                else:
+                    run_packaged_project_fixture(container.feature_gate, Path(project_fixture_arg))
                 app.quit()
             QTimer.singleShot(500, verify_project_fixture)
         if "--smoke-test" in sys.argv:

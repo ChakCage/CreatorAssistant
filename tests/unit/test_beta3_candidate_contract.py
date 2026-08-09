@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from creator_assistant.infrastructure.packaged_project_fixture import run_packaged_project_fixture
+from creator_assistant.infrastructure.packaged_project_fixture import (
+    run_live_free_project_fixture,
+    run_packaged_project_fixture,
+)
 from creator_assistant.version import __version__
 
 
@@ -34,6 +37,20 @@ def test_short_packaged_project_fixture_is_resumable_and_safe(tmp_path: Path):
     assert report["missing_source"] == "missing"
     assert gate.features == ["project_preparation"]
     assert json.loads(report_path.read_text(encoding="utf-8"))["success"] is True
+
+
+def test_live_free_fixture_is_explicitly_gated(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("CREATOR_ASSISTANT_E2E_LIVE_FREE", raising=False)
+    with __import__("pytest").raises(RuntimeError, match="CREATOR_ASSISTANT_E2E_LIVE_FREE"):
+        run_live_free_project_fixture(object(), tmp_path / "report.json")
+
+
+def test_live_free_fixture_rejects_report_outside_workspace(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("CREATOR_ASSISTANT_E2E_LIVE_FREE", "1")
+    monkeypatch.setenv("CREATOR_ASSISTANT_E2E_WORKSPACE", str(tmp_path / "workspace"))
+    monkeypatch.setenv("CREATOR_ASSISTANT_E2E_PROJECT_IDENTITY", "FREE-E2E-Project-1")
+    with __import__("pytest").raises(RuntimeError, match="inside its isolated workspace"):
+        run_live_free_project_fixture(object(), tmp_path / "outside.json")
 
 
 def test_installer_supports_isolated_shortcut_without_touching_owner_desktop():
