@@ -258,6 +258,7 @@ class BillingService:
         sub = self._preferred_subscription(db, user.id, active_only=True)
         if not sub or aware(sub.expires_at) <= utcnow():
             raise LicenseError("SUBSCRIPTION_INACTIVE", 409)
+        self.manager._active_subscription(sub)
         db.execute(update(ActivationCode).where(
             ActivationCode.subscription_id == sub.id,
             ActivationCode.status == ActivationCodeStatus.CREATED,

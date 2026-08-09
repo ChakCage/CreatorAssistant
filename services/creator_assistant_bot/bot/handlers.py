@@ -355,7 +355,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         await ensure_user(message.from_user)
         free_enabled = False
         with contextlib.suppress(Exception):
-            free_enabled = bool((await backend.free_config()).get("enabled"))
+            free_enabled = bool((await backend.free_config(message.from_user.id)).get("enabled"))
         payload = (message.text or "").partition(" ")[2].strip().casefold()
         if payload == "support":
             await state.clear()
@@ -365,7 +365,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             await message.answer(STAGING_PAYMENT_DISABLED_TEXT)
             return
         if payload == "free":
-            config = await backend.free_config()
+            config = await backend.free_config(message.from_user.id)
             if not config.get("enabled"):
                 await message.answer("Бесплатный доступ сейчас временно недоступен.")
                 return
@@ -390,7 +390,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         await ensure_user(callback.from_user)
         with contextlib.suppress(Exception):
             await backend.free_event(callback.from_user.id, "free_offer_opened")
-        config = await backend.free_config()
+        config = await backend.free_config(callback.from_user.id)
         if not config.get("enabled"):
             await callback.message.answer("Бесплатный доступ сейчас временно недоступен.")
             await callback.answer(); return
@@ -399,7 +399,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="free_check")],
         ])
         await callback.message.answer(
-            "Получите бесплатный доступ к Creator Assistant:\n\n"
+            "Бесплатный тариф Creator Assistant\n\n"
             f"• {config['project_limit']} подготовки проекта\n"
             f"• обработка {config['shorts_source_limit']} исходных видео для Shorts\n"
             f"• {config['device_limit']} устройство\n\n"
@@ -413,7 +413,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         await ensure_user(callback.from_user)
         with contextlib.suppress(Exception):
             await backend.free_event(callback.from_user.id, "membership_check_started")
-        config = await backend.free_config()
+        config = await backend.free_config(callback.from_user.id)
         if not config.get("enabled"):
             await callback.message.answer("Бесплатный доступ сейчас временно недоступен.")
             await callback.answer(); return
@@ -679,7 +679,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         await message.answer("Административный центр:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎫 Обращения", callback_data="support_admin_filters"),
              InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_soon:users")],
-            [InlineKeyboardButton(text="🎁 FREE", callback_data="admin_soon:free"),
+            [InlineKeyboardButton(text="🎁 FREE", callback_data="free_admin_config"),
              InlineKeyboardButton(text="📊 Статистика", callback_data="admin_soon:stats")],
             [InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_soon:settings")],
         ]))
@@ -691,7 +691,7 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         await callback.message.answer("Административный центр:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎫 Обращения", callback_data="support_admin_filters"),
              InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_soon:users")],
-            [InlineKeyboardButton(text="🎁 FREE", callback_data="admin_soon:free"),
+            [InlineKeyboardButton(text="🎁 FREE", callback_data="free_admin_config"),
              InlineKeyboardButton(text="📊 Статистика", callback_data="admin_soon:stats")],
             [InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_soon:settings")],
         ])); await callback.answer()
@@ -723,30 +723,38 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
     async def free_admin_config(callback: CallbackQuery):
         if not admin_only(callback.from_user.id):
             await callback.answer("Недоступно", show_alert=True); return
-        value = await backend.free_config()
+        stats = await backend.free_admin_stats(callback.from_user.id)
+        value = stats.get("runtime") or {}
         await callback.message.answer(
             "FREE-доступ\n"
-            f"Включён: {'да' if value.get('enabled') else 'нет'}\n"
+            f"Runtime включён: {'да' if value.get('enabled') else 'нет'}\n"
+            f"Private test mode: {'да' if value.get('test_mode') else 'нет'}\n"
+            f"Тестовый allowlist: {'валиден' if value.get('test_allowlist_valid') else 'ошибка'} · записей {value.get('test_allowlist_size', 0)}\n"
             f"Канал: {value.get('channel_title') or 'не задан'}\n"
             f"Username: {value.get('channel_username') or 'не задан'}\n"
             f"Chat ID: {value.get('channel_chat_id') or 'не задан'}\n"
             f"Лимиты: проекты {value.get('project_limit')} · Shorts {value.get('shorts_source_limit')} · устройства {value.get('device_limit')}\n"
             f"Повторная проверка: {'да' if value.get('recheck_enabled') else 'нет'}\n"
             f"Версия предложения: {value.get('offer_version')}\n\n"
+            f"Показы предложения: {stats.get('offer_views', 0)}\n"
+            f"Проверки подписки: {stats.get('membership_checks', 0)}\n"
+            f"Выдано: {stats.get('granted', 0)} · активно: {stats.get('active', 0)}\n"
+            f"Приостановлено: {stats.get('paused', 0)} · исчерпано: {stats.get('exhausted', 0)}\n"
+            f"Перешли на платный: {stats.get('converted_to_paid', 0)}\n\n"
             "Изменение значений: /free_set <ключ> <значение>\n"
             "Ключи: channel_chat_id, channel_username, channel_title, channel_invite_url, project_limit, shorts_source_limit, device_limit, offer_version",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Включить/выключить FREE", callback_data="free_admin_toggle")],
                 [InlineKeyboardButton(text="Включить/выключить recheck", callback_data="free_admin_recheck")],
+                [InlineKeyboardButton(text="Пользователи FREE", callback_data="free_admin_users")],
             ]),
         ); await callback.answer()
 
-    @router.callback_query(F.data.in_({"free_admin_toggle", "free_admin_recheck"}))
+    @router.callback_query(F.data == "free_admin_recheck")
     async def free_admin_toggle(callback: CallbackQuery):
         if not admin_only(callback.from_user.id):
             await callback.answer("Недоступно", show_alert=True); return
-        current = await backend.free_config()
-        key = "enabled" if callback.data == "free_admin_toggle" else "recheck_enabled"
+        current = (await backend.free_admin_stats(callback.from_user.id)).get("runtime") or {}
+        key = "recheck_enabled"
         changed = await backend.free_admin_config(callback.from_user.id, {key: not bool(current.get(key))})
         await callback.answer("Сохранено")
         await callback.message.answer(f"{key}: {'включено' if changed.get(key) else 'выключено'}")

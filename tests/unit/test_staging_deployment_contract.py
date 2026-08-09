@@ -53,6 +53,18 @@ def test_staging_secrets_template_contains_no_values_or_private_keys():
     assert "${STAGING_RELEASES_DIRECTORY}:/srv/releases:ro" in compose
 
 
+def test_private_free_test_allowlist_is_runtime_only_and_empty_in_tracked_templates():
+    template = (STAGING / ".env.staging.example").read_text(encoding="utf-8")
+    compose = (STAGING / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "LICENSE_FREE_ACCESS_TEST_MODE=false" in template
+    assert "LICENSE_FREE_ACCESS_TEST_ALLOWLIST=\n" in template
+    assert "LICENSE_FREE_ACCESS_TEST_MODE: ${LICENSE_FREE_ACCESS_TEST_MODE:-false}" in compose
+    assert "LICENSE_FREE_ACCESS_TEST_ALLOWLIST: ${LICENSE_FREE_ACCESS_TEST_ALLOWLIST:-}" in compose
+    allowlist_line = next(line for line in template.splitlines()
+                          if line.startswith("LICENSE_FREE_ACCESS_TEST_ALLOWLIST="))
+    assert allowlist_line == "LICENSE_FREE_ACCESS_TEST_ALLOWLIST="
+
+
 def test_dpapi_backup_is_strictly_limited_to_staging_keys_and_verifies_restore():
     script = (ROOT / "scripts" / "backup-staging-keys.ps1").read_text(encoding="utf-8")
     assert '"license-staging.private"' in script

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .config import Settings
 from .models import (
-    AdminAction, FreeAccessState, FreeEntitlement, FreeQuotaKind, FreeQuotaUse,
+    AdminAction, FreeAccessState, FreeEntitlement, FreeQuotaKind, FreeQuotaUse, LicenseEvent,
     FreeQuotaUseStatus, Plan, ServerSetting, Subscription, SubscriptionSource,
     SubscriptionStatus, User, utcnow,
 )
@@ -37,12 +37,36 @@ class FreeAccessService:
             "offer_version": self.settings.free_access_offer_version,
         }
 
-    def config(self, db: Session) -> dict:
+    def config(self, db: Session, telegram_user_id: str | int | None = None, *, admin_view: bool = False) -> dict:
         row = db.get(ServerSetting, FREE_CONFIG_KEY)
-        return {**self.defaults(), **(row.value if row else {})}
+        # The runtime environment is the security boundary. A persisted admin
+        # setting may tune presentation/quotas, but it cannot turn FREE on.
+        result = {**self.defaults(), **(row.value if row else {})}
+        result["enabled"] = (
+            self.settings.free_access_enabled
+            if admin_view
+            else self.settings.free_access_eligible(telegram_user_id)
+        )
+        result["test_mode"] = self.settings.free_access_test_mode
+        result["test_allowlist_configured"] = bool(
+            self.settings.free_access_test_allowlist_valid
+            and self.settings.free_access_test_allowlist
+        )
+        if admin_view:
+            result["test_allowlist_size"] = len(self.settings.free_access_test_allowlist)
+            result["test_allowlist_valid"] = self.settings.free_access_test_allowlist_valid
+        return result
+
+    def require_eligible(self, telegram_user_id: str | int | None) -> None:
+        if not self.settings.free_access_enabled:
+            raise LicenseError("FREE_ACCESS_DISABLED", 409)
+        if not self.settings.free_access_eligible(telegram_user_id):
+            raise LicenseError("FREE_ACCESS_NOT_ELIGIBLE", 403)
 
     def update_config(self, db: Session, values: dict, admin_id: str) -> dict:
         values = dict(values)
+        if "enabled" in values:
+            raise LicenseError("FREE_RUNTIME_FLAG_REQUIRED", 409)
         if "channel_chat_id" in values and int(values["channel_chat_id"]) >= 0:
             raise LicenseError("FREE_CHANNEL_CHAT_ID_INVALID", 422)
         if "channel_username" in values:
@@ -54,7 +78,9 @@ class FreeAccessService:
             values["channel_username"] = username
         if "channel_invite_url" in values and not str(values["channel_invite_url"]).startswith("https://t.me/"):
             raise LicenseError("FREE_CHANNEL_INVITE_URL_INVALID", 422)
-        current = self.config(db)
+        current = self.config(db, admin_view=True)
+        for runtime_key in ("enabled", "test_mode", "test_allowlist_configured", "test_allowlist_size", "test_allowlist_valid"):
+            current.pop(runtime_key, None)
         current.update(values)
         row = db.get(ServerSetting, FREE_CONFIG_KEY)
         if row is None:
@@ -65,7 +91,7 @@ class FreeAccessService:
         db.add(AdminAction(admin_id=admin_id, action="update-free-access-settings",
                            target_type="server-setting", target_id=FREE_CONFIG_KEY,
                            action_metadata={key: value for key, value in current.items() if "invite" not in key}))
-        return current
+        return self.config(db, admin_view=True)
 
     @staticmethod
     def membership_allowed(status: str, is_member: bool | None = None) -> bool:
@@ -93,7 +119,8 @@ class FreeAccessService:
 
     def membership_result(self, db: Session, user: User, *, status: str, is_member: bool | None,
                           source: str = "telegram-bot") -> FreeEntitlement:
-        config = self.config(db)
+        self.require_eligible(user.telegram_user_id)
+        config = self.config(db, user.telegram_user_id)
         entitlement = db.scalar(select(FreeEntitlement).where(FreeEntitlement.user_id == user.id).with_for_update())
         allowed = self.membership_allowed(status, is_member)
         now = utcnow()
@@ -121,8 +148,6 @@ class FreeAccessService:
                 if entitlement.subscription_id:
                     subscription = db.get(Subscription, entitlement.subscription_id)
                     if subscription: subscription.status = SubscriptionStatus.BLOCKED
-        elif not bool(config["enabled"]):
-            raise LicenseError("FREE_ACCESS_DISABLED", 409)
         else:
             if entitlement.free_granted_at is None:
                 plan = self._free_plan(db, config)
@@ -161,7 +186,8 @@ class FreeAccessService:
     def payload(self, db: Session, user: User) -> dict:
         row = db.scalar(select(FreeEntitlement).where(FreeEntitlement.user_id == user.id))
         if row is None:
-            return {"state": "ELIGIBLE", "granted": False, "config": self.config(db)}
+            return {"state": "ELIGIBLE", "granted": False,
+                    "config": self.config(db, user.telegram_user_id)}
         paid = self._paid_subscription(db, user)
         state = FreeAccessState.CONVERTED_TO_PAID if paid else row.state
         return {
@@ -201,6 +227,7 @@ class FreeAccessService:
         if row is None: raise LicenseError("FREE_ACCESS_REQUIRED", 403)
         if self._paid_subscription(db, row.user):
             raise LicenseError("FREE_QUOTA_NOT_REQUIRED", 409)
+        self.require_eligible(row.user.telegram_user_id)
         if row.state is not FreeAccessState.ACTIVE: raise LicenseError("FREE_ACCESS_INACTIVE", 403, {"state": row.state.value})
         existing = db.scalar(select(FreeQuotaUse).where(FreeQuotaUse.entitlement_id == row.id,
                              FreeQuotaUse.kind == kind, FreeQuotaUse.operation_key == operation_key))
@@ -240,6 +267,38 @@ class FreeAccessService:
         self.manager.audit(db, "FREE_QUOTA_RESERVED", "SUCCESS", user_id=user_id,
                            metadata={"kind": kind.value, "operation_key_hash": operation_key[:16]})
         return use
+
+    def analytics(self, db: Session) -> dict:
+        event_names = {
+            "offer_views": "FREE_OFFER_OPENED",
+            "membership_checks": "MEMBERSHIP_CHECK_STARTED",
+            "granted": "FREE_GRANTED",
+            "converted_to_paid": "CONVERTED_TO_PAID",
+        }
+        event_counts = {
+            key: int(db.scalar(select(func.count(LicenseEvent.id)).where(
+                LicenseEvent.event_type == event_name
+            )) or 0)
+            for key, event_name in event_names.items()
+        }
+        states = {
+            state.value: int(db.scalar(select(func.count(FreeEntitlement.id)).where(
+                FreeEntitlement.state == state
+            )) or 0)
+            for state in FreeAccessState
+        }
+        exhausted = int(db.scalar(select(func.count(FreeEntitlement.id)).where(
+            FreeEntitlement.projects_used >= FreeEntitlement.projects_limit,
+            FreeEntitlement.shorts_sources_used >= FreeEntitlement.shorts_sources_limit,
+        )) or 0)
+        return {
+            **event_counts,
+            "active": states[FreeAccessState.ACTIVE.value],
+            "paused": states[FreeAccessState.PAUSED_UNSUBSCRIBED.value],
+            "exhausted": exhausted,
+            "blocked": states[FreeAccessState.BLOCKED.value],
+            "runtime": self.config(db, admin_view=True),
+        }
 
     def finish_quota(self, db: Session, user_id: str, use_id: str, success: bool) -> FreeQuotaUse:
         use = db.scalar(select(FreeQuotaUse).where(FreeQuotaUse.id == use_id).with_for_update())

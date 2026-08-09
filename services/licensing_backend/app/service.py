@@ -81,6 +81,9 @@ class LicenseManager:
             if aware(subscription.expires_at) <= now: subscription.status = SubscriptionStatus.EXPIRED
             raise LicenseError("SUBSCRIPTION_INACTIVE", 403)
         if subscription.user.status is UserStatus.BLOCKED: raise LicenseError("SUBSCRIPTION_INACTIVE", 403)
+        if (subscription.plan.code == "free_channel"
+                and not self.settings.free_access_eligible(subscription.user.telegram_user_id)):
+            raise LicenseError("FREE_ACCESS_INACTIVE", 403)
 
     def activate(self, db: Session, request, *, ip: str = "", user_agent: str = "") -> dict[str, Any]:
         now = utcnow(); code_hash = secret_hash(request.activation_code, self.settings.activation_pepper)
@@ -163,6 +166,10 @@ class LicenseManager:
         row = db.scalar(select(LicenseSession).where(LicenseSession.refresh_hash == opaque_hash(credential)))
         if not row or row.status is not SessionStatus.ACTIVE or aware(row.expires_at) <= utcnow():
             raise LicenseError("REFRESH_SESSION_INVALID", 401)
+        subscription = db.get(Subscription, row.device.subscription_id)
+        if subscription is None:
+            raise LicenseError("SUBSCRIPTION_INACTIVE", 403)
+        self._active_subscription(subscription)
         return row
 
     def devices(self, db: Session, session: LicenseSession) -> list[dict]:

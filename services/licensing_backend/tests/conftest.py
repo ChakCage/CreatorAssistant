@@ -12,6 +12,9 @@ os.environ["LICENSE_SIGNING_KEY_ID"] = "test-key"
 os.environ["LICENSE_SIGNING_PRIVATE_KEY"] = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
 os.environ["LICENSE_ADMIN_TOKEN_HASH"] = hashlib.sha256(b"test-admin-token").hexdigest()
 os.environ["LICENSE_PAYMENTS_ENABLED"] = "true"
+os.environ["LICENSE_FREE_ACCESS_ENABLED"] = "true"
+os.environ["LICENSE_FREE_ACCESS_TEST_MODE"] = "false"
+os.environ["LICENSE_FREE_ACCESS_TEST_ALLOWLIST"] = ""
 os.environ["LICENSE_FREE_ACCESS_ADMIN_TELEGRAM_ID"] = "424403653"
 os.environ["CREATOR_RELEASE_VERSION"] = "0.3.1-beta.5"
 os.environ["CREATOR_RELEASE_COMMIT"] = "test-release-commit"

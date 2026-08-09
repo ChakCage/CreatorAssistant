@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import re
 import secrets
 from dataclasses import dataclass
 
@@ -32,6 +33,9 @@ class Settings:
     checkout_ttl_minutes: int
     payments_enabled: bool
     free_access_enabled: bool
+    free_access_test_mode: bool
+    free_access_test_allowlist: frozenset[int]
+    free_access_test_allowlist_valid: bool
     free_access_channel_chat_id: int
     free_access_channel_username: str
     free_access_channel_title: str
@@ -46,6 +50,24 @@ class Settings:
     @property
     def production(self) -> bool:
         return self.environment == "production"
+
+    def free_access_eligible(self, telegram_user_id: str | int | None) -> bool:
+        """Return the runtime FREE eligibility without consulting client data.
+
+        Test mode is deliberately fail-closed: a missing/malformed allowlist,
+        a missing Telegram ID, or a non-numeric ID is never eligible.
+        """
+        if not self.free_access_enabled:
+            return False
+        if not self.free_access_test_mode:
+            return True
+        if not self.free_access_test_allowlist_valid or telegram_user_id is None:
+            return False
+        try:
+            normalized = int(str(telegram_user_id).strip())
+        except (TypeError, ValueError):
+            return False
+        return normalized > 0 and normalized in self.free_access_test_allowlist
 
 
 def _decode_key(value: str) -> bytes:
@@ -65,6 +87,21 @@ def _secret_value(name: str) -> str:
     return value
 
 
+def _parse_telegram_allowlist(value: str) -> tuple[frozenset[int], bool]:
+    """Parse a private runtime allowlist while failing closed on any bad item."""
+    raw = value.strip()
+    if not raw:
+        return frozenset(), True
+    items = re.split(r"[\s,;]+", raw)
+    try:
+        parsed = frozenset(int(item) for item in items if item)
+    except ValueError:
+        return frozenset(), False
+    if not parsed or any(item <= 0 for item in parsed):
+        return frozenset(), False
+    return parsed, True
+
+
 def load_settings() -> Settings:
     environment = os.getenv("LICENSE_ENV", "local").strip().lower()
     database_url = os.getenv("LICENSE_DATABASE_URL", "postgresql+psycopg://creator_assistant:creator_assistant@localhost:5432/creator_assistant")
@@ -74,7 +111,11 @@ def load_settings() -> Settings:
     fake_payment_secret = os.getenv("LICENSE_FAKE_PAYMENT_SECRET", "")
     bot_service_secret = os.getenv("LICENSE_BOT_SERVICE_SECRET", "")
     payments_enabled = os.getenv("LICENSE_PAYMENTS_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
-    free_access_enabled = os.getenv("LICENSE_FREE_ACCESS_ENABLED", "true").strip().lower() in {"1", "true", "yes"}
+    free_access_enabled = os.getenv("LICENSE_FREE_ACCESS_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
+    free_access_test_mode = os.getenv("LICENSE_FREE_ACCESS_TEST_MODE", "false").strip().lower() in {"1", "true", "yes"}
+    free_access_test_allowlist, free_access_test_allowlist_valid = _parse_telegram_allowlist(
+        _secret_value("LICENSE_FREE_ACCESS_TEST_ALLOWLIST")
+    )
     free_channel_chat_id = int(os.getenv("LICENSE_FREE_ACCESS_CHANNEL_CHAT_ID", "0"))
     free_channel_username = os.getenv("LICENSE_FREE_ACCESS_CHANNEL_USERNAME", "").strip()
     free_channel_title = os.getenv("LICENSE_FREE_ACCESS_CHANNEL_TITLE", "Чак").strip()
@@ -127,6 +168,9 @@ def load_settings() -> Settings:
         checkout_ttl_minutes=int(os.getenv("LICENSE_CHECKOUT_TTL_MINUTES", "30")),
         payments_enabled=payments_enabled,
         free_access_enabled=free_access_enabled,
+        free_access_test_mode=free_access_test_mode,
+        free_access_test_allowlist=free_access_test_allowlist,
+        free_access_test_allowlist_valid=free_access_test_allowlist_valid,
         free_access_channel_chat_id=free_channel_chat_id,
         free_access_channel_username=free_channel_username,
         free_access_channel_title=free_channel_title,

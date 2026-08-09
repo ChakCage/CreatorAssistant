@@ -373,8 +373,9 @@ def bot_beta_redeem(value: BetaRedeemRequest, _identity: dict = Depends(require_
 
 
 @app.get("/v1/bot/free/config")
-def bot_free_config(_identity: dict = Depends(require_service("free:read")), db: Session = Depends(get_db)):
-    return free_access.config(db)
+def bot_free_config(telegram_user_id: Optional[str] = None,
+                    _identity: dict = Depends(require_service("free:read")), db: Session = Depends(get_db)):
+    return free_access.config(db, telegram_user_id)
 
 
 @app.get("/v1/bot/free/status/{telegram_user_id}")
@@ -382,7 +383,8 @@ def bot_free_status(telegram_user_id: str, _identity: dict = Depends(require_ser
                     db: Session = Depends(get_db)):
     user = db.scalar(select(User).where(User.telegram_user_id == telegram_user_id))
     if not user:
-        return {"state": "ELIGIBLE", "granted": False, "config": free_access.config(db)}
+        return {"state": "ELIGIBLE", "granted": False,
+                "config": free_access.config(db, telegram_user_id)}
     return free_access.payload(db, user)
 
 
@@ -401,6 +403,7 @@ def bot_free_membership(value: FreeMembershipRequest, request: Request,
 @app.post("/v1/bot/free/events")
 def bot_free_event(value: FreeEventRequest, _identity: dict = Depends(require_service("free:write")),
                    db: Session = Depends(get_db)):
+    free_access.require_eligible(value.telegram_user_id)
     user = db.scalar(select(User).where(User.telegram_user_id == value.telegram_user_id))
     manager.audit(db, value.event.upper(), value.result.upper(), reason=value.reason.upper(),
                   user_id=user.id if user else None)
@@ -409,10 +412,18 @@ def bot_free_event(value: FreeEventRequest, _identity: dict = Depends(require_se
 
 @app.get("/v1/bot/free/admin/entitlements")
 def bot_free_admin_list(telegram_user_id: str, _identity: dict = Depends(require_service("free:admin")),
-                        db: Session = Depends(get_db)):
+                         db: Session = Depends(get_db)):
     require_free_admin(telegram_user_id)
     rows = db.scalars(select(FreeEntitlement).order_by(FreeEntitlement.created_at.desc()).limit(200)).all()
     return {"entitlements": [free_access.payload(db, row.user) for row in rows]}
+
+
+@app.get("/v1/bot/free/admin/stats")
+def bot_free_admin_stats(telegram_user_id: str,
+                         _identity: dict = Depends(require_service("free:admin")),
+                         db: Session = Depends(get_db)):
+    require_free_admin(telegram_user_id)
+    return free_access.analytics(db)
 
 
 @app.post("/v1/bot/free/admin/config")

@@ -43,6 +43,19 @@ async def test_bot_uses_scoped_short_lived_identity_and_backend_owned_price():
     assert "admin" not in BOT_PERMISSIONS
 
 
+@pytest.mark.asyncio
+async def test_free_config_is_requested_for_the_current_telegram_user():
+    seen = []
+    async def handler(request: httpx.Request):
+        seen.append(request)
+        return httpx.Response(200, json={"enabled": True})
+    client = BackendClient(BotSettings(service_secret="x" * 32), httpx.MockTransport(handler))
+    result = await client.free_config(70031)
+    await client.close()
+    assert result["enabled"] is True
+    assert seen[0].url.params["telegram_user_id"] == "70031"
+
+
 def test_plan_copy_formats_minor_units_without_float_contract():
     text = plans_text([{"name": "Beta", "amount_minor": 99000, "currency": "RUB", "duration_days": 30, "device_limit": 1, "features": ["shorts"]}])
     assert "990.00 RUB" in text
