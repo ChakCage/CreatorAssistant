@@ -6,6 +6,7 @@ import socket
 import urllib.error
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -193,3 +194,40 @@ def test_paid_client_does_not_contact_free_quota_endpoint(monkeypatch):
     service.status = lambda: type("Status", (), {"plan": "beta"})()
     monkeypatch.setattr(service, "_request", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("network called")))
     assert service.acquire_free_quota("PROJECT", "operation-key-123") == ""
+
+
+def test_live_free_ui_verifier_captures_server_quota_text(monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QApplication
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
+    from creator_assistant.main import _free_status_ui_verification
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setenv("CREATOR_ASSISTANT_E2E_LIVE_FREE", "1")
+    status = SimpleNamespace(
+        state=LicenseState.ACTIVE,
+        plan="free_channel",
+        active=True,
+        expires_at="2030-01-01T00:00:00Z",
+        offline_grace_until="2030-01-02T00:00:00Z",
+        last_refresh="2026-08-10T00:00:00Z",
+        message="",
+    )
+    service = SimpleNamespace(
+        status=lambda: status,
+        free_status=lambda: {
+            "projects": {"used": 2, "limit": 2},
+            "shorts_sources": {"used": 0, "limit": 2},
+            "devices": {"used": 1, "limit": 1},
+        },
+        last_diagnostics=SimpleNamespace(safe_text=lambda: "HTTP 200"),
+    )
+    report_path = tmp_path / "free-ui.json"
+
+    _free_status_ui_verification(SimpleNamespace(licensing=service), report_path)
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["success"] is True
+    assert "проекты 2 из 2" in report["status_text"]
+    assert "Shorts-источники 0 из 2" in report["status_text"]
+    assert "устройства 1 из 1" in report["status_text"]

@@ -441,6 +441,23 @@ def _commercial_license_verification(container: ServiceContainer, report_path: P
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _free_status_ui_verification(container: ServiceContainer, report_path: Path) -> None:
+    """Capture the real LicenseDialog quota text from an isolated packaged E2E run."""
+    if os.environ.get("CREATOR_ASSISTANT_E2E_LIVE_FREE") != "1":
+        raise RuntimeError("CREATOR_ASSISTANT_E2E_LIVE_FREE=1 is required")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    dialog_module = importlib.import_module("creator_assistant.ui.license_dialog")
+    dialog = dialog_module.LicenseDialog(container)
+    report = {
+        "success": True,
+        "status_text": dialog.status_label.text(),
+        "diagnostics": dialog.technical.text(),
+        "build": current_build_info().__dict__,
+    }
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    dialog.close()
+
+
 def _update_e2e_verification(container: ServiceContainer, report_path: Path) -> None:
     """Use the same sealed update policy as the UI, then launch the verified installer."""
     from urllib.parse import urlparse
@@ -546,6 +563,12 @@ def main() -> int:
         )
         if commercial_license_verification_arg:
             container.first_run = False
+        free_status_ui_verification_arg = next(
+            (value.split("=", 1)[1] for value in sys.argv if value.startswith("--verify-free-status-ui=")),
+            "",
+        )
+        if free_status_ui_verification_arg:
+            container.first_run = False
         update_e2e_arg = next(
             (value.split("=", 1)[1] for value in sys.argv if value.startswith("--verify-update=")),
             "",
@@ -624,6 +647,14 @@ def main() -> int:
                 500,
                 lambda: (
                     _commercial_license_verification(container, Path(commercial_license_verification_arg)),
+                    app.quit(),
+                ),
+            )
+        if free_status_ui_verification_arg:
+            QTimer.singleShot(
+                500,
+                lambda: (
+                    _free_status_ui_verification(container, Path(free_status_ui_verification_arg)),
                     app.quit(),
                 ),
             )
