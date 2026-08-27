@@ -34,7 +34,7 @@ from creator_assistant.services.shorts.semantic_cache import SemanticCache
 from creator_assistant.services.shorts.subtitle_service import SubtitleService
 from creator_assistant.services.shorts.subtitle_layout import subtitle_preset_value
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectPaths, ShortsProjectStore
-from creator_assistant.services.shorts.source_service import ShortsSourceService
+from creator_assistant.services.shorts.source_service import ShortsSourceService, quota_source_fingerprint
 from creator_assistant.services.shorts.title_assets import ShortTitleAssetService
 from creator_assistant.services.shorts.render_settings import VerticalRenderSettingsResolver
 from creator_assistant.services.shorts.project_template import ProjectShortsTemplate
@@ -702,7 +702,8 @@ class ShortsTab(QWidget):
             return
         if not self._require_paid("shorts_analysis"):
             return
-        quota_key = hashlib.sha256(f"shorts-source:{self.source.fingerprint}".encode("utf-8")).hexdigest()
+        quota_identity = quota_source_fingerprint(self.source)
+        quota_key = hashlib.sha256(f"shorts-source:{quota_identity}".encode("utf-8")).hexdigest()
         try:
             acquire_quota = getattr(self.container, "acquire_free_quota", None)
             self._free_quota_reservation = acquire_quota("SHORTS_SOURCE", quota_key) if acquire_quota else ""

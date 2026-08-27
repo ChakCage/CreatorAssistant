@@ -6,7 +6,12 @@ from creator_assistant.infrastructure.process_runner import ProcessResult
 from creator_assistant.services.shorts.cache import ShortsCache
 from creator_assistant.services.shorts.manifest import ShortsManifestStore
 from creator_assistant.services.shorts.shorts_project_store import ShortsProjectStore
-from creator_assistant.services.shorts.source_service import ShortsSourceService, source_fingerprint
+from creator_assistant.services.shorts.source_service import (
+    ShortsSourceService,
+    quota_source_fingerprint,
+    source_content_fingerprint,
+    source_fingerprint,
+)
 
 
 def sample_source(path: Path) -> SourceInfo:
@@ -23,6 +28,31 @@ def test_source_fingerprint_is_stable_and_sensitive(tmp_path):
     assert first == source_fingerprint(source)
     source.duration += 0.001
     assert first != source_fingerprint(source)
+
+
+def test_quota_source_identity_survives_rename_and_identical_copy(tmp_path):
+    original = tmp_path / "original.mp4"
+    renamed = tmp_path / "renamed.mp4"
+    copied = tmp_path / "other" / "copied.mp4"
+    original.write_bytes(b"synthetic-video-content")
+    renamed.write_bytes(original.read_bytes())
+    copied.parent.mkdir()
+    copied.write_bytes(original.read_bytes())
+
+    identities = {source_content_fingerprint(path) for path in (original, renamed, copied)}
+
+    assert len(identities) == 1
+    source = sample_source(renamed)
+    source.content_fingerprint = identities.pop()
+    assert quota_source_fingerprint(source) == source_content_fingerprint(original)
+
+
+def test_quota_source_identity_changes_when_content_changes(tmp_path):
+    first = tmp_path / "first.mp4"
+    second = tmp_path / "second.mp4"
+    first.write_bytes(b"content-a")
+    second.write_bytes(b"content-b")
+    assert source_content_fingerprint(first) != source_content_fingerprint(second)
 
 
 def test_project_manifest_is_atomic_utf8_and_resumable(tmp_path):

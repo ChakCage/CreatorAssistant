@@ -12,6 +12,7 @@ from creator_assistant.infrastructure.process_runner import ProcessRunner
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".m4v", ".webm", ".avi"}
 EXCLUDED_HINTS = ("[max ", "[480p]", "[720p]", "[1080p]", "preview", "proxy")
+FILE_HASH_CHUNK_SIZE = 8 * 1024 * 1024
 
 
 def parse_fraction(value: str) -> float:
@@ -38,6 +39,20 @@ def source_fingerprint(source: SourceInfo) -> str:
         "audio_codec": source.audio_codec,
     }
     return hashlib.sha256(json.dumps(stable, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def source_content_fingerprint(path: Path) -> str:
+    """Return a rename- and copy-stable identity for FREE source accounting."""
+    digest = hashlib.sha256()
+    with path.resolve().open("rb") as stream:
+        while chunk := stream.read(FILE_HASH_CHUNK_SIZE):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def quota_source_fingerprint(source: SourceInfo) -> str:
+    """Resolve the content identity used only by the server quota gate."""
+    return source.content_fingerprint or source_content_fingerprint(Path(source.path))
 
 
 class ShortsSourceService:
@@ -90,6 +105,7 @@ class ShortsSourceService:
             dynamic_range=dynamic_range, rotation=int(float(rotation or 0)),
         )
         info.fingerprint = source_fingerprint(info)
+        info.content_fingerprint = source_content_fingerprint(path)
         return info
 
     @staticmethod

@@ -21,6 +21,7 @@ class SourceInfo:
     dynamic_range: str = "SDR"
     rotation: int = 0
     fingerprint: str = ""
+    content_fingerprint: str = ""
 
     @classmethod
     def from_dict(cls, value: Dict[str, Any]) -> "SourceInfo":
