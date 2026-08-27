@@ -88,6 +88,23 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# PyInstaller can discover optional DLLs from the machine-wide PATH/Windows SDK
+# while resolving Qt.  They are not dependencies of our PySide6 wheel (Qt has
+# a working no-ICU fallback and cryptography ships its own OpenSSL), and mixing
+# those ambient versions with the bundled Qt runtime makes the package depend
+# on the build host.  In particular, ICU 78 collected from a newer SDK crashes
+# QtCore on supported Windows 10 hosts with STATUS_ENTRYPOINT_NOT_FOUND.
+AMBIENT_OPTIONAL_DLLS = {
+    'icudt78.dll',
+    'icuuc.dll',
+    'libcrypto-3-x64.dll',
+    'libssl-3-x64.dll',
+}
+a.binaries = [
+    entry for entry in a.binaries
+    if Path(entry[0]).name.lower() not in AMBIENT_OPTIONAL_DLLS
+]
 pyz = PYZ(a.pure)
 
 exe = EXE(

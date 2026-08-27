@@ -176,3 +176,13 @@ def test_build_scripts_define_two_independent_outputs_and_package_boundary():
     assert "verify-package-edition.ps1" in build_script
     assert "Creator Assistant Developer" in shortcut_script
     assert "Commercial package contains Developer-only modules" in verifier
+
+
+def test_package_excludes_ambient_optional_runtime_dlls():
+    root = Path(__file__).resolve().parents[2]
+    spec = (root / "CreatorAssistant.spec").read_text(encoding="utf-8-sig")
+
+    for dll_name in ("icudt78.dll", "icuuc.dll", "libcrypto-3-x64.dll", "libssl-3-x64.dll"):
+        assert dll_name in spec
+    assert "AMBIENT_OPTIONAL_DLLS" in spec
+    assert "a.binaries =" in spec
