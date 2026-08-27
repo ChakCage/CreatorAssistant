@@ -581,6 +581,12 @@ def main() -> int:
         )
         if project_fixture_arg:
             container.first_run = False
+        shorts_fixture_arg = next(
+            (value.split("=", 1)[1] for value in sys.argv if value.startswith("--verify-shorts-fixture=")),
+            "",
+        )
+        if shorts_fixture_arg:
+            container.first_run = False
         if "--smoke-test" in sys.argv:
             container.first_run = False
         window = MainWindow(container)
@@ -678,6 +684,13 @@ def main() -> int:
                     run_packaged_project_fixture(container.feature_gate, Path(project_fixture_arg))
                 app.quit()
             QTimer.singleShot(500, verify_project_fixture)
+        if shorts_fixture_arg:
+            def verify_shorts_fixture() -> None:
+                from creator_assistant.infrastructure.packaged_shorts_fixture import run_live_free_shorts_fixture
+                source = Path(os.environ.get("CREATOR_ASSISTANT_E2E_SHORTS_SOURCE", ""))
+                run_live_free_shorts_fixture(container, source, Path(shorts_fixture_arg))
+                app.quit()
+            QTimer.singleShot(500, verify_shorts_fixture)
         if "--smoke-test" in sys.argv:
             QTimer.singleShot(250, app.quit)
         return app.exec()

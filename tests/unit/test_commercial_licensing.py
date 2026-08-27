@@ -196,6 +196,16 @@ def test_paid_client_does_not_contact_free_quota_endpoint(monkeypatch):
     assert service.acquire_free_quota("PROJECT", "operation-key-123") == ""
 
 
+def test_free_shorts_quota_exhaustion_has_actionable_message():
+    from creator_assistant.services.licensing import _friendly_error
+
+    message = _friendly_error(
+        "FREE_QUOTA_EXHAUSTED", {"kind": "SHORTS_SOURCE", "used": 2, "limit": 2},
+    )
+
+    assert message == "Бесплатный лимит исходных видео для Shorts исчерпан: 2 из 2."
+
+
 def test_live_free_ui_verifier_captures_server_quota_text(monkeypatch, tmp_path):
     from PySide6.QtWidgets import QApplication
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))

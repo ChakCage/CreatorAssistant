@@ -212,7 +212,7 @@ class LicenseService:
                 method=method, path=path, timeout_seconds=timeout, http_status=int(exc.code),
                 request_id=request_id, error_code=code,
             )
-            message = _friendly_error(code)
+            message = _friendly_error(code, error)
             if not message and isinstance(body, dict):
                 message = str(body.get("detail") or "")
             raise LicenseClientError(
@@ -393,7 +393,15 @@ class FeatureGate:
             raise LicenseClientError(status.state.value, status.message or "Для этой операции нужна активная подписка")
 
 
-def _friendly_error(code: str) -> str:
+def _friendly_error(code: str, details: dict | None = None) -> str:
+    if code == "FREE_QUOTA_EXHAUSTED":
+        details = details or {}
+        kind = str(details.get("kind") or "").upper()
+        used, limit = details.get("used"), details.get("limit")
+        label = "исходных видео для Shorts" if kind == "SHORTS_SOURCE" else "проектов"
+        if isinstance(used, int) and isinstance(limit, int):
+            return f"Бесплатный лимит {label} исчерпан: {used} из {limit}."
+        return "Лимит бесплатного тарифа исчерпан"
     return {
         "INVALID_ACTIVATION_CODE": "Код активации не найден или введён неверно",
         "ACTIVATION_CODE_EXPIRED": "Срок действия кода активации истёк",
@@ -405,6 +413,5 @@ def _friendly_error(code: str) -> str:
         "DEVICE_REVOKED": "Это устройство отключено или заблокировано",
         "REFRESH_SESSION_INVALID": "Сеанс лицензии отозван. Выполните активацию снова",
         "FREE_ACCESS_INACTIVE": "Бесплатный доступ приостановлен. Подтвердите подписку на канал в Telegram-боте",
-        "FREE_QUOTA_EXHAUSTED": "Лимит бесплатного тарифа исчерпан",
         "FREE_MEMBERSHIP_RECHECK_REQUIRED": "Повторно подтвердите подписку на канал в Telegram-боте",
     }.get(code, "Сервер лицензий отклонил запрос")
