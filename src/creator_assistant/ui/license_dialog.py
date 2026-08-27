@@ -6,6 +6,13 @@ from PySide6.QtWidgets import QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEd
 
 from creator_assistant.infrastructure.build_info import current_build_info
 from creator_assistant.services.licensing import LicenseClientError
+from creator_assistant.ui.license_presenter import (
+    device_state_name,
+    format_desktop_datetime,
+    free_quota_text,
+    plan_name,
+    state_name,
+)
 
 
 ERRORS = {
@@ -54,15 +61,20 @@ class LicenseDialog(QDialog):
         if value.plan == "free_channel" and value.active:
             try:
                 free = self.service.free_status()
-                projects, shorts, devices = free.get("projects", {}), free.get("shorts_sources", {}), free.get("devices", {})
-                free_text = (f"\nFREE-квоты (сервер): проекты {projects.get('used', 0)} из {projects.get('limit', 0)}; "
-                             f"Shorts-источники {shorts.get('used', 0)} из {shorts.get('limit', 0)}; "
-                             f"устройства {devices.get('used', 0)} из {devices.get('limit', 0)}")
-            except Exception as exc:
-                free_text = "\nFREE-квоты временно не синхронизированы: " + str(exc)
-        self.status_label.setText(f"Статус: {state}\nТариф: {value.plan or '—'}\nОкончание: {value.expires_at or '—'}\n"
-                                  f"Следующая проверка: раз в 24 часа\nOffline до: {value.offline_grace_until or '—'}\n"
-                                  f"Последняя синхронизация: {value.last_refresh or '—'}{free_text}\n{value.message}")
+                free_text = free_quota_text(free)
+            except Exception:
+                free_text = "\n\nБесплатные лимиты временно не синхронизированы."
+        message = str(value.message or "").strip()
+        message_text = "\n\n" + message if message else ""
+        self.status_label.setText(
+            f"Статус: {state_name(state)}\n"
+            f"Тариф: {plan_name(value.plan)}\n"
+            f"Окончание: {format_desktop_datetime(value.expires_at, always_show_year=True)}\n"
+            "Следующая проверка: раз в 24 часа\n"
+            f"Офлайн-доступ до: {format_desktop_datetime(value.offline_grace_until)}\n"
+            f"Последняя синхронизация: {format_desktop_datetime(value.last_refresh, relative=True)}"
+            f"{free_text}{message_text}"
+        )
         self.technical.setText(self.service.last_diagnostics.safe_text())
 
     def _error(self, exc: Exception) -> None:
@@ -94,7 +106,14 @@ class LicenseDialog(QDialog):
         self.devices.setRowCount(len(values))
         for row, item in enumerate(values):
             for column, key in enumerate(("name", "status", "first_seen_at", "last_seen_at")):
-                self.devices.setItem(row, column, QTableWidgetItem(str(item.get(key, ""))))
+                raw = item.get(key, "")
+                if key in {"first_seen_at", "last_seen_at"}:
+                    text = format_desktop_datetime(raw)
+                elif key == "status":
+                    text = device_state_name(raw)
+                else:
+                    text = str(raw)
+                self.devices.setItem(row, column, QTableWidgetItem(text))
 
     def deactivate(self) -> None:
         status = self.service.status()

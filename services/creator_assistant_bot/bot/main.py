@@ -8,7 +8,7 @@ from collections import defaultdict, deque
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from .backend import BackendClient
@@ -252,6 +252,15 @@ async def run() -> None:
         return web.json_response({"status": "ready", "backend": "ready", **metadata})
     app.router.add_get("/ready", ready)
     bot = Bot(settings.token or "123456:LOCAL_TEST_TOKEN")
+    if not settings.mock_telegram:
+        try:
+            await bot.set_my_commands([
+                BotCommand(command="start", description="Открыть Creator Assistant"),
+                BotCommand(command="menu", description="Главное меню"),
+            ])
+        except Exception as exc:
+            # Command discovery is optional; /start and /menu handlers remain available.
+            __import__("logging").getLogger(__name__).warning("telegram_command_setup_failed: %s", exc)
     if settings.support_forum_enabled:
         await validate_forum(bot, settings)
     dispatcher = Dispatcher(); dispatcher.include_router(build_router(backend, settings))

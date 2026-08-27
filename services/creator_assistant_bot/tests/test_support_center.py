@@ -181,7 +181,7 @@ def test_dashboard_has_global_filters_but_user_support_menu_does_not():
     assert "support_admin_list:NEW:1" in callbacks
     assert "support_admin_list:ANSWERED:1" not in callbacks
     user_callbacks = [button.callback_data for row in support_user_keyboard().inline_keyboard for button in row]
-    assert user_callbacks == ["support_my:1", "support_new"]
+    assert user_callbacks == ["support_my:1", "support_new", "main_menu_preserve"]
     assert not any("admin" in value for value in user_callbacks)
 
 

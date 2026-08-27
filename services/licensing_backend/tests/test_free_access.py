@@ -6,10 +6,10 @@ from sqlalchemy import select
 from app.api import free_access, manager, settings
 from app.config import load_settings
 from app.db import SessionLocal
-from app.free_access import FreeAccessService
+from app.free_access import FREE_CONFIG_KEY, FreeAccessService
 from app.models import (
     AdminAction, FreeAccessState, FreeEntitlement, FreeQuotaKind, FreeQuotaUseStatus,
-    Subscription, SubscriptionSource, SubscriptionStatus, User, utcnow,
+    ServerSetting, Subscription, SubscriptionSource, SubscriptionStatus, User, utcnow,
 )
 from app.security import mint_service_token
 from app.service import LicenseError, LicenseManager
@@ -269,3 +269,53 @@ def test_activated_free_device_can_read_desktop_quota_status(client):
     assert response.json()["state"] == "ACTIVE"
     assert response.json()["projects"] == {"used": 0, "limit": 2}
     assert response.json()["shorts_sources"] == {"used": 0, "limit": 2}
+
+
+def test_reinstall_reactivation_keeps_unique_entitlement_quotas_and_device_limit(client):
+    user = add_user("70009")
+    installation_id = "free-reinstall-installation-0001"
+    with SessionLocal() as db:
+        db.merge(ServerSetting(key=FREE_CONFIG_KEY, value={"recheck_enabled": False}))
+        entitlement = free_access.membership_result(
+            db, db.get(User, user.id), status="member", is_member=True,
+        )
+        entitlement_id = entitlement.id
+        for index in range(2):
+            project = free_access.acquire_quota(
+                db, user.id, FreeQuotaKind.PROJECT, f"reinstall-project-{index:04d}",
+            )
+            free_access.finish_quota(db, user.id, project.id, True)
+            free_access.membership_result(db, db.get(User, user.id), status="member", is_member=True)
+            source = free_access.acquire_quota(
+                db, user.id, FreeQuotaKind.SHORTS_SOURCE, f"reinstall-source-{index:04d}",
+            )
+            free_access.finish_quota(db, user.id, source.id, True)
+            free_access.membership_result(db, db.get(User, user.id), status="member", is_member=True)
+        first_code = manager.new_code(db, db.get(Subscription, entitlement.subscription_id))
+        db.commit()
+
+    payload = {
+        "installation_id": installation_id, "device_name": "FREE reinstall E2E",
+        "os_version": "Windows", "app_version": "0.3.1-beta.5", "edition": "commercial",
+    }
+    first = client.post("/v1/licenses/activate", json={"activation_code": first_code, **payload})
+    assert first.status_code == 200
+
+    # A clean local AppData/Credential Manager namespace loses the refresh credential,
+    # so the user obtains a fresh one-time code for the same allowed installation.
+    with SessionLocal() as db:
+        same_entitlement = db.scalar(select(FreeEntitlement).where(FreeEntitlement.user_id == user.id))
+        second_code = manager.new_code(db, db.get(Subscription, same_entitlement.subscription_id))
+        db.commit()
+    second = client.post("/v1/licenses/activate", json={"activation_code": second_code, **payload})
+    assert second.status_code == 200
+    status = client.get("/v1/licenses/free/status", headers={
+        "Authorization": "Bearer " + second.json()["refresh_credential"],
+    })
+    assert status.status_code == 200
+    assert status.json()["projects"] == {"used": 2, "limit": 2}
+    assert status.json()["shorts_sources"] == {"used": 2, "limit": 2}
+    assert status.json()["devices"] == {"used": 1, "limit": 1}
+    with SessionLocal() as db:
+        rows = db.scalars(select(FreeEntitlement).where(FreeEntitlement.user_id == user.id)).all()
+        assert len(rows) == 1 and rows[0].id == entitlement_id

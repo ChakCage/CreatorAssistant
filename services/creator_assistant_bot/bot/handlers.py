@@ -37,6 +37,9 @@ from .ui import (
 
 
 LOGGER = logging.getLogger(__name__)
+MAIN_MENU_TEXT = "Creator Assistant — закрытая бета\nТестовый доступ и управление устройствами."
+MAIN_MENU_CALLBACK = "main_menu"
+MAIN_MENU_PRESERVE_CALLBACK = "main_menu_preserve"
 SUPPORT_ADMIN_STATUSES = {
     "NEW", "WAITING_ADMIN", "WAITING_USER", "ANSWERED", "CLOSED", "BLOCKED", "ALL",
 }
@@ -148,11 +151,57 @@ class SupportFlow(StatesGroup):
     admin_reply = State()
 
 
+def with_main_menu(markup: InlineKeyboardMarkup | None = None, *, preserve: bool = False) -> InlineKeyboardMarkup:
+    rows = [list(row) for row in (markup.inline_keyboard if markup else [])]
+    rows.append([InlineKeyboardButton(
+        text="🏠 Главное меню",
+        callback_data=MAIN_MENU_PRESERVE_CALLBACK if preserve else MAIN_MENU_CALLBACK,
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def edit_menu_or_answer(message, text: str, reply_markup: InlineKeyboardMarkup | None = None,
+                              **kwargs) -> str:
+    try:
+        await message.edit_text(text, reply_markup=reply_markup, **kwargs)
+        return "edited"
+    except (TelegramBadRequest, AttributeError):
+        await message.answer(text, reply_markup=reply_markup, **kwargs)
+        return "sent"
+
+
+async def resolved_main_menu(backend: BackendClient, settings: BotSettings, user, state: FSMContext):
+    await backend.upsert_user(user.id, user.username, user.first_name, user.language_code)
+    await state.clear()
+    free_enabled = False
+    with contextlib.suppress(Exception):
+        free_enabled = bool((await backend.free_config(user.id)).get("enabled"))
+    return main_menu(free_enabled=free_enabled, is_admin=is_admin_user(settings, user.id))
+
+
+async def handle_main_menu_callback(callback: CallbackQuery, state: FSMContext,
+                                    backend: BackendClient, settings: BotSettings) -> str:
+    await callback.answer()
+    markup = await resolved_main_menu(backend, settings, callback.from_user, state)
+    if callback.message is None:
+        return "message-unavailable"
+    if callback.data == MAIN_MENU_PRESERVE_CALLBACK:
+        await callback.message.answer(MAIN_MENU_TEXT, reply_markup=markup)
+        return "sent"
+    return await edit_menu_or_answer(callback.message, MAIN_MENU_TEXT, reply_markup=markup)
+
+
+async def handle_menu_message(message: Message, state: FSMContext,
+                              backend: BackendClient, settings: BotSettings) -> None:
+    markup = await resolved_main_menu(backend, settings, message.from_user, state)
+    await message.answer(MAIN_MENU_TEXT, reply_markup=markup)
+
+
 def support_category_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    return with_main_menu(InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=item.label, callback_data=item.callback_data)]
         for item in SUPPORT_CATEGORIES
-    ])
+    ]), preserve=True)
 
 
 def admin_ticket_keyboard(ticket: dict, *, forum_context: bool) -> InlineKeyboardMarkup:
@@ -175,10 +224,10 @@ def admin_ticket_keyboard(ticket: dict, *, forum_context: bool) -> InlineKeyboar
 
 
 def support_user_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    return with_main_menu(InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 Мои обращения", callback_data="support_my:1"),
          InlineKeyboardButton(text="➕ Новое обращение", callback_data="support_new")],
-    ])
+    ]), preserve=True)
 
 
 def close_confirmation_view(ticket: dict) -> tuple[str, InlineKeyboardMarkup]:
@@ -369,16 +418,24 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             if not config.get("enabled"):
                 await message.answer("Бесплатный доступ сейчас временно недоступен.")
                 return
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            keyboard = with_main_menu(InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="📢 Подписаться на канал", url=str(config["channel_invite_url"]))],
                 [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="free_check")],
-            ])
+            ]))
             await message.answer("Подпишитесь на канал и нажмите «Проверить подписку».", reply_markup=keyboard)
             return
         await message.answer(
-            "Creator Assistant — закрытая бета\nТестовый доступ и управление устройствами.",
+            MAIN_MENU_TEXT,
             reply_markup=main_menu(free_enabled=free_enabled, is_admin=admin_only(message.from_user.id)),
         )
+
+    @router.message(Command("menu"))
+    async def menu_command(message: Message, state: FSMContext):
+        await handle_menu_message(message, state, backend, settings)
+
+    @router.callback_query(F.data.in_({MAIN_MENU_CALLBACK, MAIN_MENU_PRESERVE_CALLBACK}))
+    async def menu_callback(callback: CallbackQuery, state: FSMContext):
+        await handle_main_menu_callback(callback, state, backend, settings)
 
     @router.callback_query(F.data == "beta_access")
     async def beta_access(callback: CallbackQuery):
@@ -394,11 +451,11 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         if not config.get("enabled"):
             await callback.message.answer("Бесплатный доступ сейчас временно недоступен.")
             await callback.answer(); return
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        keyboard = with_main_menu(InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📢 Подписаться на канал", url=str(config["channel_invite_url"]))],
             [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="free_check")],
-        ])
-        await callback.message.answer(
+        ]))
+        await edit_menu_or_answer(callback.message,
             "Бесплатный тариф Creator Assistant\n\n"
             f"• {config['project_limit']} подготовки проекта\n"
             f"• обработка {config['shorts_source_limit']} исходных видео для Shorts\n"
@@ -442,9 +499,12 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             await callback.message.answer("Telegram временно не подтвердил подписку. Уже выданный доступ не изменён; повторите позже.")
             await callback.answer(); return
         if value.get("state") == "PAUSED_UNSUBSCRIBED" or not value.get("granted"):
-            await callback.message.answer("Подписка на канал не найдена. Подпишитесь и повторите проверку.")
+            await callback.message.answer(
+                "Подписка на канал не найдена. Подпишитесь и повторите проверку.",
+                reply_markup=with_main_menu(preserve=True),
+            )
         else:
-            await callback.message.answer(free_status_text(value))
+            await callback.message.answer(free_status_text(value), reply_markup=with_main_menu(preserve=True))
         await callback.answer()
 
     @router.message(Command("beta"))
@@ -463,27 +523,32 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
     @router.callback_query(F.data == "subscription")
     async def subscription(callback: CallbackQuery):
         value = await backend.subscription(callback.from_user.id)
-        await callback.message.answer(subscription_text(value)); await callback.answer()
+        await edit_menu_or_answer(
+            callback.message, subscription_text(value), reply_markup=with_main_menu(),
+        ); await callback.answer()
 
     @router.callback_query(F.data == "activation")
     async def activation(callback: CallbackQuery):
         value = await backend.activation_code(callback.from_user.id)
-        await callback.message.answer(f"Код активации (30 минут):\n<code>{value['activation_code']}</code>", parse_mode="HTML"); await callback.answer()
+        await callback.message.answer(
+            f"Код активации (30 минут):\n<code>{value['activation_code']}</code>",
+            parse_mode="HTML", reply_markup=with_main_menu(preserve=True),
+        ); await callback.answer()
 
     @router.callback_query(F.data == "devices")
     async def devices(callback: CallbackQuery):
         value = await backend.subscription(callback.from_user.id); devices = value.get("devices", [])
         buttons = [[InlineKeyboardButton(text=f"Отключить {d['name']}", callback_data=f"device:{d['id']}")]
                    for d in devices if d["status"] == "ACTIVE"]
-        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
-        await callback.message.answer(devices_text(value), reply_markup=keyboard); await callback.answer()
+        keyboard = with_main_menu(InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None)
+        await edit_menu_or_answer(callback.message, devices_text(value), reply_markup=keyboard); await callback.answer()
 
     @router.callback_query(F.data.startswith("device:"))
     async def confirm_device(callback: CallbackQuery):
         device_id = callback.data.split(":", 1)[1]
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        keyboard = with_main_menu(InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Подтвердить отключение", callback_data=f"confirm_device:{device_id}")
-        ]])
+        ]]), preserve=True)
         await callback.message.answer("Отключить это устройство? Активная сессия будет отозвана.", reply_markup=keyboard)
         await callback.answer()
 
@@ -501,15 +566,15 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             f"Creator Assistant Commercial Staging\nВерсия {value['version']} · {size:.1f} МБ\n"
             f"SHA-256: <code>{value['sha256']}</code>\n\n"
             f"{DOWNLOAD_WARNING_TEXT}\n"
-            f"{value['download_url']}", parse_mode="HTML",
+            f"{value['download_url']}", parse_mode="HTML", reply_markup=with_main_menu(preserve=True),
         ); await callback.answer()
 
     @router.callback_query(F.data == "help")
     async def help_(callback: CallbackQuery):
-        await callback.message.answer(PUBLIC_HELP_TEXT); await callback.answer()
+        await edit_menu_or_answer(callback.message, PUBLIC_HELP_TEXT, reply_markup=with_main_menu()); await callback.answer()
     @router.callback_query(F.data == "support")
     async def support(callback: CallbackQuery):
-        await callback.message.answer("Поддержка:", reply_markup=support_user_keyboard())
+        await edit_menu_or_answer(callback.message, "Поддержка:", reply_markup=support_user_keyboard())
         await callback.answer()
 
     @router.callback_query(F.data == "support_new")
@@ -519,10 +584,10 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
             ticket = existing[0]
             await callback.message.answer(
                 f"У вас уже есть открытое обращение {ticket['number']}. Продолжить его или создать отдельное?",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                reply_markup=with_main_menu(InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Продолжить диалог", callback_data=f"support_continue:{ticket['id']}")],
                     [InlineKeyboardButton(text="Создать отдельное", callback_data="support_new_confirm")],
-                ]),
+                ]), preserve=True),
             )
             await callback.answer(); return
         await state.clear()
@@ -551,7 +616,9 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         if nav: buttons.append(nav)
         buttons.append([InlineKeyboardButton(text="➕ Новое обращение", callback_data="support_new")])
         await callback.message.answer("Мои обращения:" if values else "Обращений пока нет.",
-                                      reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+                                      reply_markup=with_main_menu(
+                                          InlineKeyboardMarkup(inline_keyboard=buttons), preserve=True,
+                                      ))
         await callback.answer()
 
     @router.callback_query(F.data.startswith("support_user_ticket:"))
@@ -567,7 +634,9 @@ def build_router(backend: BackendClient, settings: BotSettings) -> Router:
         buttons = [[InlineKeyboardButton(text="Продолжить переписку", callback_data=f"support_continue:{ticket_id}")]]
         if ticket.get("status") == "CLOSED":
             buttons = [[InlineKeyboardButton(text="Создать новое обращение", callback_data="support_new")]]
-        await callback.message.answer("\n\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        await callback.message.answer("\n\n".join(lines), reply_markup=with_main_menu(
+            InlineKeyboardMarkup(inline_keyboard=buttons), preserve=True,
+        ))
         await callback.answer()
 
     @router.callback_query(F.data.startswith("support_continue:"))

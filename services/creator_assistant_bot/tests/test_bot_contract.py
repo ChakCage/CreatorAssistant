@@ -9,7 +9,18 @@ import pytest
 from bot.auth import BOT_PERMISSIONS
 from bot.backend import BackendClient
 from bot.config import BotSettings
-from bot.handlers import is_admin_user, telegram_membership_snapshot
+from bot.handlers import (
+    MAIN_MENU_CALLBACK,
+    MAIN_MENU_PRESERVE_CALLBACK,
+    edit_menu_or_answer,
+    handle_menu_message,
+    handle_main_menu_callback,
+    is_admin_user,
+    support_category_keyboard,
+    support_user_keyboard,
+    telegram_membership_snapshot,
+    with_main_menu,
+)
 from bot.main import deliver_notification
 from bot.ui import (
     STAGING_PAYMENT_DISABLED_TEXT,
@@ -88,6 +99,103 @@ def test_free_and_admin_actions_are_exposed_only_when_explicitly_enabled():
     free = {button.callback_data for row in main_menu(free_enabled=True).inline_keyboard for button in row}
     assert "free_offer" not in ordinary and "admin_panel" not in ordinary
     assert "admin_panel" in admin and "free_offer" in free
+
+
+def test_nested_user_screens_offer_main_menu_and_historical_flows_preserve_messages():
+    ordinary = with_main_menu()
+    support = support_user_keyboard()
+    categories = support_category_keyboard()
+    assert ordinary.inline_keyboard[-1][0].callback_data == MAIN_MENU_CALLBACK
+    assert support.inline_keyboard[-1][0].callback_data == MAIN_MENU_PRESERVE_CALLBACK
+    assert categories.inline_keyboard[-1][0].callback_data == MAIN_MENU_PRESERVE_CALLBACK
+    assert all(markup.inline_keyboard[-1][0].text == "🏠 Главное меню"
+               for markup in (ordinary, support, categories))
+
+
+class _MenuMessage:
+    def __init__(self, *, edit_fails=False):
+        self.edited = []; self.sent = []; self.edit_fails = edit_fails
+
+    async def edit_text(self, text, **kwargs):
+        if self.edit_fails:
+            raise AttributeError("message cannot be edited")
+        self.edited.append((text, kwargs))
+
+    async def answer(self, text, **kwargs): self.sent.append((text, kwargs))
+
+
+class _MenuState:
+    def __init__(self): self.cleared = 0
+    async def clear(self): self.cleared += 1
+
+
+class _MenuBackend:
+    def __init__(self, *, free=True): self.free = free; self.users = []
+    async def upsert_user(self, *args): self.users.append(args)
+    async def free_config(self, _user_id): return {"enabled": self.free}
+
+
+class _MenuCallback:
+    def __init__(self, data=MAIN_MENU_CALLBACK, *, edit_fails=False, user_id=101):
+        self.data = data; self.message = _MenuMessage(edit_fails=edit_fails); self.answers = []
+        self.from_user = type("User", (), {
+            "id": user_id, "username": "user", "first_name": "User", "language_code": "ru",
+        })()
+    async def answer(self, *args, **kwargs): self.answers.append((args, kwargs))
+
+
+@pytest.mark.asyncio
+async def test_main_menu_callback_clears_fsm_for_free_user_and_edits_existing_menu():
+    callback = _MenuCallback(); state = _MenuState()
+    outcome = await handle_main_menu_callback(
+        callback, state, _MenuBackend(free=True), BotSettings(service_secret="x" * 32),
+    )
+    assert outcome == "edited" and state.cleared == 1 and len(callback.answers) == 1
+    callbacks = {button.callback_data for row in callback.message.edited[0][1]["reply_markup"].inline_keyboard
+                 for button in row}
+    assert "free_offer" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_menu_command_handler_clears_fsm_and_returns_main_menu():
+    message = _MenuMessage()
+    message.from_user = type("User", (), {
+        "id": 101, "username": "user", "first_name": "User", "language_code": "ru",
+    })()
+    state = _MenuState()
+    await handle_menu_message(
+        message, state, _MenuBackend(free=True), BotSettings(service_secret="x" * 32),
+    )
+    assert state.cleared == 1 and len(message.sent) == 1
+    assert message.sent[0][0].startswith("Creator Assistant")
+
+
+@pytest.mark.asyncio
+async def test_main_menu_callback_supports_admin_and_falls_back_when_edit_fails():
+    settings = BotSettings(service_secret="x" * 32, admin_telegram_id=424403653)
+    callback = _MenuCallback(edit_fails=True, user_id=424403653); state = _MenuState()
+    outcome = await handle_main_menu_callback(callback, state, _MenuBackend(free=False), settings)
+    assert outcome == "sent" and not callback.message.edited and len(callback.message.sent) == 1
+    callbacks = {button.callback_data for row in callback.message.sent[0][1]["reply_markup"].inline_keyboard
+                 for button in row}
+    assert "admin_panel" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_preserving_main_menu_callback_does_not_edit_support_history():
+    callback = _MenuCallback(data=MAIN_MENU_PRESERVE_CALLBACK); state = _MenuState()
+    outcome = await handle_main_menu_callback(
+        callback, state, _MenuBackend(), BotSettings(service_secret="x" * 32),
+    )
+    assert outcome == "sent" and state.cleared == 1
+    assert callback.message.edited == [] and len(callback.message.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_edit_menu_helper_falls_back_to_new_message():
+    message = _MenuMessage(edit_fails=True)
+    assert await edit_menu_or_answer(message, "Меню") == "sent"
+    assert message.sent[0][0] == "Меню"
 
 
 @pytest.mark.parametrize(("status", "expected"), [

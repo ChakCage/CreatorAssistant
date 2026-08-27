@@ -229,6 +229,7 @@ def test_live_free_ui_verifier_captures_server_quota_text(monkeypatch, tmp_path)
             "projects": {"used": 2, "limit": 2},
             "shorts_sources": {"used": 0, "limit": 2},
             "devices": {"used": 1, "limit": 1},
+            "membership": {"status": "member"},
         },
         last_diagnostics=SimpleNamespace(safe_text=lambda: "HTTP 200"),
     )
@@ -238,6 +239,35 @@ def test_live_free_ui_verifier_captures_server_quota_text(monkeypatch, tmp_path)
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["success"] is True
-    assert "проекты 2 из 2" in report["status_text"]
-    assert "Shorts-источники 0 из 2" in report["status_text"]
-    assert "устройства 1 из 1" in report["status_text"]
+    assert "Тариф: Бесплатный" in report["status_text"]
+    assert "Подготовка проектов: 2 из 2" in report["status_text"]
+    assert "Исходные видео для Shorts: 0 из 2" in report["status_text"]
+    assert "Устройства: 1 из 1" in report["status_text"]
+    assert "Подписка на канал: подтверждена" in report["status_text"]
+    assert "free_channel" not in report["status_text"]
+    assert "T00:00:00" not in report["status_text"]
+    assert "+00:00" not in report["status_text"]
+
+
+def test_desktop_license_presenter_localizes_plans_dates_and_states():
+    from creator_assistant.ui.license_presenter import (
+        format_desktop_datetime, plan_name, state_name,
+    )
+
+    moscow = timezone(timedelta(hours=3))
+    now = datetime(2026, 8, 13, 2, 0, tzinfo=moscow)
+    assert plan_name("free_channel") == "Бесплатный"
+    assert plan_name("paid") == "Платный"
+    assert plan_name("promo") == "Промо"
+    assert plan_name("beta") == "Тестовый доступ"
+    assert state_name("ACTIVE") == "активна"
+    assert format_desktop_datetime(
+        "2036-08-06T18:46:00Z", now=now, local_timezone=moscow, always_show_year=True,
+    ) == "6 августа 2036, 21:46"
+    assert format_desktop_datetime(
+        "2026-08-12T22:41:14.754428Z", now=now, local_timezone=moscow,
+    ) == "13 августа, 01:41"
+    assert format_desktop_datetime(
+        "2026-08-12T22:41:14.804276+00:00", now=now,
+        local_timezone=moscow, relative=True,
+    ) == "Сегодня, 01:41"
