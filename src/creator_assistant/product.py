@@ -14,12 +14,12 @@ class AppEdition(str, Enum):
 
     @property
     def display_name(self) -> str:
-        return "Developer Edition" if self is AppEdition.DEVELOPER else "Commercial Edition"
+        return "Developer Preview" if self is AppEdition.DEVELOPER else "Commercial Edition"
 
     @property
     def application_name(self) -> str:
         if self is AppEdition.DEVELOPER:
-            return "Creator Assistant Developer"
+            return "Creator Assistant Developer Preview"
         from creator_assistant.infrastructure.build_info import current_build_info
         return ("Creator Assistant Commercial Staging"
                 if current_build_info().build_variant == "staging"
@@ -38,7 +38,7 @@ class DistributionProfile(str, Enum):
     @property
     def channel(self) -> str:
         return {
-            DistributionProfile.DEVELOPER: "developer",
+            DistributionProfile.DEVELOPER: "developer-preview",
             DistributionProfile.COMMERCIAL: "stable",
             DistributionProfile.COMMERCIAL_STAGING: "beta",
         }[self]
@@ -46,7 +46,7 @@ class DistributionProfile(str, Enum):
     @property
     def data_name(self) -> str:
         return {
-            DistributionProfile.DEVELOPER: "Developer",
+            DistributionProfile.DEVELOPER: "DeveloperPreview",
             DistributionProfile.COMMERCIAL: "Commercial",
             DistributionProfile.COMMERCIAL_STAGING: "CommercialStaging",
         }[self]
@@ -110,6 +110,7 @@ class FeatureRegistry:
             Feature.AUTOPILOT,
             Feature.PUBLISHING_QUEUE,
             Feature.YOUTUBE_PUBLISHING,
+            Feature.SETUP_WIZARD,
         },
         AppEdition.COMMERCIAL: _common | {Feature.LICENSING, Feature.DIAGNOSTICS, Feature.SETUP_WIZARD},
     }
@@ -136,9 +137,9 @@ class FeatureRegistry:
 def build_artifact(edition: AppEdition) -> tuple[str, str, str]:
     if edition is AppEdition.DEVELOPER:
         return (
-            "CreatorAssistant-Developer",
-            "CreatorAssistant-Developer.exe",
-            "Creator Assistant Developer",
+            "CreatorAssistant-Developer-Preview",
+            "CreatorAssistant-Developer-Preview.exe",
+            "Creator Assistant Developer Preview",
         )
     return ("CreatorAssistant", "CreatorAssistant.exe", "Creator Assistant")
 
@@ -146,7 +147,7 @@ def build_artifact(edition: AppEdition) -> tuple[str, str, str]:
 def qsettings_application_name(edition: AppEdition | None = None) -> str:
     resolved = edition or current_edition()
     if resolved is AppEdition.DEVELOPER:
-        return "CreatorAssistantDeveloper"
+        return "CreatorAssistantDeveloperPreview"
     if edition is not None:
         return "CreatorAssistantCommercial"
     from creator_assistant.infrastructure.build_info import current_build_info

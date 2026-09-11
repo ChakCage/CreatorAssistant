@@ -49,7 +49,7 @@ def test_inno_installer_defines_three_isolated_products_and_preserves_data():
     root = Path(__file__).resolve().parents[2]
     script = (root / "installer" / "CreatorAssistant.iss").read_text(encoding="utf-8")
     assert script.count("#define AppIdValue") == 3
-    assert 'InstallLeaf "Developer"' in script
+    assert 'InstallLeaf "DeveloperPreview"' in script
     assert 'InstallLeaf "Commercial"' in script
     assert 'InstallLeaf "Commercial-Staging"' in script
     assert "PrivilegesRequired=lowest" in script

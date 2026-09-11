@@ -12,7 +12,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from creator_assistant.domain.models import DependencyInfo
 
 from .process_runner import ProcessRunner
-from .settings_store import local_data_root
+from .settings_store import local_data_root, shared_data_root
 
 
 SOURCE_SAVED = "сохранённый пользовательский путь"
@@ -66,7 +66,7 @@ class DependencyDetector:
     def discover(self, settings: Dict[str, Any]) -> Dict[str, DependencyResolution]:
         youtube_root = Path(str(settings.get("youtube_root") or r"E:\YouTube"))
         tools_root = youtube_root / "Инструменты"
-        managed = local_data_root() / "tools"
+        managed = shared_data_root() / "SharedRuntime" / "tools"
         app_dir = Path(sys.executable).resolve().parent
         sources = settings.get("dependency_sources", {})
         if not isinstance(sources, dict):

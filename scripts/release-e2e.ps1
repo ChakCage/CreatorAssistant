@@ -26,7 +26,7 @@ if (-not ([System.IO.Path]::GetFullPath($E2ERoot).StartsWith(
 
 $StagingN = Join-Path $InstallersDirectory "CreatorAssistant-Commercial-Staging-Setup-$VersionN.exe"
 $StagingNext = Join-Path $InstallersDirectory "CreatorAssistant-Commercial-Staging-Setup-$VersionNPlusOne.exe"
-$Developer = Join-Path $InstallersDirectory "CreatorAssistant-Developer-Setup-$VersionNPlusOne.exe"
+$Developer = Join-Path $InstallersDirectory "CreatorAssistant-Developer-Preview-Setup-$VersionNPlusOne.exe"
 $Commercial = Join-Path $InstallersDirectory "CreatorAssistant-Commercial-Setup-$VersionNPlusOne.exe"
 $RequiredArtifacts = @($StagingNext,$LicensePrivateKey)
 if (-not $CandidateOnly) { $RequiredArtifacts += @($StagingN,$UpdatePrivateKey) }
@@ -193,7 +193,7 @@ try {
     Add-Step 'reinstall-recovers-data' ((Get-Content -Raw (Join-Path $Profile 'settings.json')) -match 'E:/E2E-preserve-me') 'settings marker restored'
 
     if (-not $StagingOnly) {
-        $DeveloperExe = Join-Path $Local 'Programs\CreatorAssistant\Developer\CreatorAssistant-Developer.exe'
+        $DeveloperExe = Join-Path $Local 'Programs\CreatorAssistant\DeveloperPreview\CreatorAssistant-Developer-Preview.exe'
         $CommercialExe = Join-Path $Local 'Programs\CreatorAssistant\Commercial\CreatorAssistant.exe'
         Invoke-Installer $Developer (Split-Path $DeveloperExe)
         Invoke-Installer $Commercial (Split-Path $CommercialExe)

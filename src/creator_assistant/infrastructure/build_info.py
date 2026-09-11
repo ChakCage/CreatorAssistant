@@ -65,7 +65,13 @@ def current_build_info() -> BuildInfo:
         packaging_format=str(payload.get("packaging_format") or ("pyinstaller" if getattr(sys, "frozen", False) else "source")),
         architecture=str(payload.get("architecture") or "x86_64"),
         license_backend_profile=str(payload.get("license_backend_profile") or "production"),
-        license_backend_url=str(payload.get("license_backend_url") or "https://licensing.creatorassistant.app"),
+        # An explicitly empty URL is a security boundary for standalone builds;
+        # only legacy metadata with no key at all receives the old default.
+        license_backend_url=str(
+            payload["license_backend_url"]
+            if "license_backend_url" in payload
+            else "https://licensing.creatorassistant.app"
+        ),
         license_public_keys=dict(payload.get("license_public_keys") or {}),
         build_variant=str(payload.get("build_variant") or "production"),
         telegram_bot_url=str(payload.get("telegram_bot_url") or ""),

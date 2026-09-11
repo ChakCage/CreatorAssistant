@@ -22,6 +22,7 @@ from creator_assistant.app import ServiceContainer
 from creator_assistant.ui.main_window import MainWindow
 from creator_assistant.product import (
     AppEdition,
+    DEVELOPER_AI_MODEL,
     Feature,
     FeatureRegistry,
     current_edition,
@@ -375,6 +376,55 @@ def _commercial_setup_verification(window: MainWindow, container: ServiceContain
     QTimer.singleShot(250, lambda: os._exit(0))
 
 
+def _developer_setup_verification(window: MainWindow, container: ServiceContainer, report_path: Path) -> None:
+    """Inspect the packaged standalone wizard without installing or downloading anything."""
+    module = importlib.import_module("creator_assistant.ui." + "developer_setup_wizard")
+    wizard = module.DeveloperSetupWizard(container, window)
+    wizard.show()
+    QApplication.processEvents()
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path = report_path.with_suffix(".png")
+    wizard.grab().save(str(image_path), "PNG")
+    report = container.developer_setup.inspect()
+    page_titles = [wizard.page(page_id).title() for page_id in wizard.pageIds()]
+    forbidden_prefixes = (
+        "creator_assistant.services.licensing",
+        "creator_assistant.ui.license_dialog",
+        "creator_assistant.services.commercial_setup",
+        "creator_assistant.ui.commercial_setup_wizard",
+    )
+    forbidden = sorted(name for name in sys.modules if name.startswith(forbidden_prefixes))
+    build = current_build_info()
+    payload = {
+        "success": (
+            container.edition is AppEdition.DEVELOPER
+            and page_titles == [
+                "Creator Assistant готов к настройке", "Проверка компонентов",
+                "Локальный AI", "Проверка AI", "Готово",
+            ]
+            and not hasattr(container, "licensing")
+            and not forbidden
+            and build.license_backend_profile == "disabled"
+            and not build.license_backend_url
+            and not build.telegram_bot_url
+            and not build.update_backend_url
+        ),
+        "pages": page_titles,
+        "model": DEVELOPER_AI_MODEL,
+        "ollama_api": report.ollama_api,
+        "model_installed": report.model_installed,
+        "components": [item.__dict__ for item in report.components],
+        "licensing_initialized": hasattr(container, "licensing"),
+        "forbidden_modules_loaded": forbidden,
+        "build": build.__dict__,
+        "settings_path": str(container.settings_store.path),
+        "screenshot": str(image_path),
+    }
+    report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    wizard.close()
+    QTimer.singleShot(250, lambda: os._exit(0))
+
+
 def _commercial_license_verification(container: ServiceContainer, report_path: Path) -> None:
     """Exercise the real packaged Commercial client against its sealed backend profile."""
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -510,6 +560,20 @@ def _update_e2e_verification(container: ServiceContainer, report_path: Path) -> 
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _developer_ai_verification(container: ServiceContainer, report_path: Path) -> None:
+    """Run the packaged Developer Preview against the fixed localhost model."""
+    report: dict[str, object] = {"success": False, "build": current_build_info().__dict__}
+    try:
+        if current_edition() is not AppEdition.DEVELOPER:
+            raise RuntimeError("AI verification is available only in Developer Preview")
+        result = container.developer_setup.ai_smoke_test(timeout=900)
+        report.update({"success": True, "result": result})
+    except Exception as exc:
+        report.update({"error": str(exc), "error_type": type(exc).__name__})
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def main() -> int:
     multiprocessing.freeze_support()
     install_qt_message_handler()
@@ -556,6 +620,18 @@ def main() -> int:
             "",
         )
         if commercial_setup_verification_arg:
+            container.first_run = False
+        developer_setup_verification_arg = next(
+            (value.split("=", 1)[1] for value in sys.argv if value.startswith("--verify-developer-setup=")),
+            "",
+        )
+        if developer_setup_verification_arg:
+            container.first_run = False
+        developer_ai_verification_arg = next(
+            (value.split("=", 1)[1] for value in sys.argv if value.startswith("--verify-developer-ai=")),
+            "",
+        )
+        if developer_ai_verification_arg:
             container.first_run = False
         commercial_license_verification_arg = next(
             (value.split("=", 1)[1] for value in sys.argv if value.startswith("--verify-commercial-license=")),
@@ -647,6 +723,19 @@ def main() -> int:
             QTimer.singleShot(
                 700,
                 lambda: _commercial_setup_verification(window, container, Path(commercial_setup_verification_arg)),
+            )
+        if developer_setup_verification_arg:
+            QTimer.singleShot(
+                700,
+                lambda: _developer_setup_verification(window, container, Path(developer_setup_verification_arg)),
+            )
+        if developer_ai_verification_arg:
+            QTimer.singleShot(
+                500,
+                lambda: (
+                    _developer_ai_verification(container, Path(developer_ai_verification_arg)),
+                    app.quit(),
+                ),
             )
         if commercial_license_verification_arg:
             QTimer.singleShot(

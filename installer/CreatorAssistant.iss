@@ -15,12 +15,12 @@
 #endif
 
 #if Profile == "developer"
-  #define ProductName "Creator Assistant Developer"
-  #define AppIdValue "{{83C2DB8C-AFB5-4A4D-AEB8-C995B7069F2B}"
-  #define InstallLeaf "Developer"
-  #define ExecutableName "CreatorAssistant-Developer.exe"
-  #define SetupBase "CreatorAssistant-Developer-Setup-" + AppVersion
-  #define DataLeaf "Developer"
+  #define ProductName "Creator Assistant Developer Preview"
+  #define AppIdValue "{{8A13CF6B-D320-4DAE-BAC5-8EF827E41D41}"
+  #define InstallLeaf "DeveloperPreview"
+  #define ExecutableName "CreatorAssistant-Developer-Preview.exe"
+  #define SetupBase "CreatorAssistant-Developer-Preview-Setup-" + AppVersion
+  #define DataLeaf "DeveloperPreview"
 #elif Profile == "commercial"
   #define ProductName "Creator Assistant"
   #define AppIdValue "{{3A858CC2-F9F4-46CB-BEE5-2906DE77D7C7}"
@@ -79,7 +79,11 @@ Name: "desktopicon"; Description: "Создать ярлык на рабочем
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+#if Profile == "developer"
+Source: "..\docs\developer-preview-quick-start-ru.md"; DestDir: "{app}\docs"; Flags: ignoreversion
+#else
 Source: "..\docs\beta-quick-start-ru.md"; DestDir: "{app}\docs"; Flags: ignoreversion
+#endif
 
 [Icons]
 Name: "{autoprograms}\{#ProductName}"; Filename: "{app}\{#ExecutableName}"; WorkingDir: "{app}"
@@ -87,7 +91,11 @@ Name: "{code:DesktopShortcutDirectory}\{#ProductName}"; Filename: "{app}\{#Execu
 
 [Run]
 Filename: "{app}\{#ExecutableName}"; Description: "Запустить {#ProductName}"; Flags: nowait postinstall skipifsilent
+#if Profile == "developer"
+Filename: "notepad.exe"; Parameters: """{app}\docs\developer-preview-quick-start-ru.md"""; Description: "Открыть краткую инструкцию"; Flags: postinstall skipifsilent shellexec
+#else
 Filename: "notepad.exe"; Parameters: """{app}\docs\beta-quick-start-ru.md"""; Description: "Открыть краткую инструкцию"; Flags: postinstall skipifsilent shellexec
+#endif
 
 [Code]
 function DesktopShortcutDirectory(Param: String): String;

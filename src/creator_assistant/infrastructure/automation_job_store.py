@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import uuid
 from pathlib import Path
 from threading import RLock
 from typing import List, Optional
@@ -25,9 +27,16 @@ class AutomationJobStore:
         with self._lock:
             path = self.path_for(job.job_id)
             path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = path.with_suffix(".json.tmp")
+            temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
             temporary.write_text(json.dumps(job.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(str(temporary), str(path))
+            for attempt in range(6):
+                try:
+                    os.replace(str(temporary), str(path))
+                    break
+                except PermissionError:
+                    if attempt == 5:
+                        raise
+                    time.sleep(0.025 * (attempt + 1))
             return path
 
     def load(self, job_id: str) -> Optional[AutomationJob]:

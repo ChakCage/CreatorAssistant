@@ -34,6 +34,7 @@ def test_developer_contains_all_product_tabs_and_strict_ai_model():
     )
     assert FeatureRegistry.is_available(Feature.YOUTUBE_PUBLISHING, AppEdition.DEVELOPER)
     assert FeatureRegistry.is_available(Feature.DIAGNOSTICS, AppEdition.DEVELOPER)
+    assert FeatureRegistry.is_available(Feature.SETUP_WIZARD, AppEdition.DEVELOPER)
     assert not FeatureRegistry.is_available(Feature.LICENSING, AppEdition.DEVELOPER)
     assert DEVELOPER_AI_MODEL == "qwen3.6:35b-a3b"
 
@@ -59,9 +60,9 @@ def test_edition_settings_databases_logs_and_qsettings_are_separate(monkeypatch,
     commercial_config = config_root(AppEdition.COMMERCIAL)
     developer_local = local_data_root(AppEdition.DEVELOPER)
     commercial_local = local_data_root(AppEdition.COMMERCIAL)
-    assert developer_config == roaming / "CreatorAssistant" / "Developer"
+    assert developer_config == roaming / "CreatorAssistant" / "DeveloperPreview"
     assert commercial_config == roaming / "CreatorAssistant" / "Commercial"
-    assert developer_local == local / "CreatorAssistant" / "Developer"
+    assert developer_local == local / "CreatorAssistant" / "DeveloperPreview"
     assert commercial_local == local / "CreatorAssistant" / "Commercial"
     assert shared_data_root() == local / "CreatorAssistant"
     assert qsettings_application_name(AppEdition.DEVELOPER) != qsettings_application_name(AppEdition.COMMERCIAL)
@@ -100,9 +101,9 @@ def test_legacy_settings_are_safely_copied_to_developer_only(monkeypatch, tmp_pa
     (shared_models / "model.bin").write_bytes(b"shared")
 
     store = SettingsStore()
-    assert store.path == legacy / "Developer" / "settings.json"
+    assert store.path == legacy / "DeveloperPreview" / "settings.json"
     assert store.load()["youtube_root"] == "E:/Legacy"
-    assert (legacy / "Developer" / "user_assets" / "banner.png").read_bytes() == b"banner"
+    assert (legacy / "DeveloperPreview" / "user_assets" / "banner.png").read_bytes() == b"banner"
     assert not (legacy / "Commercial" / "settings.json").exists()
     assert (shared_models / "model.bin").read_bytes() == b"shared"
     assert not (local / "CreatorAssistant" / "Developer" / "models").exists()
@@ -129,9 +130,9 @@ def test_build_artifacts_and_shortcuts_do_not_overlap():
     developer = build_artifact(AppEdition.DEVELOPER)
     commercial = build_artifact(AppEdition.COMMERCIAL)
     assert developer == (
-        "CreatorAssistant-Developer",
-        "CreatorAssistant-Developer.exe",
-        "Creator Assistant Developer",
+        "CreatorAssistant-Developer-Preview",
+        "CreatorAssistant-Developer-Preview.exe",
+        "Creator Assistant Developer Preview",
     )
     assert commercial == ("CreatorAssistant", "CreatorAssistant.exe", "Creator Assistant")
     assert set(developer).isdisjoint(set(commercial))
@@ -164,14 +165,78 @@ print(json.dumps(sorted(name for name in sys.modules if name.startswith(forbidde
     assert json.loads(result.stdout.strip()) == []
 
 
+def test_developer_container_is_server_independent_and_does_not_import_licensing(tmp_path: Path):
+    code = r'''import json, os, sys, urllib.request
+from pathlib import Path
+from creator_assistant.infrastructure.settings_store import SettingsStore
+
+def offline(*args, **kwargs):
+    raise OSError("network deliberately unavailable")
+
+urllib.request.urlopen = offline
+from creator_assistant.app import ServiceContainer
+container = ServiceContainer(SettingsStore(Path(os.environ["CA_TEST_SETTINGS"])))
+container.require_entitlement("project_preparation")
+container.require_entitlement("shorts_analysis")
+print(json.dumps({
+    "edition": container.edition.value,
+    "license": hasattr(container, "licensing"),
+    "license_modules": sorted(name for name in sys.modules if name.startswith((
+        "creator_assistant.services.licensing",
+        "creator_assistant.ui.license_dialog",
+        "creator_assistant.infrastructure.secure_credential_store",
+    ))),
+    "state": container.feature_gate.status().state,
+    "quota": container.acquire_free_quota("shorts_source", "offline-test"),
+}))
+'''
+    environment = dict(os.environ)
+    environment.update({
+        "CREATOR_ASSISTANT_EDITION": "developer",
+        "CREATOR_ASSISTANT_AGENT_MODE": "1",
+        "APPDATA": str(tmp_path / "roaming"),
+        "LOCALAPPDATA": str(tmp_path / "local"),
+        "CA_TEST_SETTINGS": str(tmp_path / "settings.json"),
+        "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+    })
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True,
+        env=environment, timeout=90, check=True,
+    )
+    payload = json.loads(result.stdout.strip())
+    assert payload == {
+        "edition": "developer",
+        "license": False,
+        "license_modules": [],
+        "state": "NOT_APPLICABLE",
+        "quota": "",
+    }
+
+
+def test_explicitly_disabled_license_endpoint_stays_empty(monkeypatch, tmp_path: Path):
+    from creator_assistant.infrastructure import build_info
+
+    metadata = tmp_path / "build" / "generated" / "build_info.json"
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text(
+        '{"edition":"developer","license_backend_profile":"disabled","license_backend_url":""}',
+        encoding="utf-8",
+    )
+    fake_module = tmp_path / "src" / "creator_assistant" / "infrastructure" / "build_info.py"
+    monkeypatch.setattr(build_info, "__file__", str(fake_module))
+    assert build_info.current_build_info().license_backend_url == ""
+
+
 def test_build_scripts_define_two_independent_outputs_and_package_boundary():
     root = Path(__file__).resolve().parents[2]
     build_script = (root / "scripts" / "build.ps1").read_text(encoding="utf-8-sig")
     shortcut_script = (root / "scripts" / "create_shortcut.ps1").read_text(encoding="utf-8-sig")
     verifier = (root / "scripts" / "verify-package-edition.ps1").read_text(encoding="utf-8-sig")
     assert "CreatorAssistant-Developer" in build_script
-    assert "CreatorAssistant-Developer.exe" in build_script
-    assert "Creator Assistant Developer" in build_script
+    assert "CreatorAssistant-Developer-Preview.exe" in build_script
+    assert "Creator Assistant Developer Preview" in build_script
     assert "CreatorAssistant.exe" in build_script
     assert "verify-package-edition.ps1" in build_script
     assert "Creator Assistant Developer" in shortcut_script

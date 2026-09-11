@@ -165,6 +165,12 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "temp_folder": "",
         "last_preflight": {},
     },
+    "developer_setup": {
+        "completed": False,
+        "schema_version": 1,
+        "ai_skipped": False,
+        "last_preflight": {},
+    },
     "last_update_check": "",
     "app_updates": {
         "last_check": "",
@@ -208,7 +214,7 @@ def config_root(edition=None) -> Path:
 
     selected = edition or current_edition()
     if selected is AppEdition.DEVELOPER:
-        name = "Developer"
+        name = "DeveloperPreview"
     elif edition is None:
         name = current_distribution_profile().data_name
     else:
@@ -221,7 +227,7 @@ def local_data_root(edition=None) -> Path:
 
     selected = edition or current_edition()
     if selected is AppEdition.DEVELOPER:
-        name = "Developer"
+        name = "DeveloperPreview"
     elif edition is None:
         name = current_distribution_profile().data_name
     else:
@@ -254,8 +260,12 @@ def migrate_legacy_developer_data() -> list[str]:
     copied: list[str] = []
     legacy_config = _config_base()
     destination.mkdir(parents=True, exist_ok=True)
+    # Prefer the previous Developer edition as migration source. The old
+    # edition remains untouched so both installs can be rolled back safely.
+    previous_developer = legacy_config / "Developer"
+    source_root = previous_developer if previous_developer.exists() else legacy_config
     for name in ("settings.json", "publishing", "user_assets", "shorts"):
-        source, target = legacy_config / name, destination / name
+        source, target = source_root / name, destination / name
         if not source.exists() or target.exists():
             continue
         if source.is_dir():
@@ -266,8 +276,10 @@ def migrate_legacy_developer_data() -> list[str]:
     legacy_local = _local_base()
     local_destination = local_data_root(AppEdition.DEVELOPER)
     local_destination.mkdir(parents=True, exist_ok=True)
+    previous_local = legacy_local / "Developer"
+    local_source_root = previous_local if previous_local.exists() else legacy_local
     for name in ("jobs", "automation", "logs", "project_index.json"):
-        source, target = legacy_local / name, local_destination / name
+        source, target = local_source_root / name, local_destination / name
         if not source.exists() or target.exists():
             continue
         if source.is_dir():

@@ -13,7 +13,7 @@ from creator_assistant.ui.shorts.shorts_tab import ShortsTab
 from creator_assistant.ui.settings_dialog import SettingsDialog
 from creator_assistant.infrastructure.crash_logging import event as crash_event, safe_call
 from creator_assistant.infrastructure.build_info import current_build_info
-from creator_assistant.product import Feature, FeatureRegistry
+from creator_assistant.product import AppEdition, Feature, FeatureRegistry
 
 
 class MainWindow(QMainWindow):
@@ -41,8 +41,8 @@ class MainWindow(QMainWindow):
             toolbar.addAction(diagnostics)
         toolbar.addAction(settings)
         if FeatureRegistry.is_available(Feature.SETUP_WIZARD, edition):
-            local_ai = QAction("Локальный AI", self)
-            setup_wizard = QAction("Мастер настройки", self)
+            local_ai = QAction("Компоненты / диагностика", self) if edition is AppEdition.DEVELOPER else QAction("Локальный AI", self)
+            setup_wizard = QAction("Мастер первоначальной настройки", self)
             local_ai.triggered.connect(safe_call("open_local_ai", self.open_local_ai))
             setup_wizard.triggered.connect(safe_call("open_setup_wizard", self.open_setup_wizard))
             settings_menu.addAction(local_ai); settings_menu.addAction(setup_wizard)
@@ -112,14 +112,22 @@ class MainWindow(QMainWindow):
     def open_setup_wizard(self) -> None:
         if not FeatureRegistry.is_available(Feature.SETUP_WIZARD, self.container.edition):
             return
-        module = importlib.import_module("creator_assistant.ui." + "commercial_setup_wizard")
-        module.CommercialSetupWizard(self.container, self).exec()
+        if self.container.edition is AppEdition.DEVELOPER:
+            module = importlib.import_module("creator_assistant.ui." + "developer_setup_wizard")
+            module.DeveloperSetupWizard(self.container, self).exec()
+        else:
+            module = importlib.import_module("creator_assistant.ui." + "commercial_setup_wizard")
+            module.CommercialSetupWizard(self.container, self).exec()
 
     def open_local_ai(self) -> None:
         if not FeatureRegistry.is_available(Feature.SETUP_WIZARD, self.container.edition):
             return
-        module = importlib.import_module("creator_assistant.ui." + "commercial_setup_wizard")
-        module.LocalAIDialog(self.container, self).exec()
+        if self.container.edition is AppEdition.DEVELOPER:
+            module = importlib.import_module("creator_assistant.ui." + "developer_setup_wizard")
+            module.DeveloperSetupWizard(self.container, self).exec()
+        else:
+            module = importlib.import_module("creator_assistant.ui." + "commercial_setup_wizard")
+            module.LocalAIDialog(self.container, self).exec()
 
     def open_diagnostics(self) -> None:
         module = importlib.import_module("creator_assistant.ui." + "diagnostics_dialog")

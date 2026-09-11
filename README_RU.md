@@ -1,6 +1,14 @@
 # Creator Assistant
 
-Creator Assistant — настольное Windows-приложение для подготовки материалов публичного YouTube-видео к монтажу и озвучке. Стабильная версия **0.1.0 — Project Preparation MVP** охватывает вкладку «Подготовка проекта». В feature-ветке `feature/shorts-mvp` также доступен независимый локальный модуль Shorts.
+Creator Assistant — настольное Windows-приложение для подготовки материалов к монтажу, озвучке и публикации.
+
+## Редакции
+
+**Creator Assistant Developer Preview** — бесплатная standalone-редакция для тестирования и разработки. Она работает без подписки, activation code, Telegram-бота, YooKassa и backend Creator Assistant. В неё входят «Подготовка проекта», Shorts, вертикальный редактор, локальный AI, Autopilot, очередь публикаций и диагностика.
+
+**Creator Assistant Commercial** — отдельная будущая подписочная редакция. Её лицензирование, данные и update channel не используются Developer Preview.
+
+Developer Preview при первом запуске показывает мастер компонентов. FFmpeg/FFprobe и yt-dlp можно установить в общий пользовательский runtime. Ollama и модель `qwen3.6:35b-a3b` загружаются только после явного подтверждения; без AI остальные функции продолжают работать.
 
 ## Возможности Project Preparation MVP
 
@@ -41,7 +49,7 @@ Creator Assistant — настольное Windows-приложение для �
 
 ## Внешние зависимости
 
-В репозиторий и release ZIP не входят:
+В installer Developer Preview не входят крупные или проприетарные зависимости:
 
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp);
 - FFmpeg и FFprobe;
@@ -49,7 +57,7 @@ Creator Assistant — настольное Windows-приложение для �
 - REAPER;
 - модели ONNX и драйверы NVIDIA.
 
-Пути можно задать в настройках. Приложение также умеет искать установленные программы. Для автоматического Instrumental используется совместимый Audio Separator backend; GUI-сборка UVR может потребовать контролируемое ручное подтверждение результата.
+Пути можно задать в настройках. Мастер умеет безопасно установить yt-dlp и FFmpeg/FFprobe, открыть официальный installer Ollama и загрузить точную AI-модель после подтверждения. REAPER, VEGAS и DaVinci Resolve только обнаруживаются или выбираются вручную и не устанавливаются приложением.
 
 ## Запуск из исходников
 
@@ -74,13 +82,13 @@ $env:PYTHONPATH = "$PWD\src"
 .\scripts\build.ps1
 ```
 
-Результат находится в `dist\CreatorAssistant`. Это one-folder-сборка: `CreatorAssistant.exe` необходимо хранить рядом с каталогом `_internal` и остальными файлами сборки.
+Developer Preview собирается командой `scripts\build-installers.ps1 -Edition developer`. Результат: `dist\installers\CreatorAssistant-Developer-Preview-Setup-<version>.exe`.
 
 ## Пользовательские данные
 
-- настройки: `%APPDATA%\CreatorAssistant\settings.json`;
-- журналы: `%LOCALAPPDATA%\CreatorAssistant\logs`;
-- состояния незавершённых заданий: `%LOCALAPPDATA%\CreatorAssistant\jobs`.
+- настройки Developer Preview: `%APPDATA%\CreatorAssistant\DeveloperPreview`;
+- журналы и состояния: `%LOCALAPPDATA%\CreatorAssistant\DeveloperPreview`;
+- общие локальные модели/runtimes: `%LOCALAPPDATA%\CreatorAssistant` и системный cache Ollama.
 
 Пользовательские `settings.json`, cookies, browser profiles, журналы, проекты, медиа, модели и runtimes не входят в репозиторий. Не добавляйте их в коммиты или release-архивы.
 
@@ -94,9 +102,11 @@ $env:PYTHONPATH = "$PWD\src"
 - `scripts` — запуск, сборка и проверочные сценарии;
 - `CreatorAssistant.spec` — переносимая конфигурация PyInstaller.
 
-## Ограничения MVP
+## Ограничения Developer Preview
 
-- внешние программы и модели устанавливаются пользователем отдельно;
+- AI-модель занимает десятки гигабайт и загружается отдельно после подтверждения;
+- приложение пока не имеет подписи Authenticode, поэтому SmartScreen может предупредить;
+- автоматические обновления Commercial отключены; новые preview-версии публикуются через GitHub Releases;
 - доступность автоматического Audio Separator зависит от совместимого runtime;
 - качество и доступность потоков определяются YouTube и yt-dlp;
 - приложение не предназначено для обхода DRM или доступа к приватным материалам.

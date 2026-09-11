@@ -38,7 +38,7 @@ New-Item -ItemType Directory -Force -Path $Output | Out-Null
 $Spec = Join-Path $Root 'installer\CreatorAssistant.iss'
 $WindowsVersion = (($Version -split '[-+]')[0] + '.0')
 $Metadata = @{
-    'developer' = @('CreatorAssistant-Developer', 'CreatorAssistant-Developer-Setup')
+    'developer' = @('CreatorAssistant-Developer-Preview', 'CreatorAssistant-Developer-Preview-Setup')
     'commercial' = @('CreatorAssistant', 'CreatorAssistant-Commercial-Setup')
     'commercial-staging' = @('CreatorAssistant-Commercial-Staging', 'CreatorAssistant-Commercial-Staging-Setup')
 }

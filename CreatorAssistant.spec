@@ -12,11 +12,11 @@ if EDITION not in {'developer', 'commercial'}:
     raise RuntimeError(f'Unsupported CREATOR_ASSISTANT_EDITION={EDITION!r}')
 IS_DEVELOPER = EDITION == 'developer'
 BUILD_VARIANT = os.environ.get('CREATOR_ASSISTANT_BUILD_VARIANT', 'production').strip().lower()
-if BUILD_VARIANT not in {'production', 'staging'}:
+if BUILD_VARIANT not in {'production', 'staging', 'preview'}:
     raise RuntimeError(f'Unsupported CREATOR_ASSISTANT_BUILD_VARIANT={BUILD_VARIANT!r}')
 if IS_DEVELOPER and BUILD_VARIANT == 'staging':
     raise RuntimeError('Developer staging package is not supported')
-APP_NAME = ('CreatorAssistant-Developer' if IS_DEVELOPER else
+APP_NAME = ('CreatorAssistant-Developer-Preview' if IS_DEVELOPER else
             ('CreatorAssistant-Commercial-Staging' if BUILD_VARIANT == 'staging' else 'CreatorAssistant'))
 SOURCE_ROOT = PROJECT_ROOT / 'src'
 sys.path.insert(0, str(SOURCE_ROOT))
@@ -28,7 +28,7 @@ DATA_FILES = [(
 DOC_NAMES = [
     'README_RU.md', 'beta-user-guide-ru.md', 'beta-quick-start-ru.md',
     'updating-ru.md', 'support-and-privacy-ru.md', 'beta-known-issues-ru.md',
-    'privacy-policy-ru.md', 'eula-ru.md',
+    'privacy-policy-ru.md', 'eula-ru.md', 'developer-preview-quick-start-ru.md',
 ]
 for name in DOC_NAMES:
     source = PROJECT_ROOT / ('docs' if name != 'README_RU.md' else '') / name
@@ -53,6 +53,17 @@ if IS_DEVELOPER:
             'creator_assistant.infrastructure.publishing_startup',
         ]
     )
+    HIDDEN_IMPORTS += [
+        'creator_assistant.services.developer_setup',
+        'creator_assistant.ui.developer_setup_wizard',
+    ]
+    EXCLUDES = [
+        'creator_assistant.services.licensing',
+        'creator_assistant.ui.license_dialog',
+        'creator_assistant.infrastructure.secure_credential_store',
+        'creator_assistant.services.commercial_setup',
+        'creator_assistant.ui.commercial_setup_wizard',
+    ]
 else:
     HIDDEN_IMPORTS += [
         'creator_assistant.services.licensing',

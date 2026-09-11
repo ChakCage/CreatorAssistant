@@ -32,9 +32,9 @@ foreach ($CurrentEdition in $Editions) {
     $IsStaging = $CurrentEdition -eq 'commercial-staging'
     $PackageEdition = if ($IsStaging) { 'commercial' } else { $CurrentEdition }
     $IsDeveloper = $PackageEdition -eq 'developer'
-    $AppName = if ($IsDeveloper) { 'CreatorAssistant-Developer' } elseif ($IsStaging) { 'CreatorAssistant-Commercial-Staging' } else { 'CreatorAssistant' }
-    $ExeName = if ($IsDeveloper) { 'CreatorAssistant-Developer.exe' } elseif ($IsStaging) { 'CreatorAssistant-Commercial-Staging.exe' } else { 'CreatorAssistant.exe' }
-    $ShortcutName = if ($IsDeveloper) { 'Creator Assistant Developer' } elseif ($IsStaging) { 'Creator Assistant Commercial Staging' } else { 'Creator Assistant' }
+    $AppName = if ($IsDeveloper) { 'CreatorAssistant-Developer-Preview' } elseif ($IsStaging) { 'CreatorAssistant-Commercial-Staging' } else { 'CreatorAssistant' }
+    $ExeName = if ($IsDeveloper) { 'CreatorAssistant-Developer-Preview.exe' } elseif ($IsStaging) { 'CreatorAssistant-Commercial-Staging.exe' } else { 'CreatorAssistant.exe' }
+    $ShortcutName = if ($IsDeveloper) { 'Creator Assistant Developer Preview' } elseif ($IsStaging) { 'Creator Assistant Commercial Staging' } else { 'Creator Assistant' }
     if ($IsStaging -and -not $env:CREATOR_ASSISTANT_LICENSE_URL) { throw 'Commercial Staging requires CREATOR_ASSISTANT_LICENSE_URL.' }
     if ($IsStaging -and -not $env:CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS) { throw 'Commercial Staging requires CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS.' }
     if (-not $IsStaging -and $env:CREATOR_ASSISTANT_LICENSE_PUBLIC_KEYS -match '(?i)staging') { throw 'Production Commercial must not trust a staging signing key.' }
@@ -56,10 +56,10 @@ foreach ($CurrentEdition in $Editions) {
         edition = $PackageEdition
         version = $Version
         build_number = $BuildNumber
-        channel = if ($IsDeveloper) { 'developer' } elseif ($IsStaging) { 'beta' } else { 'stable' }
+        channel = if ($IsDeveloper) { 'developer-preview' } elseif ($IsStaging) { 'beta' } else { 'stable' }
         packaging_format = 'pyinstaller-onedir'
         architecture = 'x86_64'
-        build_variant = if ($IsStaging) { 'staging' } else { 'production' }
+        build_variant = if ($IsDeveloper) { 'preview' } elseif ($IsStaging) { 'staging' } else { 'production' }
         license_backend_profile = if ($IsDeveloper) {
             'disabled'
         } elseif ($IsStaging) {
@@ -84,10 +84,10 @@ foreach ($CurrentEdition in $Editions) {
             @{}
         }
         telegram_bot_url = if ($IsDeveloper) { '' } elseif ($env:CREATOR_ASSISTANT_TELEGRAM_BOT_URL) { $env:CREATOR_ASSISTANT_TELEGRAM_BOT_URL } else { 'https://t.me/CreatorAssistantBot' }
-        update_backend_url = if ($env:CREATOR_ASSISTANT_UPDATE_URL) {
+        update_backend_url = if ($IsDeveloper) {
+            ''
+        } elseif ($env:CREATOR_ASSISTANT_UPDATE_URL) {
             $env:CREATOR_ASSISTANT_UPDATE_URL
-        } elseif ($IsDeveloper) {
-            'https://updates-developer.creatorassistant.app'
         } else {
             'https://updates.creatorassistant.app'
         }
@@ -100,7 +100,7 @@ foreach ($CurrentEdition in $Editions) {
     $PreviousEdition = $env:CREATOR_ASSISTANT_EDITION
     $PreviousVariant = $env:CREATOR_ASSISTANT_BUILD_VARIANT
     $env:CREATOR_ASSISTANT_EDITION = $PackageEdition
-    $env:CREATOR_ASSISTANT_BUILD_VARIANT = if ($IsStaging) { 'staging' } else { 'production' }
+    $env:CREATOR_ASSISTANT_BUILD_VARIANT = if ($IsDeveloper) { 'preview' } elseif ($IsStaging) { 'staging' } else { 'production' }
     Push-Location $Root
     try {
         & $Python -m PyInstaller --noconfirm --clean --distpath $Staging (Join-Path $Root 'CreatorAssistant.spec')

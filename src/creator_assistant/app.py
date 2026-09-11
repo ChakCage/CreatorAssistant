@@ -58,7 +58,9 @@ from creator_assistant.product import AppEdition, DEVELOPER_AI_MODEL, Feature, F
 class _DeveloperFeatureGate:
     def require(self, _feature: str) -> None: return
     def status(self):
-        return type("DeveloperLicenseStatus", (), {"active": True, "state": "ACTIVE", "features": ("*",)})()
+        return type("DeveloperStandaloneStatus", (), {
+            "active": True, "state": "NOT_APPLICABLE", "plan": "standalone", "features": ("*",),
+        })()
 
 
 class ServiceContainer:
@@ -100,6 +102,10 @@ class ServiceContainer:
         self.updater = YtDlpUpdater(self.runner)
         self.dependency_resolutions = self.detector.discover(self.settings)
         self.detector.apply_to_settings(self.settings, self.dependency_resolutions)
+        if self.edition is AppEdition.DEVELOPER:
+            setup_module = importlib.import_module("creator_assistant.services." + "developer_setup")
+            self.developer_setup = setup_module.DeveloperSetupService(self.settings, self.dependency_resolutions)
+            self.first_run = not bool(self.settings.get("developer_setup", {}).get("completed", False))
         if self.edition is AppEdition.COMMERCIAL:
             setup_module = importlib.import_module("creator_assistant.services." + "commercial_setup")
             self.commercial_setup = setup_module.CommercialSetupService(self.settings, self.dependency_resolutions)
@@ -142,6 +148,8 @@ class ServiceContainer:
         self.dependency_resolutions = self.detector.discover(self.settings)
         if self.edition is AppEdition.COMMERCIAL and hasattr(self, "commercial_setup"):
             self.commercial_setup.resolutions = self.dependency_resolutions
+        if self.edition is AppEdition.DEVELOPER and hasattr(self, "developer_setup"):
+            self.developer_setup.resolutions = self.dependency_resolutions
         self.paths = {key: item.path for key, item in self.dependency_resolutions.items()}
         naming_data = self.settings.get("naming", {})
         naming = NamingTemplates(
