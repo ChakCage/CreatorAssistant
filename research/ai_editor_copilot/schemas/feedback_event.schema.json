@@ -1,0 +1,4241 @@
+{
+  "$defs": {
+    "AddMusicAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "ADD_MUSIC",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Gain"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "AddMusicAction",
+      "type": "object"
+    },
+    "AddSfxAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "ADD_SFX",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Gain"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "AddSfxAction",
+      "type": "object"
+    },
+    "AddSubtitlesAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "ADD_SUBTITLES",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Subtitles"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "AddSubtitlesAction",
+      "type": "object"
+    },
+    "AddTextAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "ADD_TEXT",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/TextParams"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "AddTextAction",
+      "type": "object"
+    },
+    "AssetReference": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "asset",
+          "title": "Type",
+          "type": "string"
+        },
+        "asset_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "type",
+        "asset_id"
+      ],
+      "title": "AssetReference",
+      "type": "object"
+    },
+    "Blur": {
+      "additionalProperties": false,
+      "properties": {
+        "radius": {
+          "exclusiveMinimum": 0,
+          "maximum": 200,
+          "title": "Radius",
+          "type": "number"
+        }
+      },
+      "required": [
+        "radius"
+      ],
+      "title": "Blur",
+      "type": "object"
+    },
+    "BlurAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "BLUR",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Blur"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "BlurAction",
+      "type": "object"
+    },
+    "Chroma": {
+      "additionalProperties": false,
+      "properties": {
+        "color": {
+          "pattern": "^#[0-9A-Fa-f]{6}$",
+          "title": "Color",
+          "type": "string"
+        },
+        "tolerance": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Tolerance",
+          "type": "number"
+        }
+      },
+      "required": [
+        "color",
+        "tolerance"
+      ],
+      "title": "Chroma",
+      "type": "object"
+    },
+    "ChromaKeyAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "CHROMA_KEY",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Chroma"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "ChromaKeyAction",
+      "type": "object"
+    },
+    "Crop": {
+      "additionalProperties": false,
+      "properties": {
+        "left": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Left",
+          "type": "number"
+        },
+        "top": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Top",
+          "type": "number"
+        },
+        "right": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Right",
+          "type": "number"
+        },
+        "bottom": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Bottom",
+          "type": "number"
+        }
+      },
+      "required": [
+        "left",
+        "top",
+        "right",
+        "bottom"
+      ],
+      "title": "Crop",
+      "type": "object"
+    },
+    "CropAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "CROP",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Crop"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "CropAction",
+      "type": "object"
+    },
+    "CutAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "CUT",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Empty"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "CutAction",
+      "type": "object"
+    },
+    "DeleteRangeAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "DELETE_RANGE",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Empty"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "DeleteRangeAction",
+      "type": "object"
+    },
+    "Duck": {
+      "additionalProperties": false,
+      "properties": {
+        "reduction_db": {
+          "maximum": 0,
+          "minimum": -60,
+          "title": "Reduction Db",
+          "type": "number"
+        },
+        "attack": {
+          "exclusiveMinimum": 0,
+          "title": "Attack",
+          "type": "number"
+        },
+        "release": {
+          "exclusiveMinimum": 0,
+          "title": "Release",
+          "type": "number"
+        }
+      },
+      "required": [
+        "reduction_db",
+        "attack",
+        "release"
+      ],
+      "title": "Duck",
+      "type": "object"
+    },
+    "DuckMusicAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "DUCK_MUSIC",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Duck"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "DuckMusicAction",
+      "type": "object"
+    },
+    "Empty": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "Empty",
+      "type": "object"
+    },
+    "Fade": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "enum": [
+            "in",
+            "out"
+          ],
+          "title": "Direction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "direction"
+      ],
+      "title": "Fade",
+      "type": "object"
+    },
+    "FadeAudioAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "FADE_AUDIO",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Fade"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "FadeAudioAction",
+      "type": "object"
+    },
+    "Freeze": {
+      "additionalProperties": false,
+      "properties": {
+        "source_time": {
+          "minimum": 0,
+          "title": "Source Time",
+          "type": "number"
+        }
+      },
+      "required": [
+        "source_time"
+      ],
+      "title": "Freeze",
+      "type": "object"
+    },
+    "FreezeFrameAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "FREEZE_FRAME",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Freeze"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "FreezeFrameAction",
+      "type": "object"
+    },
+    "Gain": {
+      "additionalProperties": false,
+      "properties": {
+        "gain_db": {
+          "maximum": 12,
+          "minimum": -96,
+          "title": "Gain Db",
+          "type": "number"
+        }
+      },
+      "required": [
+        "gain_db"
+      ],
+      "title": "Gain",
+      "type": "object"
+    },
+    "Insert": {
+      "additionalProperties": false,
+      "properties": {
+        "fit": {
+          "default": "contain",
+          "enum": [
+            "contain",
+            "cover"
+          ],
+          "title": "Fit",
+          "type": "string"
+        }
+      },
+      "title": "Insert",
+      "type": "object"
+    },
+    "InsertBrollAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "INSERT_BROLL",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Insert"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "InsertBrollAction",
+      "type": "object"
+    },
+    "InsertImageAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "INSERT_IMAGE",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Insert"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "InsertImageAction",
+      "type": "object"
+    },
+    "InsertMemeAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "INSERT_MEME",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Insert"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "InsertMemeAction",
+      "type": "object"
+    },
+    "InsertVideoAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "INSERT_VIDEO",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Insert"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "InsertVideoAction",
+      "type": "object"
+    },
+    "Mask": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "description"
+      ],
+      "title": "Mask",
+      "type": "object"
+    },
+    "MaskAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "MASK",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Mask"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "MaskAction",
+      "type": "object"
+    },
+    "Move": {
+      "additionalProperties": false,
+      "properties": {
+        "destination": {
+          "minimum": 0,
+          "title": "Destination",
+          "type": "number"
+        }
+      },
+      "required": [
+        "destination"
+      ],
+      "title": "Move",
+      "type": "object"
+    },
+    "MoveClipAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "MOVE_CLIP",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Move"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "MoveClipAction",
+      "type": "object"
+    },
+    "Normalize": {
+      "additionalProperties": false,
+      "properties": {
+        "target_lufs": {
+          "maximum": -5,
+          "minimum": -70,
+          "title": "Target Lufs",
+          "type": "number"
+        }
+      },
+      "required": [
+        "target_lufs"
+      ],
+      "title": "Normalize",
+      "type": "object"
+    },
+    "NormalizeAudioAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "NORMALIZE_AUDIO",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Normalize"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "NormalizeAudioAction",
+      "type": "object"
+    },
+    "Pan": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "maximum": 1,
+          "minimum": -1,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "maximum": 1,
+          "minimum": -1,
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "Pan",
+      "type": "object"
+    },
+    "PanAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "PAN",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Pan"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "PanAction",
+      "type": "object"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Backend",
+          "type": "string"
+        },
+        "model": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "prompt_version": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Prompt Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "backend",
+        "model",
+        "prompt_version"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "PunchInAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "PUNCH_IN",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Zoom"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "PunchInAction",
+      "type": "object"
+    },
+    "Reframe": {
+      "additionalProperties": false,
+      "properties": {
+        "aspect_ratio": {
+          "enum": [
+            "9:16",
+            "16:9",
+            "1:1"
+          ],
+          "title": "Aspect Ratio",
+          "type": "string"
+        },
+        "center_x": {
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Center X",
+          "type": "number"
+        }
+      },
+      "required": [
+        "aspect_ratio"
+      ],
+      "title": "Reframe",
+      "type": "object"
+    },
+    "ReframeAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "REFRAME",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Reframe"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "ReframeAction",
+      "type": "object"
+    },
+    "RemoveSilenceAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "REMOVE_SILENCE",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Silence"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "RemoveSilenceAction",
+      "type": "object"
+    },
+    "ReplaceTextAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "REPLACE_TEXT",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/TextParams"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "ReplaceTextAction",
+      "type": "object"
+    },
+    "SearchReference": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "asset_search",
+          "title": "Type",
+          "type": "string"
+        },
+        "query": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        },
+        "media_kind": {
+          "enum": [
+            "broll",
+            "meme",
+            "image",
+            "video",
+            "sfx",
+            "music"
+          ],
+          "title": "Media Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "query",
+        "media_kind"
+      ],
+      "title": "SearchReference",
+      "type": "object"
+    },
+    "Silence": {
+      "additionalProperties": false,
+      "properties": {
+        "threshold_db": {
+          "maximum": 0,
+          "minimum": -100,
+          "title": "Threshold Db",
+          "type": "number"
+        },
+        "minimum_silence": {
+          "exclusiveMinimum": 0,
+          "title": "Minimum Silence",
+          "type": "number"
+        }
+      },
+      "required": [
+        "threshold_db",
+        "minimum_silence"
+      ],
+      "title": "Silence",
+      "type": "object"
+    },
+    "SlowMotion": {
+      "additionalProperties": false,
+      "properties": {
+        "rate": {
+          "exclusiveMaximum": 1,
+          "exclusiveMinimum": 0,
+          "title": "Rate",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rate"
+      ],
+      "title": "SlowMotion",
+      "type": "object"
+    },
+    "SlowMotionAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "SLOW_MOTION",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/SlowMotion"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "SlowMotionAction",
+      "type": "object"
+    },
+    "SpeedUp": {
+      "additionalProperties": false,
+      "properties": {
+        "rate": {
+          "exclusiveMinimum": 1,
+          "maximum": 16,
+          "title": "Rate",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rate"
+      ],
+      "title": "SpeedUp",
+      "type": "object"
+    },
+    "SpeedUpAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "SPEED_UP",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/SpeedUp"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "SpeedUpAction",
+      "type": "object"
+    },
+    "Stabilize": {
+      "additionalProperties": false,
+      "properties": {
+        "strength": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Strength",
+          "type": "number"
+        }
+      },
+      "required": [
+        "strength"
+      ],
+      "title": "Stabilize",
+      "type": "object"
+    },
+    "StabilizeAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "STABILIZE",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Stabilize"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "StabilizeAction",
+      "type": "object"
+    },
+    "Subtitles": {
+      "additionalProperties": false,
+      "properties": {
+        "language": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Language",
+          "type": "string"
+        },
+        "style_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Style Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "language",
+        "style_id"
+      ],
+      "title": "Subtitles",
+      "type": "object"
+    },
+    "Target": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "clip",
+            "track",
+            "timeline"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "title": "Target",
+      "type": "object"
+    },
+    "TextParams": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "font": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Font",
+          "type": "string"
+        },
+        "size": {
+          "exclusiveMinimum": 0,
+          "title": "Size",
+          "type": "number"
+        }
+      },
+      "required": [
+        "text",
+        "font",
+        "size"
+      ],
+      "title": "TextParams",
+      "type": "object"
+    },
+    "TimeRange": {
+      "additionalProperties": false,
+      "description": "Seconds, half-open [start, end), relative to the referenced source.",
+      "properties": {
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "number"
+        },
+        "end": {
+          "exclusiveMinimum": 0,
+          "title": "End",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "TimeRange",
+      "type": "object"
+    },
+    "Timing": {
+      "additionalProperties": false,
+      "properties": {
+        "timeline_start": {
+          "minimum": 0,
+          "title": "Timeline Start",
+          "type": "number"
+        },
+        "duration": {
+          "minimum": 0,
+          "title": "Duration",
+          "type": "number"
+        }
+      },
+      "required": [
+        "timeline_start",
+        "duration"
+      ],
+      "title": "Timing",
+      "type": "object"
+    },
+    "Track": {
+      "additionalProperties": false,
+      "properties": {
+        "object_description": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Object Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "object_description"
+      ],
+      "title": "Track",
+      "type": "object"
+    },
+    "TrackObjectAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "TRACK_OBJECT",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Track"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "TrackObjectAction",
+      "type": "object"
+    },
+    "Transition": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "dissolve",
+            "fade",
+            "wipe"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "Transition",
+      "type": "object"
+    },
+    "TransitionAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "TRANSITION",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Transition"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "TransitionAction",
+      "type": "object"
+    },
+    "Trim": {
+      "additionalProperties": false,
+      "properties": {
+        "source_range": {
+          "$ref": "#/$defs/TimeRange"
+        }
+      },
+      "required": [
+        "source_range"
+      ],
+      "title": "Trim",
+      "type": "object"
+    },
+    "TrimAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "TRIM",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Trim"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "TrimAction",
+      "type": "object"
+    },
+    "Zoom": {
+      "additionalProperties": false,
+      "properties": {
+        "scale": {
+          "maximum": 4,
+          "minimum": 1,
+          "title": "Scale",
+          "type": "number"
+        }
+      },
+      "required": [
+        "scale"
+      ],
+      "title": "Zoom",
+      "type": "object"
+    },
+    "ZoomAction": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "asset": "#/$defs/AssetReference",
+                  "asset_search": "#/$defs/SearchReference"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/AssetReference"
+                },
+                {
+                  "$ref": "#/$defs/SearchReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "timing": {
+          "$ref": "#/$defs/Timing"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "reversible": {
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "generated_by": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "action": {
+          "const": "ZOOM",
+          "title": "Action",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Zoom"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "timing",
+        "reason",
+        "confidence",
+        "reversible",
+        "generated_by",
+        "action",
+        "parameters"
+      ],
+      "title": "ZoomAction",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_.:-]+$",
+      "title": "Id",
+      "type": "string"
+    },
+    "plan_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_.:-]+$",
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "action_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_.:-]+$",
+      "title": "Action Id",
+      "type": "string"
+    },
+    "participant_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_.:-]+$",
+      "title": "Participant Id",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "accepted",
+        "modified",
+        "rejected",
+        "undone"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "ai_proposal": {
+      "discriminator": {
+        "mapping": {
+          "ADD_MUSIC": "#/$defs/AddMusicAction",
+          "ADD_SFX": "#/$defs/AddSfxAction",
+          "ADD_SUBTITLES": "#/$defs/AddSubtitlesAction",
+          "ADD_TEXT": "#/$defs/AddTextAction",
+          "BLUR": "#/$defs/BlurAction",
+          "CHROMA_KEY": "#/$defs/ChromaKeyAction",
+          "CROP": "#/$defs/CropAction",
+          "CUT": "#/$defs/CutAction",
+          "DELETE_RANGE": "#/$defs/DeleteRangeAction",
+          "DUCK_MUSIC": "#/$defs/DuckMusicAction",
+          "FADE_AUDIO": "#/$defs/FadeAudioAction",
+          "FREEZE_FRAME": "#/$defs/FreezeFrameAction",
+          "INSERT_BROLL": "#/$defs/InsertBrollAction",
+          "INSERT_IMAGE": "#/$defs/InsertImageAction",
+          "INSERT_MEME": "#/$defs/InsertMemeAction",
+          "INSERT_VIDEO": "#/$defs/InsertVideoAction",
+          "MASK": "#/$defs/MaskAction",
+          "MOVE_CLIP": "#/$defs/MoveClipAction",
+          "NORMALIZE_AUDIO": "#/$defs/NormalizeAudioAction",
+          "PAN": "#/$defs/PanAction",
+          "PUNCH_IN": "#/$defs/PunchInAction",
+          "REFRAME": "#/$defs/ReframeAction",
+          "REMOVE_SILENCE": "#/$defs/RemoveSilenceAction",
+          "REPLACE_TEXT": "#/$defs/ReplaceTextAction",
+          "SLOW_MOTION": "#/$defs/SlowMotionAction",
+          "SPEED_UP": "#/$defs/SpeedUpAction",
+          "STABILIZE": "#/$defs/StabilizeAction",
+          "TRACK_OBJECT": "#/$defs/TrackObjectAction",
+          "TRANSITION": "#/$defs/TransitionAction",
+          "TRIM": "#/$defs/TrimAction",
+          "ZOOM": "#/$defs/ZoomAction"
+        },
+        "propertyName": "action"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/CutAction"
+        },
+        {
+          "$ref": "#/$defs/TrimAction"
+        },
+        {
+          "$ref": "#/$defs/DeleteRangeAction"
+        },
+        {
+          "$ref": "#/$defs/RemoveSilenceAction"
+        },
+        {
+          "$ref": "#/$defs/MoveClipAction"
+        },
+        {
+          "$ref": "#/$defs/InsertBrollAction"
+        },
+        {
+          "$ref": "#/$defs/InsertMemeAction"
+        },
+        {
+          "$ref": "#/$defs/InsertImageAction"
+        },
+        {
+          "$ref": "#/$defs/InsertVideoAction"
+        },
+        {
+          "$ref": "#/$defs/AddTextAction"
+        },
+        {
+          "$ref": "#/$defs/ReplaceTextAction"
+        },
+        {
+          "$ref": "#/$defs/AddSubtitlesAction"
+        },
+        {
+          "$ref": "#/$defs/PunchInAction"
+        },
+        {
+          "$ref": "#/$defs/ZoomAction"
+        },
+        {
+          "$ref": "#/$defs/PanAction"
+        },
+        {
+          "$ref": "#/$defs/CropAction"
+        },
+        {
+          "$ref": "#/$defs/ReframeAction"
+        },
+        {
+          "$ref": "#/$defs/SpeedUpAction"
+        },
+        {
+          "$ref": "#/$defs/SlowMotionAction"
+        },
+        {
+          "$ref": "#/$defs/FreezeFrameAction"
+        },
+        {
+          "$ref": "#/$defs/ChromaKeyAction"
+        },
+        {
+          "$ref": "#/$defs/MaskAction"
+        },
+        {
+          "$ref": "#/$defs/TrackObjectAction"
+        },
+        {
+          "$ref": "#/$defs/BlurAction"
+        },
+        {
+          "$ref": "#/$defs/AddMusicAction"
+        },
+        {
+          "$ref": "#/$defs/DuckMusicAction"
+        },
+        {
+          "$ref": "#/$defs/AddSfxAction"
+        },
+        {
+          "$ref": "#/$defs/FadeAudioAction"
+        },
+        {
+          "$ref": "#/$defs/NormalizeAudioAction"
+        },
+        {
+          "$ref": "#/$defs/TransitionAction"
+        },
+        {
+          "$ref": "#/$defs/StabilizeAction"
+        }
+      ],
+      "title": "Ai Proposal"
+    },
+    "user_modification": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "ADD_MUSIC": "#/$defs/AddMusicAction",
+              "ADD_SFX": "#/$defs/AddSfxAction",
+              "ADD_SUBTITLES": "#/$defs/AddSubtitlesAction",
+              "ADD_TEXT": "#/$defs/AddTextAction",
+              "BLUR": "#/$defs/BlurAction",
+              "CHROMA_KEY": "#/$defs/ChromaKeyAction",
+              "CROP": "#/$defs/CropAction",
+              "CUT": "#/$defs/CutAction",
+              "DELETE_RANGE": "#/$defs/DeleteRangeAction",
+              "DUCK_MUSIC": "#/$defs/DuckMusicAction",
+              "FADE_AUDIO": "#/$defs/FadeAudioAction",
+              "FREEZE_FRAME": "#/$defs/FreezeFrameAction",
+              "INSERT_BROLL": "#/$defs/InsertBrollAction",
+              "INSERT_IMAGE": "#/$defs/InsertImageAction",
+              "INSERT_MEME": "#/$defs/InsertMemeAction",
+              "INSERT_VIDEO": "#/$defs/InsertVideoAction",
+              "MASK": "#/$defs/MaskAction",
+              "MOVE_CLIP": "#/$defs/MoveClipAction",
+              "NORMALIZE_AUDIO": "#/$defs/NormalizeAudioAction",
+              "PAN": "#/$defs/PanAction",
+              "PUNCH_IN": "#/$defs/PunchInAction",
+              "REFRAME": "#/$defs/ReframeAction",
+              "REMOVE_SILENCE": "#/$defs/RemoveSilenceAction",
+              "REPLACE_TEXT": "#/$defs/ReplaceTextAction",
+              "SLOW_MOTION": "#/$defs/SlowMotionAction",
+              "SPEED_UP": "#/$defs/SpeedUpAction",
+              "STABILIZE": "#/$defs/StabilizeAction",
+              "TRACK_OBJECT": "#/$defs/TrackObjectAction",
+              "TRANSITION": "#/$defs/TransitionAction",
+              "TRIM": "#/$defs/TrimAction",
+              "ZOOM": "#/$defs/ZoomAction"
+            },
+            "propertyName": "action"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/CutAction"
+            },
+            {
+              "$ref": "#/$defs/TrimAction"
+            },
+            {
+              "$ref": "#/$defs/DeleteRangeAction"
+            },
+            {
+              "$ref": "#/$defs/RemoveSilenceAction"
+            },
+            {
+              "$ref": "#/$defs/MoveClipAction"
+            },
+            {
+              "$ref": "#/$defs/InsertBrollAction"
+            },
+            {
+              "$ref": "#/$defs/InsertMemeAction"
+            },
+            {
+              "$ref": "#/$defs/InsertImageAction"
+            },
+            {
+              "$ref": "#/$defs/InsertVideoAction"
+            },
+            {
+              "$ref": "#/$defs/AddTextAction"
+            },
+            {
+              "$ref": "#/$defs/ReplaceTextAction"
+            },
+            {
+              "$ref": "#/$defs/AddSubtitlesAction"
+            },
+            {
+              "$ref": "#/$defs/PunchInAction"
+            },
+            {
+              "$ref": "#/$defs/ZoomAction"
+            },
+            {
+              "$ref": "#/$defs/PanAction"
+            },
+            {
+              "$ref": "#/$defs/CropAction"
+            },
+            {
+              "$ref": "#/$defs/ReframeAction"
+            },
+            {
+              "$ref": "#/$defs/SpeedUpAction"
+            },
+            {
+              "$ref": "#/$defs/SlowMotionAction"
+            },
+            {
+              "$ref": "#/$defs/FreezeFrameAction"
+            },
+            {
+              "$ref": "#/$defs/ChromaKeyAction"
+            },
+            {
+              "$ref": "#/$defs/MaskAction"
+            },
+            {
+              "$ref": "#/$defs/TrackObjectAction"
+            },
+            {
+              "$ref": "#/$defs/BlurAction"
+            },
+            {
+              "$ref": "#/$defs/AddMusicAction"
+            },
+            {
+              "$ref": "#/$defs/DuckMusicAction"
+            },
+            {
+              "$ref": "#/$defs/AddSfxAction"
+            },
+            {
+              "$ref": "#/$defs/FadeAudioAction"
+            },
+            {
+              "$ref": "#/$defs/NormalizeAudioAction"
+            },
+            {
+              "$ref": "#/$defs/TransitionAction"
+            },
+            {
+              "$ref": "#/$defs/StabilizeAction"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "User Modification"
+    },
+    "final_edit_decision": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "ADD_MUSIC": "#/$defs/AddMusicAction",
+              "ADD_SFX": "#/$defs/AddSfxAction",
+              "ADD_SUBTITLES": "#/$defs/AddSubtitlesAction",
+              "ADD_TEXT": "#/$defs/AddTextAction",
+              "BLUR": "#/$defs/BlurAction",
+              "CHROMA_KEY": "#/$defs/ChromaKeyAction",
+              "CROP": "#/$defs/CropAction",
+              "CUT": "#/$defs/CutAction",
+              "DELETE_RANGE": "#/$defs/DeleteRangeAction",
+              "DUCK_MUSIC": "#/$defs/DuckMusicAction",
+              "FADE_AUDIO": "#/$defs/FadeAudioAction",
+              "FREEZE_FRAME": "#/$defs/FreezeFrameAction",
+              "INSERT_BROLL": "#/$defs/InsertBrollAction",
+              "INSERT_IMAGE": "#/$defs/InsertImageAction",
+              "INSERT_MEME": "#/$defs/InsertMemeAction",
+              "INSERT_VIDEO": "#/$defs/InsertVideoAction",
+              "MASK": "#/$defs/MaskAction",
+              "MOVE_CLIP": "#/$defs/MoveClipAction",
+              "NORMALIZE_AUDIO": "#/$defs/NormalizeAudioAction",
+              "PAN": "#/$defs/PanAction",
+              "PUNCH_IN": "#/$defs/PunchInAction",
+              "REFRAME": "#/$defs/ReframeAction",
+              "REMOVE_SILENCE": "#/$defs/RemoveSilenceAction",
+              "REPLACE_TEXT": "#/$defs/ReplaceTextAction",
+              "SLOW_MOTION": "#/$defs/SlowMotionAction",
+              "SPEED_UP": "#/$defs/SpeedUpAction",
+              "STABILIZE": "#/$defs/StabilizeAction",
+              "TRACK_OBJECT": "#/$defs/TrackObjectAction",
+              "TRANSITION": "#/$defs/TransitionAction",
+              "TRIM": "#/$defs/TrimAction",
+              "ZOOM": "#/$defs/ZoomAction"
+            },
+            "propertyName": "action"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/CutAction"
+            },
+            {
+              "$ref": "#/$defs/TrimAction"
+            },
+            {
+              "$ref": "#/$defs/DeleteRangeAction"
+            },
+            {
+              "$ref": "#/$defs/RemoveSilenceAction"
+            },
+            {
+              "$ref": "#/$defs/MoveClipAction"
+            },
+            {
+              "$ref": "#/$defs/InsertBrollAction"
+            },
+            {
+              "$ref": "#/$defs/InsertMemeAction"
+            },
+            {
+              "$ref": "#/$defs/InsertImageAction"
+            },
+            {
+              "$ref": "#/$defs/InsertVideoAction"
+            },
+            {
+              "$ref": "#/$defs/AddTextAction"
+            },
+            {
+              "$ref": "#/$defs/ReplaceTextAction"
+            },
+            {
+              "$ref": "#/$defs/AddSubtitlesAction"
+            },
+            {
+              "$ref": "#/$defs/PunchInAction"
+            },
+            {
+              "$ref": "#/$defs/ZoomAction"
+            },
+            {
+              "$ref": "#/$defs/PanAction"
+            },
+            {
+              "$ref": "#/$defs/CropAction"
+            },
+            {
+              "$ref": "#/$defs/ReframeAction"
+            },
+            {
+              "$ref": "#/$defs/SpeedUpAction"
+            },
+            {
+              "$ref": "#/$defs/SlowMotionAction"
+            },
+            {
+              "$ref": "#/$defs/FreezeFrameAction"
+            },
+            {
+              "$ref": "#/$defs/ChromaKeyAction"
+            },
+            {
+              "$ref": "#/$defs/MaskAction"
+            },
+            {
+              "$ref": "#/$defs/TrackObjectAction"
+            },
+            {
+              "$ref": "#/$defs/BlurAction"
+            },
+            {
+              "$ref": "#/$defs/AddMusicAction"
+            },
+            {
+              "$ref": "#/$defs/DuckMusicAction"
+            },
+            {
+              "$ref": "#/$defs/AddSfxAction"
+            },
+            {
+              "$ref": "#/$defs/FadeAudioAction"
+            },
+            {
+              "$ref": "#/$defs/NormalizeAudioAction"
+            },
+            {
+              "$ref": "#/$defs/TransitionAction"
+            },
+            {
+              "$ref": "#/$defs/StabilizeAction"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Final Edit Decision"
+    },
+    "context_digest": {
+      "maxLength": 20000,
+      "minLength": 1,
+      "title": "Context Digest",
+      "type": "string"
+    },
+    "timeline_revision_before": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_.:-]+$",
+      "title": "Timeline Revision Before",
+      "type": "string"
+    },
+    "timeline_revision_after": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_.:-]+$",
+      "title": "Timeline Revision After",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "title": "Reason",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "plan_id",
+    "action_id",
+    "participant_id",
+    "occurred_at",
+    "decision",
+    "ai_proposal",
+    "context_digest",
+    "timeline_revision_before",
+    "timeline_revision_after"
+  ],
+  "title": "FeedbackEvent",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-editor-copilot:feedback_event:1.0"
+}

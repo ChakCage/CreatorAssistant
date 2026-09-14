@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "id": "hotel_vlog",
+  "sources": [{"id": "vlog", "kind": "video", "uri": "fixture://hotel-vlog", "duration": 3600, "title": "Попытка попасть в необычный отель", "rights": "synthetic fixture; no real media"}],
+  "segments": [
+    {"id":"intro","source_asset_id":"vlog","range":{"start":0,"end":25},"transcript":"Привет! Сегодня долго выбирали маршрут, спорили про погоду и собирали вещи.","topic":"быт","annotation_origin":"synthetic"},
+    {"id":"h","source_asset_id":"vlog","range":{"start":42,"end":49},"transcript":"Мы всё-таки попали в отель, куда нас трижды не пускали. Но внутри оказались совсем не одни.","topic":"необычный отель","story_id":"hotel","narrative_role":"hook","importance":0.95,"annotation_origin":"synthetic"},
+    {"id":"food","source_asset_id":"vlog","range":{"start":410,"end":422},"transcript":"В кафе оказался лучший завтрак поездки. Сырники закончились раньше, чем мы начали снимать.","topic":"еда","annotation_origin":"synthetic"},
+    {"id":"s","source_asset_id":"vlog","range":{"start":850,"end":862},"transcript":"Перед нами старый отель на скале. Главный вход закрыт. Мы хотели увидеть внутренний двор и решили спросить разрешения у смотрителя.","topic":"необычный отель","story_id":"hotel","narrative_role":"setup","importance":0.85,"annotation_origin":"synthetic"},
+    {"id":"road","source_asset_id":"vlog","range":{"start":1410,"end":1425},"transcript":"До следующего города ещё сорок километров. Навигатор снова потерял спутники.","topic":"дорога","annotation_origin":"synthetic"},
+    {"id":"d","source_asset_id":"vlog","range":{"start":1864,"end":1876},"transcript":"Смотритель отказал у ворот, потом у служебной двери и у лестницы. Но, услышав, что мы снимаем историю здания, предложил дождаться конца экскурсии.","topic":"необычный отель","story_id":"hotel","narrative_role":"development","importance":0.9,"annotation_origin":"synthetic"},
+    {"id":"c","source_asset_id":"vlog","range":{"start":2892,"end":2908},"transcript":"Вдруг дверь открылась. В тёмном дворе что-то зашуршало прямо за спиной. Я уже решил бежать, а смотритель включил свет: весь двор заняли десятки кошек.","topic":"необычный отель","story_id":"hotel","narrative_role":"climax","importance":0.98,"annotation_origin":"synthetic"},
+    {"id":"p","source_asset_id":"vlog","range":{"start":3428,"end":3439},"transcript":"Оказалось, отель давно стал приютом. Нас не пускали во время кормления. Вместо страшной тайны мы получили экскурсию и одного нового пушистого друга.","topic":"необычный отель","story_id":"hotel","narrative_role":"payoff","importance":0.96,"annotation_origin":"synthetic"},
+    {"id":"outro","source_asset_id":"vlog","range":{"start":3550,"end":3570},"transcript":"Спасибо за просмотр. Мы ещё долго обсуждали покупки и планы на завтра.","topic":"прощание","annotation_origin":"synthetic"}
+  ]
+}

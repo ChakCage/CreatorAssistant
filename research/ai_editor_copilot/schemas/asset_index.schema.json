@@ -1,0 +1,98 @@
+{
+  "$defs": {
+    "SourceAsset": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "video",
+            "audio",
+            "image",
+            "broll",
+            "meme",
+            "sfx",
+            "music",
+            "overlay"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "uri": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "duration": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration"
+        },
+        "title": {
+          "default": "",
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "rights": {
+          "default": "unknown; user must verify before retrieval/export",
+          "title": "Rights",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "uri"
+      ],
+      "title": "SourceAsset",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "assets": {
+      "items": {
+        "$ref": "#/$defs/SourceAsset"
+      },
+      "title": "Assets",
+      "type": "array"
+    }
+  },
+  "title": "AssetIndex",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-editor-copilot:asset_index:1.0"
+}

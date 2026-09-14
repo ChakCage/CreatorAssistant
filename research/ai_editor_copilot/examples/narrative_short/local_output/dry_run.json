@@ -1,0 +1,108 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan_073419763ba7345b63f1",
+  "mode": "dry_run",
+  "media_modified": false,
+  "operations": [
+    {
+      "id": "edit_604e2b84c312cbe6b932",
+      "action": "INSERT_VIDEO",
+      "target": {
+        "kind": "clip",
+        "id": "clip_e3dcd4ac703ee900e6b2"
+      },
+      "source": {
+        "type": "asset",
+        "asset_id": "vlog",
+        "range": {
+          "start": 850.0,
+          "end": 862.0
+        }
+      },
+      "timing": {
+        "timeline_start": 0.0,
+        "duration": 12.0
+      },
+      "parameters": {
+        "fit": "contain"
+      },
+      "reason": "Starts with the visual hook: an old hotel on a cliff with a closed entrance. Establishes the immediate mystery and goal.",
+      "status": "proposed_only"
+    },
+    {
+      "id": "edit_4871c2b94fb528c8beb0",
+      "action": "INSERT_VIDEO",
+      "target": {
+        "kind": "clip",
+        "id": "clip_3174ee461f8f9f9d4b97"
+      },
+      "source": {
+        "type": "asset",
+        "asset_id": "vlog",
+        "range": {
+          "start": 1864.0,
+          "end": 1876.0
+        }
+      },
+      "timing": {
+        "timeline_start": 12.0,
+        "duration": 12.0
+      },
+      "parameters": {
+        "fit": "contain"
+      },
+      "reason": "Details the conflict: repeated refusals at different entry points. Sets up the tension before the resolution.",
+      "status": "proposed_only"
+    },
+    {
+      "id": "edit_2a3fe4364fc8cb3f56f1",
+      "action": "INSERT_VIDEO",
+      "target": {
+        "kind": "clip",
+        "id": "clip_eadc2a9bcb5b069b8bee"
+      },
+      "source": {
+        "type": "asset",
+        "asset_id": "vlog",
+        "range": {
+          "start": 2892.0,
+          "end": 2908.0
+        }
+      },
+      "timing": {
+        "timeline_start": 24.0,
+        "duration": 16.0
+      },
+      "parameters": {
+        "fit": "contain"
+      },
+      "reason": "The turning point: the door opens, a scare occurs, and the reveal of dozens of cats happens. This is the emotional peak.",
+      "status": "proposed_only"
+    },
+    {
+      "id": "edit_753a7e3e2d139a0e0a70",
+      "action": "INSERT_VIDEO",
+      "target": {
+        "kind": "clip",
+        "id": "clip_37a059a9dbce6dd0535d"
+      },
+      "source": {
+        "type": "asset",
+        "asset_id": "vlog",
+        "range": {
+          "start": 3428.0,
+          "end": 3439.0
+        }
+      },
+      "timing": {
+        "timeline_start": 40.0,
+        "duration": 11.0
+      },
+      "parameters": {
+        "fit": "contain"
+      },
+      "reason": "Explains the resolution: the hotel is a shelter. Provides a warm, complete ending to the story arc.",
+      "status": "proposed_only"
+    }
+  ]
+}

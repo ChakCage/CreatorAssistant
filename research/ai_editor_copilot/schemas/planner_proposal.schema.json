@@ -1,0 +1,148 @@
+{
+  "$defs": {
+    "SearchReference": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "asset_search",
+          "title": "Type",
+          "type": "string"
+        },
+        "query": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        },
+        "media_kind": {
+          "enum": [
+            "broll",
+            "meme",
+            "image",
+            "video",
+            "sfx",
+            "music"
+          ],
+          "title": "Media Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "query",
+        "media_kind"
+      ],
+      "title": "SearchReference",
+      "type": "object"
+    },
+    "Selection": {
+      "additionalProperties": false,
+      "properties": {
+        "segment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "source_range": {
+          "$ref": "#/$defs/TimeRange"
+        },
+        "narrative_role": {
+          "enum": [
+            "hook",
+            "setup",
+            "development",
+            "climax",
+            "payoff"
+          ],
+          "title": "Narrative Role",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        }
+      },
+      "required": [
+        "segment_id",
+        "source_range",
+        "narrative_role",
+        "reason",
+        "confidence"
+      ],
+      "title": "Selection",
+      "type": "object"
+    },
+    "TimeRange": {
+      "additionalProperties": false,
+      "description": "Seconds, half-open [start, end), relative to the referenced source.",
+      "properties": {
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "number"
+        },
+        "end": {
+          "exclusiveMinimum": 0,
+          "title": "End",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "TimeRange",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Small LLM wire contract; compiler owns IDs, offsets and canonical asset references.",
+  "properties": {
+    "story": {
+      "maxLength": 20000,
+      "minLength": 1,
+      "title": "Story",
+      "type": "string"
+    },
+    "clips": {
+      "items": {
+        "$ref": "#/$defs/Selection"
+      },
+      "maxItems": 100,
+      "minItems": 1,
+      "title": "Clips",
+      "type": "array"
+    },
+    "asset_requests": {
+      "items": {
+        "$ref": "#/$defs/SearchReference"
+      },
+      "maxItems": 50,
+      "title": "Asset Requests",
+      "type": "array"
+    },
+    "notes": {
+      "default": "",
+      "title": "Notes",
+      "type": "string"
+    }
+  },
+  "required": [
+    "story",
+    "clips"
+  ],
+  "title": "PlannerProposal",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-editor-copilot:planner_proposal:1.0"
+}

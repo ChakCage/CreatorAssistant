@@ -1,0 +1,124 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_.:-]+$",
+      "title": "Id",
+      "type": "string"
+    },
+    "name": {
+      "maxLength": 20000,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "pacing": {
+      "default": "balanced",
+      "enum": [
+        "slow",
+        "balanced",
+        "dynamic"
+      ],
+      "title": "Pacing",
+      "type": "string"
+    },
+    "average_shot_duration": {
+      "default": 4,
+      "exclusiveMinimum": 0,
+      "title": "Average Shot Duration",
+      "type": "number"
+    },
+    "visual_changes_per_minute": {
+      "default": 15,
+      "minimum": 0,
+      "title": "Visual Changes Per Minute",
+      "type": "number"
+    },
+    "broll_density": {
+      "default": 0.2,
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Broll Density",
+      "type": "number"
+    },
+    "meme_density": {
+      "default": 0,
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Meme Density",
+      "type": "number"
+    },
+    "zoom_density": {
+      "default": 0.1,
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Zoom Density",
+      "type": "number"
+    },
+    "sfx_density": {
+      "default": 0.1,
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Sfx Density",
+      "type": "number"
+    },
+    "subtitle_style": {
+      "default": "clean",
+      "title": "Subtitle Style",
+      "type": "string"
+    },
+    "transition_style": {
+      "default": "cut",
+      "title": "Transition Style",
+      "type": "string"
+    },
+    "music_usage": {
+      "default": "none",
+      "enum": [
+        "none",
+        "background",
+        "featured"
+      ],
+      "title": "Music Usage",
+      "type": "string"
+    },
+    "cold_open": {
+      "default": true,
+      "title": "Cold Open",
+      "type": "boolean"
+    },
+    "dead_air_removal_aggressiveness": {
+      "default": 0.5,
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Dead Air Removal Aggressiveness",
+      "type": "number"
+    },
+    "origin": {
+      "default": "preset",
+      "enum": [
+        "user",
+        "preset",
+        "reference_analysis"
+      ],
+      "title": "Origin",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "name"
+  ],
+  "title": "StyleProfile",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-editor-copilot:style_profile:1.0"
+}

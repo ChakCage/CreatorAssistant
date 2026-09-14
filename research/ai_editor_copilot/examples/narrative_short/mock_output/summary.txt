@@ -1,0 +1,13 @@
+Backend: mock / annotated-fixture-baseline
+Selected clips:
+00:00:42.000–00:00:49.000 — hook: Annotated hook in story hotel; deterministic fixture baseline.
+00:14:10.000–00:14:22.000 — setup: Annotated setup in story hotel; deterministic fixture baseline.
+00:31:04.000–00:31:16.000 — development: Annotated development in story hotel; deterministic fixture baseline.
+00:48:12.000–00:48:28.000 — climax: Annotated climax in story hotel; deterministic fixture baseline.
+00:57:08.000–00:57:19.000 — payoff: Annotated payoff in story hotel; deterministic fixture baseline.
+Total duration: 58.000 sec
+Warnings:
+Transcript-only evidence: no visual, speaker or scene inference performed.
+Style metrics are planning preferences; visual effects/pacing are not implemented in this compiler.
+Unresolved:
+Verify narrative continuity and speaking cut points with a human editor.

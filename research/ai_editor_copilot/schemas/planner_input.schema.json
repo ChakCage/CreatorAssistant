@@ -1,0 +1,711 @@
+{
+  "$defs": {
+    "AssetIndex": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "assets": {
+          "items": {
+            "$ref": "#/$defs/SourceAsset"
+          },
+          "title": "Assets",
+          "type": "array"
+        }
+      },
+      "title": "AssetIndex",
+      "type": "object"
+    },
+    "SemanticSegment": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "source_asset_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Source Asset Id",
+          "type": "string"
+        },
+        "range": {
+          "$ref": "#/$defs/TimeRange"
+        },
+        "transcript": {
+          "title": "Transcript",
+          "type": "string"
+        },
+        "speaker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Speaker"
+        },
+        "topic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Topic"
+        },
+        "story_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9_.:-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Story Id"
+        },
+        "semantic_summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Semantic Summary"
+        },
+        "narrative_role": {
+          "anyOf": [
+            {
+              "enum": [
+                "hook",
+                "setup",
+                "development",
+                "climax",
+                "payoff"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Narrative Role"
+        },
+        "emotion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Emotion"
+        },
+        "energy": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Energy"
+        },
+        "punchline_likelihood": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Punchline Likelihood"
+        },
+        "importance": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Importance"
+        },
+        "scene": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scene"
+        },
+        "visual_description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visual Description"
+        },
+        "detected_text": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detected Text"
+        },
+        "objects": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Objects"
+        },
+        "faces": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Faces"
+        },
+        "silence": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Silence"
+        },
+        "shot_change": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shot Change"
+        },
+        "annotation_origin": {
+          "default": "transcript_only",
+          "enum": [
+            "transcript_only",
+            "human",
+            "synthetic",
+            "model"
+          ],
+          "title": "Annotation Origin",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source_asset_id",
+        "range",
+        "transcript"
+      ],
+      "title": "SemanticSegment",
+      "type": "object"
+    },
+    "SemanticTimeline": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/SourceAsset"
+          },
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        },
+        "segments": {
+          "items": {
+            "$ref": "#/$defs/SemanticSegment"
+          },
+          "minItems": 1,
+          "title": "Segments",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "sources",
+        "segments"
+      ],
+      "title": "SemanticTimeline",
+      "type": "object"
+    },
+    "SourceAsset": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "video",
+            "audio",
+            "image",
+            "broll",
+            "meme",
+            "sfx",
+            "music",
+            "overlay"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "uri": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "duration": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration"
+        },
+        "title": {
+          "default": "",
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "rights": {
+          "default": "unknown; user must verify before retrieval/export",
+          "title": "Rights",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "uri"
+      ],
+      "title": "SourceAsset",
+      "type": "object"
+    },
+    "StyleProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "pacing": {
+          "default": "balanced",
+          "enum": [
+            "slow",
+            "balanced",
+            "dynamic"
+          ],
+          "title": "Pacing",
+          "type": "string"
+        },
+        "average_shot_duration": {
+          "default": 4,
+          "exclusiveMinimum": 0,
+          "title": "Average Shot Duration",
+          "type": "number"
+        },
+        "visual_changes_per_minute": {
+          "default": 15,
+          "minimum": 0,
+          "title": "Visual Changes Per Minute",
+          "type": "number"
+        },
+        "broll_density": {
+          "default": 0.2,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Broll Density",
+          "type": "number"
+        },
+        "meme_density": {
+          "default": 0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Meme Density",
+          "type": "number"
+        },
+        "zoom_density": {
+          "default": 0.1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Zoom Density",
+          "type": "number"
+        },
+        "sfx_density": {
+          "default": 0.1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Sfx Density",
+          "type": "number"
+        },
+        "subtitle_style": {
+          "default": "clean",
+          "title": "Subtitle Style",
+          "type": "string"
+        },
+        "transition_style": {
+          "default": "cut",
+          "title": "Transition Style",
+          "type": "string"
+        },
+        "music_usage": {
+          "default": "none",
+          "enum": [
+            "none",
+            "background",
+            "featured"
+          ],
+          "title": "Music Usage",
+          "type": "string"
+        },
+        "cold_open": {
+          "default": true,
+          "title": "Cold Open",
+          "type": "boolean"
+        },
+        "dead_air_removal_aggressiveness": {
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Dead Air Removal Aggressiveness",
+          "type": "number"
+        },
+        "origin": {
+          "default": "preset",
+          "enum": [
+            "user",
+            "preset",
+            "reference_analysis"
+          ],
+          "title": "Origin",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "StyleProfile",
+      "type": "object"
+    },
+    "TargetFormat": {
+      "additionalProperties": false,
+      "properties": {
+        "width": {
+          "default": 1080,
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "default": 1920,
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "fps_numerator": {
+          "default": 30000,
+          "exclusiveMinimum": 0,
+          "title": "Fps Numerator",
+          "type": "integer"
+        },
+        "fps_denominator": {
+          "default": 1001,
+          "exclusiveMinimum": 0,
+          "title": "Fps Denominator",
+          "type": "integer"
+        }
+      },
+      "title": "TargetFormat",
+      "type": "object"
+    },
+    "TimeRange": {
+      "additionalProperties": false,
+      "description": "Seconds, half-open [start, end), relative to the referenced source.",
+      "properties": {
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "number"
+        },
+        "end": {
+          "exclusiveMinimum": 0,
+          "title": "End",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "TimeRange",
+      "type": "object"
+    },
+    "TimelineState": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "revision": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Revision",
+          "type": "string"
+        },
+        "duration": {
+          "minimum": 0,
+          "title": "Duration",
+          "type": "number"
+        },
+        "clip_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Clip Ids",
+          "type": "array"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "duration"
+      ],
+      "title": "TimelineState",
+      "type": "object"
+    },
+    "UserCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "default": "text",
+          "enum": [
+            "text",
+            "voice"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "transcript_confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transcript Confidence"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "UserCommand",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "timeline": {
+      "$ref": "#/$defs/SemanticTimeline"
+    },
+    "assets": {
+      "$ref": "#/$defs/AssetIndex"
+    },
+    "style": {
+      "$ref": "#/$defs/StyleProfile"
+    },
+    "command": {
+      "$ref": "#/$defs/UserCommand"
+    },
+    "target_duration": {
+      "default": 60,
+      "exclusiveMinimum": 0,
+      "title": "Target Duration",
+      "type": "number"
+    },
+    "minimum_duration": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Minimum Duration",
+      "type": "number"
+    },
+    "target_format": {
+      "$ref": "#/$defs/TargetFormat"
+    },
+    "current_timeline": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TimelineState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "timeline",
+    "style",
+    "command"
+  ],
+  "title": "PlannerInput",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-editor-copilot:planner_input:1.0"
+}

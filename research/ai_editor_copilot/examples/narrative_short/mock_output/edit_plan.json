@@ -1,0 +1,331 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan_a2934da4b6acafd1d1d1",
+  "user_request": {
+    "source": "text",
+    "text": "Сделай 60-секундный Reel про то, как мы пытались попасть в необычный отель. Нужен hook, развитие и концовка.",
+    "transcript_confidence": null
+  },
+  "target_format": {
+    "width": 1080,
+    "height": 1920,
+    "fps_numerator": 30000,
+    "fps_denominator": 1001
+  },
+  "target_duration": 60.0,
+  "minimum_duration": 50.0,
+  "source_references": [
+    {
+      "id": "vlog",
+      "kind": "video",
+      "uri": "fixture://hotel-vlog",
+      "duration": 3600.0,
+      "title": "Попытка попасть в необычный отель",
+      "description": "",
+      "tags": [],
+      "rights": "synthetic fixture; no real media"
+    }
+  ],
+  "style_profile": {
+    "schema_version": "1.0",
+    "id": "narrative_short",
+    "name": "narrative short",
+    "pacing": "dynamic",
+    "average_shot_duration": 3.0,
+    "visual_changes_per_minute": 20.0,
+    "broll_density": 0.2,
+    "meme_density": 0.0,
+    "zoom_density": 0.1,
+    "sfx_density": 0.1,
+    "subtitle_style": "clean",
+    "transition_style": "cut",
+    "music_usage": "none",
+    "cold_open": true,
+    "dead_air_removal_aggressiveness": 0.5,
+    "origin": "preset"
+  },
+  "story": "hotel",
+  "sequence": [
+    {
+      "id": "clip_866fdc31d601f13cc933",
+      "segment_id": "h",
+      "source_asset_id": "vlog",
+      "source_range": {
+        "start": 42.0,
+        "end": 49.0
+      },
+      "timeline_start": 0.0,
+      "narrative_role": "hook",
+      "reason": "Annotated hook in story hotel; deterministic fixture baseline.",
+      "confidence": 0.8
+    },
+    {
+      "id": "clip_e3dcd4ac703ee900e6b2",
+      "segment_id": "s",
+      "source_asset_id": "vlog",
+      "source_range": {
+        "start": 850.0,
+        "end": 862.0
+      },
+      "timeline_start": 7.0,
+      "narrative_role": "setup",
+      "reason": "Annotated setup in story hotel; deterministic fixture baseline.",
+      "confidence": 0.8
+    },
+    {
+      "id": "clip_3174ee461f8f9f9d4b97",
+      "segment_id": "d",
+      "source_asset_id": "vlog",
+      "source_range": {
+        "start": 1864.0,
+        "end": 1876.0
+      },
+      "timeline_start": 19.0,
+      "narrative_role": "development",
+      "reason": "Annotated development in story hotel; deterministic fixture baseline.",
+      "confidence": 0.8
+    },
+    {
+      "id": "clip_eadc2a9bcb5b069b8bee",
+      "segment_id": "c",
+      "source_asset_id": "vlog",
+      "source_range": {
+        "start": 2892.0,
+        "end": 2908.0
+      },
+      "timeline_start": 31.0,
+      "narrative_role": "climax",
+      "reason": "Annotated climax in story hotel; deterministic fixture baseline.",
+      "confidence": 0.8
+    },
+    {
+      "id": "clip_37a059a9dbce6dd0535d",
+      "segment_id": "p",
+      "source_asset_id": "vlog",
+      "source_range": {
+        "start": 3428.0,
+        "end": 3439.0
+      },
+      "timeline_start": 47.0,
+      "narrative_role": "payoff",
+      "reason": "Annotated payoff in story hotel; deterministic fixture baseline.",
+      "confidence": 0.8
+    }
+  ],
+  "narrative_structure": [
+    {
+      "role": "hook",
+      "clip_id": "clip_866fdc31d601f13cc933",
+      "reason": "Annotated hook in story hotel; deterministic fixture baseline."
+    },
+    {
+      "role": "setup",
+      "clip_id": "clip_e3dcd4ac703ee900e6b2",
+      "reason": "Annotated setup in story hotel; deterministic fixture baseline."
+    },
+    {
+      "role": "development",
+      "clip_id": "clip_3174ee461f8f9f9d4b97",
+      "reason": "Annotated development in story hotel; deterministic fixture baseline."
+    },
+    {
+      "role": "climax",
+      "clip_id": "clip_eadc2a9bcb5b069b8bee",
+      "reason": "Annotated climax in story hotel; deterministic fixture baseline."
+    },
+    {
+      "role": "payoff",
+      "clip_id": "clip_37a059a9dbce6dd0535d",
+      "reason": "Annotated payoff in story hotel; deterministic fixture baseline."
+    }
+  ],
+  "actions": [
+    {
+      "schema_version": "1.0",
+      "id": "edit_bd21eede3d3c8bcd7773",
+      "target": {
+        "kind": "clip",
+        "id": "clip_866fdc31d601f13cc933"
+      },
+      "source": {
+        "type": "asset",
+        "asset_id": "vlog",
+        "range": {
+          "start": 42.0,
+          "end": 49.0
+        }
+      },
+      "timing": {
+        "timeline_start": 0.0,
+        "duration": 7.0
+      },
+      "reason": "Annotated hook in story hotel; deterministic fixture baseline.",
+      "confidence": 0.8,
+      "dependencies": [],
+      "reversible": true,
+      "generated_by": {
+        "backend": "mock",
+        "model": "annotated-fixture-baseline",
+        "prompt_version": "narrative-v1"
+      },
+      "action": "INSERT_VIDEO",
+      "parameters": {
+        "fit": "contain"
+      }
+    },
+    {
+      "schema_version": "1.0",
+      "id": "edit_604e2b84c312cbe6b932",
+      "target": {
+        "kind": "clip",
+        "id": "clip_e3dcd4ac703ee900e6b2"
+      },
+      "source": {
+        "type": "asset",
+        "asset_id": "vlog",
+        "range": {
+          "start": 850.0,
+          "end": 862.0
+        }
+      },
+      "timing": {
+        "timeline_start": 7.0,
+        "duration": 12.0
+      },
+      "reason": "Annotated setup in story hotel; deterministic fixture baseline.",
+      "confidence": 0.8,
+      "dependencies": [
+        "edit_bd21eede3d3c8bcd7773"
+      ],
+      "reversible": true,
+      "generated_by": {
+        "backend": "mock",
+        "model": "annotated-fixture-baseline",
+        "prompt_version": "narrative-v1"
+      },
+      "action": "INSERT_VIDEO",
+      "parameters": {
+        "fit": "contain"
+      }
+    },
+    {
+      "schema_version": "1.0",
+      "id": "edit_4871c2b94fb528c8beb0",
+      "target": {
+        "kind": "clip",
+        "id": "clip_3174ee461f8f9f9d4b97"
+      },
+      "source": {
+        "type": "asset",
+        "asset_id": "vlog",
+        "range": {
+          "start": 1864.0,
+          "end": 1876.0
+        }
+      },
+      "timing": {
+        "timeline_start": 19.0,
+        "duration": 12.0
+      },
+      "reason": "Annotated development in story hotel; deterministic fixture baseline.",
+      "confidence": 0.8,
+      "dependencies": [
+        "edit_604e2b84c312cbe6b932"
+      ],
+      "reversible": true,
+      "generated_by": {
+        "backend": "mock",
+        "model": "annotated-fixture-baseline",
+        "prompt_version": "narrative-v1"
+      },
+      "action": "INSERT_VIDEO",
+      "parameters": {
+        "fit": "contain"
+      }
+    },
+    {
+      "schema_version": "1.0",
+      "id": "edit_2a3fe4364fc8cb3f56f1",
+      "target": {
+        "kind": "clip",
+        "id": "clip_eadc2a9bcb5b069b8bee"
+      },
+      "source": {
+        "type": "asset",
+        "asset_id": "vlog",
+        "range": {
+          "start": 2892.0,
+          "end": 2908.0
+        }
+      },
+      "timing": {
+        "timeline_start": 31.0,
+        "duration": 16.0
+      },
+      "reason": "Annotated climax in story hotel; deterministic fixture baseline.",
+      "confidence": 0.8,
+      "dependencies": [
+        "edit_4871c2b94fb528c8beb0"
+      ],
+      "reversible": true,
+      "generated_by": {
+        "backend": "mock",
+        "model": "annotated-fixture-baseline",
+        "prompt_version": "narrative-v1"
+      },
+      "action": "INSERT_VIDEO",
+      "parameters": {
+        "fit": "contain"
+      }
+    },
+    {
+      "schema_version": "1.0",
+      "id": "edit_753a7e3e2d139a0e0a70",
+      "target": {
+        "kind": "clip",
+        "id": "clip_37a059a9dbce6dd0535d"
+      },
+      "source": {
+        "type": "asset",
+        "asset_id": "vlog",
+        "range": {
+          "start": 3428.0,
+          "end": 3439.0
+        }
+      },
+      "timing": {
+        "timeline_start": 47.0,
+        "duration": 11.0
+      },
+      "reason": "Annotated payoff in story hotel; deterministic fixture baseline.",
+      "confidence": 0.8,
+      "dependencies": [
+        "edit_2a3fe4364fc8cb3f56f1"
+      ],
+      "reversible": true,
+      "generated_by": {
+        "backend": "mock",
+        "model": "annotated-fixture-baseline",
+        "prompt_version": "narrative-v1"
+      },
+      "action": "INSERT_VIDEO",
+      "parameters": {
+        "fit": "contain"
+      }
+    }
+  ],
+  "warnings": [
+    "Transcript-only evidence: no visual, speaker or scene inference performed.",
+    "Style metrics are planning preferences; visual effects/pacing are not implemented in this compiler."
+  ],
+  "unresolved_requirements": [
+    "Verify narrative continuity and speaking cut points with a human editor."
+  ],
+  "asset_requests": [],
+  "planner_notes": "Mock uses supplied role/story annotations; natural-language reasoning not demonstrated.",
+  "generated_by": {
+    "backend": "mock",
+    "model": "annotated-fixture-baseline",
+    "prompt_version": "narrative-v1"
+  }
+}

@@ -1,0 +1,12 @@
+Backend: creator-assistant-local / qwen3.6:35b-a3b
+Selected clips:
+00:14:10.000–00:14:22.000 — hook: Starts with the visual hook: an old hotel on a cliff with a closed entrance. Establishes the immediate mystery and goal.
+00:31:04.000–00:31:16.000 — setup: Details the conflict: repeated refusals at different entry points. Sets up the tension before the resolution.
+00:48:12.000–00:48:28.000 — climax: The turning point: the door opens, a scare occurs, and the reveal of dozens of cats happens. This is the emotional peak.
+00:57:08.000–00:57:19.000 — payoff: Explains the resolution: the hotel is a shelter. Provides a warm, complete ending to the story arc.
+Total duration: 51.000 sec
+Warnings:
+Transcript-only evidence: no visual, speaker or scene inference performed.
+Style metrics are planning preferences; visual effects/pacing are not implemented in this compiler.
+Unresolved:
+Verify narrative continuity and speaking cut points with a human editor.

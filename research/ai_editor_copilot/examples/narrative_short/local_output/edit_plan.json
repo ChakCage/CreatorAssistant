@@ -1,0 +1,278 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan_073419763ba7345b63f1",
+  "user_request": {
+    "source": "text",
+    "text": "Сделай 60-секундный Reel про то, как мы пытались попасть в необычный отель. Нужен сильный hook, понятная завязка, развитие, кульминация и законченная концовка. Выбери одну историю по всему видео.",
+    "transcript_confidence": null
+  },
+  "target_format": {
+    "width": 1080,
+    "height": 1920,
+    "fps_numerator": 30000,
+    "fps_denominator": 1001
+  },
+  "target_duration": 60.0,
+  "minimum_duration": 50.0,
+  "source_references": [
+    {
+      "id": "vlog",
+      "kind": "video",
+      "uri": "fixture://hotel-vlog",
+      "duration": 3600.0,
+      "title": "",
+      "description": "",
+      "tags": [],
+      "rights": "unknown; user must verify before retrieval/export"
+    }
+  ],
+  "style_profile": {
+    "schema_version": "1.0",
+    "id": "narrative_short",
+    "name": "narrative short",
+    "pacing": "dynamic",
+    "average_shot_duration": 3.0,
+    "visual_changes_per_minute": 20.0,
+    "broll_density": 0.2,
+    "meme_density": 0.0,
+    "zoom_density": 0.1,
+    "sfx_density": 0.1,
+    "subtitle_style": "clean",
+    "transition_style": "cut",
+    "music_usage": "none",
+    "cold_open": true,
+    "dead_air_removal_aggressiveness": 0.5,
+    "origin": "preset"
+  },
+  "story": "A group attempts to enter a mysterious cliffside hotel, faces repeated rejections, but discovers it is a cat shelter.",
+  "sequence": [
+    {
+      "id": "clip_e3dcd4ac703ee900e6b2",
+      "segment_id": "seg_003",
+      "source_asset_id": "vlog",
+      "source_range": {
+        "start": 850.0,
+        "end": 862.0
+      },
+      "timeline_start": 0.0,
+      "narrative_role": "hook",
+      "reason": "Starts with the visual hook: an old hotel on a cliff with a closed entrance. Establishes the immediate mystery and goal.",
+      "confidence": 0.95
+    },
+    {
+      "id": "clip_3174ee461f8f9f9d4b97",
+      "segment_id": "seg_005",
+      "source_asset_id": "vlog",
+      "source_range": {
+        "start": 1864.0,
+        "end": 1876.0
+      },
+      "timeline_start": 12.0,
+      "narrative_role": "setup",
+      "reason": "Details the conflict: repeated refusals at different entry points. Sets up the tension before the resolution.",
+      "confidence": 0.95
+    },
+    {
+      "id": "clip_eadc2a9bcb5b069b8bee",
+      "segment_id": "seg_006",
+      "source_asset_id": "vlog",
+      "source_range": {
+        "start": 2892.0,
+        "end": 2908.0
+      },
+      "timeline_start": 24.0,
+      "narrative_role": "climax",
+      "reason": "The turning point: the door opens, a scare occurs, and the reveal of dozens of cats happens. This is the emotional peak.",
+      "confidence": 0.95
+    },
+    {
+      "id": "clip_37a059a9dbce6dd0535d",
+      "segment_id": "seg_007",
+      "source_asset_id": "vlog",
+      "source_range": {
+        "start": 3428.0,
+        "end": 3439.0
+      },
+      "timeline_start": 40.0,
+      "narrative_role": "payoff",
+      "reason": "Explains the resolution: the hotel is a shelter. Provides a warm, complete ending to the story arc.",
+      "confidence": 0.95
+    }
+  ],
+  "narrative_structure": [
+    {
+      "role": "hook",
+      "clip_id": "clip_e3dcd4ac703ee900e6b2",
+      "reason": "Starts with the visual hook: an old hotel on a cliff with a closed entrance. Establishes the immediate mystery and goal."
+    },
+    {
+      "role": "setup",
+      "clip_id": "clip_3174ee461f8f9f9d4b97",
+      "reason": "Details the conflict: repeated refusals at different entry points. Sets up the tension before the resolution."
+    },
+    {
+      "role": "climax",
+      "clip_id": "clip_eadc2a9bcb5b069b8bee",
+      "reason": "The turning point: the door opens, a scare occurs, and the reveal of dozens of cats happens. This is the emotional peak."
+    },
+    {
+      "role": "payoff",
+      "clip_id": "clip_37a059a9dbce6dd0535d",
+      "reason": "Explains the resolution: the hotel is a shelter. Provides a warm, complete ending to the story arc."
+    }
+  ],
+  "actions": [
+    {
+      "schema_version": "1.0",
+      "id": "edit_604e2b84c312cbe6b932",
+      "target": {
+        "kind": "clip",
+        "id": "clip_e3dcd4ac703ee900e6b2"
+      },
+      "source": {
+        "type": "asset",
+        "asset_id": "vlog",
+        "range": {
+          "start": 850.0,
+          "end": 862.0
+        }
+      },
+      "timing": {
+        "timeline_start": 0.0,
+        "duration": 12.0
+      },
+      "reason": "Starts with the visual hook: an old hotel on a cliff with a closed entrance. Establishes the immediate mystery and goal.",
+      "confidence": 0.95,
+      "dependencies": [],
+      "reversible": true,
+      "generated_by": {
+        "backend": "creator-assistant-local",
+        "model": "qwen3.6:35b-a3b",
+        "prompt_version": "narrative-v1"
+      },
+      "action": "INSERT_VIDEO",
+      "parameters": {
+        "fit": "contain"
+      }
+    },
+    {
+      "schema_version": "1.0",
+      "id": "edit_4871c2b94fb528c8beb0",
+      "target": {
+        "kind": "clip",
+        "id": "clip_3174ee461f8f9f9d4b97"
+      },
+      "source": {
+        "type": "asset",
+        "asset_id": "vlog",
+        "range": {
+          "start": 1864.0,
+          "end": 1876.0
+        }
+      },
+      "timing": {
+        "timeline_start": 12.0,
+        "duration": 12.0
+      },
+      "reason": "Details the conflict: repeated refusals at different entry points. Sets up the tension before the resolution.",
+      "confidence": 0.95,
+      "dependencies": [
+        "edit_604e2b84c312cbe6b932"
+      ],
+      "reversible": true,
+      "generated_by": {
+        "backend": "creator-assistant-local",
+        "model": "qwen3.6:35b-a3b",
+        "prompt_version": "narrative-v1"
+      },
+      "action": "INSERT_VIDEO",
+      "parameters": {
+        "fit": "contain"
+      }
+    },
+    {
+      "schema_version": "1.0",
+      "id": "edit_2a3fe4364fc8cb3f56f1",
+      "target": {
+        "kind": "clip",
+        "id": "clip_eadc2a9bcb5b069b8bee"
+      },
+      "source": {
+        "type": "asset",
+        "asset_id": "vlog",
+        "range": {
+          "start": 2892.0,
+          "end": 2908.0
+        }
+      },
+      "timing": {
+        "timeline_start": 24.0,
+        "duration": 16.0
+      },
+      "reason": "The turning point: the door opens, a scare occurs, and the reveal of dozens of cats happens. This is the emotional peak.",
+      "confidence": 0.95,
+      "dependencies": [
+        "edit_4871c2b94fb528c8beb0"
+      ],
+      "reversible": true,
+      "generated_by": {
+        "backend": "creator-assistant-local",
+        "model": "qwen3.6:35b-a3b",
+        "prompt_version": "narrative-v1"
+      },
+      "action": "INSERT_VIDEO",
+      "parameters": {
+        "fit": "contain"
+      }
+    },
+    {
+      "schema_version": "1.0",
+      "id": "edit_753a7e3e2d139a0e0a70",
+      "target": {
+        "kind": "clip",
+        "id": "clip_37a059a9dbce6dd0535d"
+      },
+      "source": {
+        "type": "asset",
+        "asset_id": "vlog",
+        "range": {
+          "start": 3428.0,
+          "end": 3439.0
+        }
+      },
+      "timing": {
+        "timeline_start": 40.0,
+        "duration": 11.0
+      },
+      "reason": "Explains the resolution: the hotel is a shelter. Provides a warm, complete ending to the story arc.",
+      "confidence": 0.95,
+      "dependencies": [
+        "edit_2a3fe4364fc8cb3f56f1"
+      ],
+      "reversible": true,
+      "generated_by": {
+        "backend": "creator-assistant-local",
+        "model": "qwen3.6:35b-a3b",
+        "prompt_version": "narrative-v1"
+      },
+      "action": "INSERT_VIDEO",
+      "parameters": {
+        "fit": "contain"
+      }
+    }
+  ],
+  "warnings": [
+    "Transcript-only evidence: no visual, speaker or scene inference performed.",
+    "Style metrics are planning preferences; visual effects/pacing are not implemented in this compiler."
+  ],
+  "unresolved_requirements": [
+    "Verify narrative continuity and speaking cut points with a human editor."
+  ],
+  "asset_requests": [],
+  "planner_notes": "Total duration: 12 + 12 + 16 + 11 = 51 seconds. This fits within the 50-60s target. The narrative structure is Hook (seg_003) -> Setup/Conflict (seg_005) -> Climax (seg_006) -> Payoff (seg_007). All segments are used in their entirety as they fit the budget and provide complete sentences. No B-roll or music requested per style constraints.",
+  "generated_by": {
+    "backend": "creator-assistant-local",
+    "model": "qwen3.6:35b-a3b",
+    "prompt_version": "narrative-v1"
+  }
+}

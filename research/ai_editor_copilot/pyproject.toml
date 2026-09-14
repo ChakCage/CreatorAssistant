@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-editor-copilot-lab"
+version = "0.1.0"
+description = "Research-only semantic edit planning; no media execution"
+requires-python = ">=3.9"
+dependencies = ["pydantic>=2.8,<3"]
+
+[project.scripts]
+ai-editor-copilot = "ai_editor_copilot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "../../src"]
+addopts = "-ra"

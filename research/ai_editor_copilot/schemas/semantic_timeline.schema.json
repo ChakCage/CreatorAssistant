@@ -1,0 +1,403 @@
+{
+  "$defs": {
+    "SemanticSegment": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "source_asset_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Source Asset Id",
+          "type": "string"
+        },
+        "range": {
+          "$ref": "#/$defs/TimeRange"
+        },
+        "transcript": {
+          "title": "Transcript",
+          "type": "string"
+        },
+        "speaker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Speaker"
+        },
+        "topic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Topic"
+        },
+        "story_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9_.:-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Story Id"
+        },
+        "semantic_summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Semantic Summary"
+        },
+        "narrative_role": {
+          "anyOf": [
+            {
+              "enum": [
+                "hook",
+                "setup",
+                "development",
+                "climax",
+                "payoff"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Narrative Role"
+        },
+        "emotion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Emotion"
+        },
+        "energy": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Energy"
+        },
+        "punchline_likelihood": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Punchline Likelihood"
+        },
+        "importance": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Importance"
+        },
+        "scene": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scene"
+        },
+        "visual_description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visual Description"
+        },
+        "detected_text": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detected Text"
+        },
+        "objects": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Objects"
+        },
+        "faces": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Faces"
+        },
+        "silence": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Silence"
+        },
+        "shot_change": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shot Change"
+        },
+        "annotation_origin": {
+          "default": "transcript_only",
+          "enum": [
+            "transcript_only",
+            "human",
+            "synthetic",
+            "model"
+          ],
+          "title": "Annotation Origin",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source_asset_id",
+        "range",
+        "transcript"
+      ],
+      "title": "SemanticSegment",
+      "type": "object"
+    },
+    "SourceAsset": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "video",
+            "audio",
+            "image",
+            "broll",
+            "meme",
+            "sfx",
+            "music",
+            "overlay"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "uri": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "duration": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration"
+        },
+        "title": {
+          "default": "",
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "rights": {
+          "default": "unknown; user must verify before retrieval/export",
+          "title": "Rights",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "uri"
+      ],
+      "title": "SourceAsset",
+      "type": "object"
+    },
+    "TimeRange": {
+      "additionalProperties": false,
+      "description": "Seconds, half-open [start, end), relative to the referenced source.",
+      "properties": {
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "number"
+        },
+        "end": {
+          "exclusiveMinimum": 0,
+          "title": "End",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "TimeRange",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_.:-]+$",
+      "title": "Id",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/SourceAsset"
+      },
+      "minItems": 1,
+      "title": "Sources",
+      "type": "array"
+    },
+    "segments": {
+      "items": {
+        "$ref": "#/$defs/SemanticSegment"
+      },
+      "minItems": 1,
+      "title": "Segments",
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "sources",
+    "segments"
+  ],
+  "title": "SemanticTimeline",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-editor-copilot:semantic_timeline:1.0"
+}
