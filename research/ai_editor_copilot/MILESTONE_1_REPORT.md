@@ -4,6 +4,10 @@ Status: EXPERIMENT_COMPLETE, 2026-09-22. Evidence foundation and evaluation comp
 narrative selection readiness NOT demonstrated. Human evaluation remains outstanding.
 Base commit: `ddded852e19973d995fece479370f8e27e83c6e5`.
 Branch: `feature/ai-editor-copilot-lab`. No merge/build/deploy or production changes.
+Implementation/evaluation commit: `3bee3f0b7651ff45446f52a515573d4664a4c1b7`.
+Research worktree was clean immediately after that commit. This report-only
+provenance note is a subsequent documentation commit. Unrelated main-checkout
+changes are preserved and are not part of this branch's delivery.
 
 ## Dataset and permission
 
