@@ -1,0 +1,43 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "const": "NO_COHERENT_STORY",
+      "default": "NO_COHERENT_STORY",
+      "title": "Status",
+      "type": "string"
+    },
+    "reason_codes": {
+      "items": {
+        "enum": [
+          "MISSING_SETUP",
+          "MISSING_PAYOFF",
+          "DURATION_IMPOSSIBLE",
+          "WEAK_EVIDENCE",
+          "DAMAGED_TRANSCRIPT",
+          "INCOMPLETE_COVERAGE",
+          "CONTEXT_BUDGET",
+          "INVALID_MODEL_OUTPUT"
+        ],
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "explanation": {
+      "maxLength": 20000,
+      "minLength": 1,
+      "title": "Explanation",
+      "type": "string"
+    }
+  },
+  "required": [
+    "reason_codes",
+    "explanation"
+  ],
+  "title": "Refusal",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-editor-copilot:narrative_refusal:1.0"
+}

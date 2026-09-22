@@ -1,0 +1,178 @@
+{
+  "$defs": {
+    "Chosen": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "hook",
+            "setup",
+            "development",
+            "climax",
+            "payoff"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 600,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "role",
+        "reason"
+      ],
+      "title": "Chosen",
+      "type": "object"
+    },
+    "StoryEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "from_candidate": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "From Candidate",
+          "type": "string"
+        },
+        "to_candidate": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "title": "To Candidate",
+          "type": "string"
+        },
+        "relation": {
+          "enum": [
+            "requires_context",
+            "explains",
+            "causes",
+            "resolves",
+            "contradicts",
+            "follows"
+          ],
+          "title": "Relation",
+          "type": "string"
+        },
+        "evidence_segment_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Evidence Segment Ids",
+          "type": "array"
+        },
+        "rationale": {
+          "maxLength": 600,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "status": {
+          "const": "INFERRED",
+          "default": "INFERRED",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from_candidate",
+        "to_candidate",
+        "relation",
+        "evidence_segment_ids",
+        "rationale",
+        "confidence"
+      ],
+      "title": "StoryEdge",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "enum": [
+        "PLAN",
+        "NO_COHERENT_STORY"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "story": {
+      "maxLength": 800,
+      "title": "Story",
+      "type": "string"
+    },
+    "selected": {
+      "items": {
+        "$ref": "#/$defs/Chosen"
+      },
+      "maxItems": 8,
+      "title": "Selected",
+      "type": "array"
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/StoryEdge"
+      },
+      "maxItems": 12,
+      "title": "Edges",
+      "type": "array"
+    },
+    "reason_codes": {
+      "items": {
+        "enum": [
+          "MISSING_SETUP",
+          "MISSING_PAYOFF",
+          "DURATION_IMPOSSIBLE",
+          "WEAK_EVIDENCE",
+          "DAMAGED_TRANSCRIPT",
+          "INCOMPLETE_COVERAGE",
+          "CONTEXT_BUDGET",
+          "INVALID_MODEL_OUTPUT"
+        ],
+        "type": "string"
+      },
+      "maxItems": 3,
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "explanation": {
+      "maxLength": 800,
+      "title": "Explanation",
+      "type": "string"
+    }
+  },
+  "required": [
+    "status",
+    "story",
+    "selected",
+    "edges",
+    "reason_codes",
+    "explanation"
+  ],
+  "title": "Decision",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-editor-copilot:story_decision:1.0"
+}

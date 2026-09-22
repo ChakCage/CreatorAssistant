@@ -1,0 +1,1187 @@
+{
+  "sources": {
+    "dead-server": {
+      "duration": 2945.102948,
+      "source_sha256": "cec5a7be37cfc5a346b0034b5fea57fb80442581f25702c176049c83b1010e3f",
+      "transcript_sha256": "099d08630ba08ed0fc3af4d2c345ba26d463c35bb2b7031009feee6ab94ef4ff",
+      "language": "en",
+      "backend": "existing_whisper",
+      "model": "large-v3-turbo",
+      "ingested_at": "2026-09-17T12:19:59.208329+00:00"
+    },
+    "magical-purge": {
+      "duration": 7039.77941,
+      "source_sha256": "f4ce6224e835e64b96eb11a9880847f0d07d5b7da2c41524d3f961918dbbe656",
+      "transcript_sha256": "864340f70d6c43031f35012353d9de71b5cba676e314ef4ac1e3606df86dc276",
+      "language": "en",
+      "backend": "existing_whisper",
+      "model": "large-v3-turbo",
+      "ingested_at": "2026-09-17T12:32:02.929608+00:00"
+    },
+    "oldest-server": {
+      "duration": 3864.055873,
+      "source_sha256": "3e9e6cb10ca39a11a4e3b110727596038005a566adad70685e3fb6d3b1ee6281",
+      "transcript_sha256": "96f9374d8a840367db516f9e08e731815c97c7c84def5b99d9627ccb6011ecc2",
+      "language": "en",
+      "backend": "existing_whisper",
+      "model": "large-v3-turbo",
+      "ingested_at": "2026-09-17T12:24:52.886641+00:00"
+    }
+  },
+  "coverage": [
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "chunks_produced": 11,
+      "chunks_analyzed": 11,
+      "transcript_segments": 984,
+      "segments_analyzed": 984,
+      "segment_coverage_percent": 100.0,
+      "source_time_coverage_percent": 99.88105855510487,
+      "full_transcript_analyzed": true,
+      "candidates_before_dedup": 57,
+      "candidates_per_source_third": [
+        19,
+        20,
+        18
+      ],
+      "failed_chunks": 0,
+      "duplicates_removed": 0,
+      "zero_duration_segments": 17,
+      "empty_segments": 17,
+      "word_alignment_anomalies": 10
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "magical-purge",
+      "chunks_produced": 32,
+      "chunks_analyzed": 32,
+      "transcript_segments": 3191,
+      "segments_analyzed": 3191,
+      "segment_coverage_percent": 100.0,
+      "source_time_coverage_percent": 99.98296239228324,
+      "full_transcript_analyzed": true,
+      "candidates_before_dedup": 168,
+      "candidates_per_source_third": [
+        65,
+        57,
+        46
+      ],
+      "failed_chunks": 0,
+      "duplicates_removed": 0,
+      "zero_duration_segments": 31,
+      "empty_segments": 31,
+      "word_alignment_anomalies": 6
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "oldest-server",
+      "chunks_produced": 14,
+      "chunks_analyzed": 14,
+      "transcript_segments": 1330,
+      "segments_analyzed": 1330,
+      "segment_coverage_percent": 100.0,
+      "source_time_coverage_percent": 99.83603050245024,
+      "full_transcript_analyzed": true,
+      "candidates_before_dedup": 62,
+      "candidates_per_source_third": [
+        23,
+        21,
+        18
+      ],
+      "failed_chunks": 0,
+      "duplicates_removed": 0,
+      "zero_duration_segments": 44,
+      "empty_segments": 44,
+      "word_alignment_anomalies": 11
+    },
+    {
+      "evaluation": "dev-005-resume",
+      "source_id": "oldest-server",
+      "chunks_produced": 14,
+      "chunks_analyzed": 14,
+      "transcript_segments": 1330,
+      "segments_analyzed": 1330,
+      "segment_coverage_percent": 100.0,
+      "source_time_coverage_percent": 99.83603050245024,
+      "full_transcript_analyzed": true,
+      "candidates_before_dedup": 62,
+      "candidates_per_source_third": [
+        23,
+        21,
+        18
+      ],
+      "failed_chunks": 0,
+      "duplicates_removed": 0,
+      "zero_duration_segments": 44,
+      "empty_segments": 44,
+      "word_alignment_anomalies": 11
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "dead-server",
+      "chunks_produced": 11,
+      "chunks_analyzed": 11,
+      "transcript_segments": 984,
+      "segments_analyzed": 984,
+      "segment_coverage_percent": 100.0,
+      "source_time_coverage_percent": 99.88105855510487,
+      "full_transcript_analyzed": true,
+      "candidates_before_dedup": 57,
+      "candidates_per_source_third": [
+        19,
+        20,
+        18
+      ],
+      "failed_chunks": 0,
+      "duplicates_removed": 0,
+      "zero_duration_segments": 17,
+      "empty_segments": 17,
+      "word_alignment_anomalies": 10
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "magical-purge",
+      "chunks_produced": 32,
+      "chunks_analyzed": 32,
+      "transcript_segments": 3191,
+      "segments_analyzed": 3191,
+      "segment_coverage_percent": 100.0,
+      "source_time_coverage_percent": 99.98296239228324,
+      "full_transcript_analyzed": true,
+      "candidates_before_dedup": 168,
+      "candidates_per_source_third": [
+        65,
+        57,
+        46
+      ],
+      "failed_chunks": 0,
+      "duplicates_removed": 0,
+      "zero_duration_segments": 31,
+      "empty_segments": 31,
+      "word_alignment_anomalies": 6
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "oldest-server",
+      "chunks_produced": 14,
+      "chunks_analyzed": 14,
+      "transcript_segments": 1330,
+      "segments_analyzed": 1330,
+      "segment_coverage_percent": 100.0,
+      "source_time_coverage_percent": 99.83603050245024,
+      "full_transcript_analyzed": true,
+      "candidates_before_dedup": 62,
+      "candidates_per_source_third": [
+        23,
+        21,
+        18
+      ],
+      "failed_chunks": 0,
+      "duplicates_removed": 0,
+      "zero_duration_segments": 44,
+      "empty_segments": 44,
+      "word_alignment_anomalies": 11
+    }
+  ],
+  "runs": [
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-01",
+      "run": "run_01",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 31.626000000047497,
+        "planner_retries": 1,
+        "repair_rate": 0.25,
+        "context_tokens": 21169,
+        "reason_codes": [
+          "INVALID_MODEL_OUTPUT"
+        ]
+      },
+      "refusal_origin": "pipeline_validation_or_coverage",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-01",
+      "run": "run_02",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 18.375,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 16359,
+        "reason_codes": [
+          "CONTEXT_BUDGET",
+          "MISSING_SETUP",
+          "MISSING_PAYOFF"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-01",
+      "run": "run_03",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 17.905999999959022,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 16359,
+        "reason_codes": [
+          "CONTEXT_BUDGET",
+          "MISSING_SETUP",
+          "MISSING_PAYOFF"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-05",
+      "run": "run_01",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 38.04699999996228,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 16768,
+        "reason_codes": [
+          "CONTEXT_BUDGET",
+          "MISSING_SETUP",
+          "MISSING_PAYOFF"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-05",
+      "run": "run_02",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 21.78100000001723,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 16768,
+        "reason_codes": [
+          "CONTEXT_BUDGET",
+          "MISSING_SETUP",
+          "MISSING_PAYOFF"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-05",
+      "run": "run_03",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 21.625,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 16768,
+        "reason_codes": [
+          "CONTEXT_BUDGET",
+          "MISSING_SETUP",
+          "MISSING_PAYOFF"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-07",
+      "run": "run_01",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 28.71899999998277,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 15132,
+        "reason_codes": [
+          "MISSING_PAYOFF",
+          "INCOMPLETE_COVERAGE",
+          "MISSING_SETUP"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-07",
+      "run": "run_02",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 11.671999999962281,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 15132,
+        "reason_codes": [
+          "MISSING_PAYOFF",
+          "INCOMPLETE_COVERAGE",
+          "MISSING_SETUP"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-07",
+      "run": "run_03",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 11.672000000020489,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 15132,
+        "reason_codes": [
+          "MISSING_PAYOFF",
+          "INCOMPLETE_COVERAGE",
+          "MISSING_SETUP"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "magical-purge",
+      "task_id": "dev-03",
+      "run": "run_01",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 98.89100000000326,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 53800,
+        "reason_codes": [
+          "DURATION_IMPOSSIBLE",
+          "INCOMPLETE_COVERAGE"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "magical-purge",
+      "task_id": "dev-03",
+      "run": "run_02",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 56.39100000000326,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 53800,
+        "reason_codes": [
+          "DURATION_IMPOSSIBLE",
+          "INCOMPLETE_COVERAGE"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "magical-purge",
+      "task_id": "dev-03",
+      "run": "run_03",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 56.17300000006799,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 53800,
+        "reason_codes": [
+          "DURATION_IMPOSSIBLE",
+          "INCOMPLETE_COVERAGE"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "magical-purge",
+      "task_id": "dev-04",
+      "run": "run_01",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 116.04699999996228,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 53773,
+        "reason_codes": [
+          "INCOMPLETE_COVERAGE",
+          "MISSING_SETUP",
+          "MISSING_PAYOFF"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "magical-purge",
+      "task_id": "dev-04",
+      "run": "run_02",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 73.26399999996647,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 53773,
+        "reason_codes": [
+          "INCOMPLETE_COVERAGE",
+          "MISSING_SETUP",
+          "MISSING_PAYOFF"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "magical-purge",
+      "task_id": "dev-04",
+      "run": "run_03",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 73.23500000004424,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 53773,
+        "reason_codes": [
+          "INCOMPLETE_COVERAGE",
+          "MISSING_SETUP",
+          "MISSING_PAYOFF"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "oldest-server",
+      "task_id": "dev-02",
+      "run": "run_01",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 41.76600000000326,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 17255,
+        "reason_codes": [
+          "CONTEXT_BUDGET",
+          "MISSING_SETUP",
+          "MISSING_PAYOFF"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "oldest-server",
+      "task_id": "dev-02",
+      "run": "run_02",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 26.32800000003772,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 17255,
+        "reason_codes": [
+          "CONTEXT_BUDGET",
+          "MISSING_SETUP",
+          "MISSING_PAYOFF"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "oldest-server",
+      "task_id": "dev-02",
+      "run": "run_03",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 26.89100000000326,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 17255,
+        "reason_codes": [
+          "CONTEXT_BUDGET",
+          "MISSING_SETUP",
+          "MISSING_PAYOFF"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-005-resume",
+      "source_id": "oldest-server",
+      "task_id": "dev-06",
+      "run": "run_01",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 69.73399999999998,
+        "planner_retries": 1,
+        "repair_rate": 0.25,
+        "context_tokens": 23335,
+        "reason_codes": [
+          "INVALID_MODEL_OUTPUT"
+        ]
+      },
+      "refusal_origin": "pipeline_validation_or_coverage",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-005-resume",
+      "source_id": "oldest-server",
+      "task_id": "dev-06",
+      "run": "run_02",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 47.96900000000005,
+        "planner_retries": 1,
+        "repair_rate": 0.25,
+        "context_tokens": 23335,
+        "reason_codes": [
+          "INVALID_MODEL_OUTPUT"
+        ]
+      },
+      "refusal_origin": "pipeline_validation_or_coverage",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "dev-005-resume",
+      "source_id": "oldest-server",
+      "task_id": "dev-06",
+      "run": "run_03",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 50.7650000000001,
+        "planner_retries": 1,
+        "repair_rate": 0.25,
+        "context_tokens": 23335,
+        "reason_codes": [
+          "INVALID_MODEL_OUTPUT"
+        ]
+      },
+      "refusal_origin": "pipeline_validation_or_coverage",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "dead-server",
+      "task_id": "held-10",
+      "run": "run_01",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 46.797000000000025,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 16843,
+        "reason_codes": [
+          "CONTEXT_BUDGET",
+          "INCOMPLETE_COVERAGE",
+          "MISSING_SETUP"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "dead-server",
+      "task_id": "held-10",
+      "run": "run_02",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 32.85900000000004,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 16843,
+        "reason_codes": [
+          "CONTEXT_BUDGET",
+          "INCOMPLETE_COVERAGE",
+          "MISSING_SETUP"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "dead-server",
+      "task_id": "held-10",
+      "run": "run_03",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 25.84299999999996,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 16843,
+        "reason_codes": [
+          "CONTEXT_BUDGET",
+          "INCOMPLETE_COVERAGE",
+          "MISSING_SETUP"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "magical-purge",
+      "task_id": "held-08",
+      "run": "run_01",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 140.125,
+        "planner_retries": 1,
+        "repair_rate": 0.08333333333333333,
+        "context_tokens": 59443,
+        "reason_codes": [
+          "INVALID_MODEL_OUTPUT"
+        ]
+      },
+      "refusal_origin": "pipeline_validation_or_coverage",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "magical-purge",
+      "task_id": "held-08",
+      "run": "run_02",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 80.98599999999988,
+        "planner_retries": 1,
+        "repair_rate": 0.08333333333333333,
+        "context_tokens": 59443,
+        "reason_codes": [
+          "INVALID_MODEL_OUTPUT"
+        ]
+      },
+      "refusal_origin": "pipeline_validation_or_coverage",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "magical-purge",
+      "task_id": "held-08",
+      "run": "run_03",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 78.0310000000004,
+        "planner_retries": 1,
+        "repair_rate": 0.08333333333333333,
+        "context_tokens": 59443,
+        "reason_codes": [
+          "INVALID_MODEL_OUTPUT"
+        ]
+      },
+      "refusal_origin": "pipeline_validation_or_coverage",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "oldest-server",
+      "task_id": "held-09",
+      "run": "run_01",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 39.07899999999995,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 17706,
+        "reason_codes": [
+          "INCOMPLETE_COVERAGE",
+          "CONTEXT_BUDGET"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "oldest-server",
+      "task_id": "held-09",
+      "run": "run_02",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 17.79600000000005,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 17706,
+        "reason_codes": [
+          "INCOMPLETE_COVERAGE",
+          "CONTEXT_BUDGET"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "oldest-server",
+      "task_id": "held-09",
+      "run": "run_03",
+      "metrics": {
+        "refusal": true,
+        "inference_latency_seconds": 17.32899999999995,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 17706,
+        "reason_codes": [
+          "INCOMPLETE_COVERAGE",
+          "CONTEXT_BUDGET"
+        ]
+      },
+      "refusal_origin": "model_claim_not_ground_truth",
+      "selected_source_ranges": [],
+      "human_evaluation": "NOT_EVALUATED"
+    }
+  ],
+  "variance": [
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-01",
+      "runs": 3,
+      "valid_plans": 0,
+      "refusal_rate": 1.0,
+      "selection_pairwise_jaccard": null,
+      "role_pairwise_jaccard": null,
+      "duration_population_stddev": null,
+      "note": "Conditional stability among valid runs; refusals reported separately. Three deterministic-temperature requests may coincide."
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-05",
+      "runs": 3,
+      "valid_plans": 0,
+      "refusal_rate": 1.0,
+      "selection_pairwise_jaccard": null,
+      "role_pairwise_jaccard": null,
+      "duration_population_stddev": null,
+      "note": "Conditional stability among valid runs; refusals reported separately. Three deterministic-temperature requests may coincide."
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-07",
+      "runs": 3,
+      "valid_plans": 0,
+      "refusal_rate": 1.0,
+      "selection_pairwise_jaccard": null,
+      "role_pairwise_jaccard": null,
+      "duration_population_stddev": null,
+      "note": "Conditional stability among valid runs; refusals reported separately. Three deterministic-temperature requests may coincide."
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "magical-purge",
+      "task_id": "dev-03",
+      "runs": 3,
+      "valid_plans": 0,
+      "refusal_rate": 1.0,
+      "selection_pairwise_jaccard": null,
+      "role_pairwise_jaccard": null,
+      "duration_population_stddev": null,
+      "note": "Conditional stability among valid runs; refusals reported separately. Three deterministic-temperature requests may coincide."
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "magical-purge",
+      "task_id": "dev-04",
+      "runs": 3,
+      "valid_plans": 0,
+      "refusal_rate": 1.0,
+      "selection_pairwise_jaccard": null,
+      "role_pairwise_jaccard": null,
+      "duration_population_stddev": null,
+      "note": "Conditional stability among valid runs; refusals reported separately. Three deterministic-temperature requests may coincide."
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "oldest-server",
+      "task_id": "dev-02",
+      "runs": 3,
+      "valid_plans": 0,
+      "refusal_rate": 1.0,
+      "selection_pairwise_jaccard": null,
+      "role_pairwise_jaccard": null,
+      "duration_population_stddev": null,
+      "note": "Conditional stability among valid runs; refusals reported separately. Three deterministic-temperature requests may coincide."
+    },
+    {
+      "evaluation": "dev-005-resume",
+      "source_id": "oldest-server",
+      "task_id": "dev-06",
+      "runs": 3,
+      "valid_plans": 0,
+      "refusal_rate": 1.0,
+      "selection_pairwise_jaccard": null,
+      "role_pairwise_jaccard": null,
+      "duration_population_stddev": null,
+      "note": "Conditional stability among valid runs; refusals reported separately. Three deterministic-temperature requests may coincide."
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "dead-server",
+      "task_id": "held-10",
+      "runs": 3,
+      "valid_plans": 0,
+      "refusal_rate": 1.0,
+      "selection_pairwise_jaccard": null,
+      "role_pairwise_jaccard": null,
+      "duration_population_stddev": null,
+      "note": "Conditional stability among valid runs; refusals reported separately. Three deterministic-temperature requests may coincide."
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "magical-purge",
+      "task_id": "held-08",
+      "runs": 3,
+      "valid_plans": 0,
+      "refusal_rate": 1.0,
+      "selection_pairwise_jaccard": null,
+      "role_pairwise_jaccard": null,
+      "duration_population_stddev": null,
+      "note": "Conditional stability among valid runs; refusals reported separately. Three deterministic-temperature requests may coincide."
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "oldest-server",
+      "task_id": "held-09",
+      "runs": 3,
+      "valid_plans": 0,
+      "refusal_rate": 1.0,
+      "selection_pairwise_jaccard": null,
+      "role_pairwise_jaccard": null,
+      "duration_population_stddev": null,
+      "note": "Conditional stability among valid runs; refusals reported separately. Three deterministic-temperature requests may coincide."
+    }
+  ],
+  "baselines": [
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-01",
+      "metrics": {
+        "refusal": false,
+        "inference_latency_seconds": 0,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 0,
+        "duration": 54.34,
+        "target_duration_error": -5.659999999999997,
+        "source_jumps": 0,
+        "average_jump_distance": 0,
+        "transcript_segment_coverage": 0.026422764227642278,
+        "candidate_recall": null,
+        "role_completeness_structural_only": 1.0,
+        "duplicate_source_ratio": 0.0,
+        "duplicate_content_ratio": 0.0,
+        "duplicate_content_definition": "Repeated normalized 5-token shingles; lexical proxy, not semantic redundancy",
+        "overlap_violations": 0,
+        "source_order_preserved": true,
+        "intentional_reorder": false,
+        "quality_warning": "Mechanical metrics do not establish narrative quality; positional baseline roles are proxies."
+      }
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-05",
+      "metrics": {
+        "refusal": false,
+        "inference_latency_seconds": 0,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 0,
+        "duration": 57.96,
+        "target_duration_error": -2.039999999999999,
+        "source_jumps": 0,
+        "average_jump_distance": 0,
+        "transcript_segment_coverage": 0.011178861788617886,
+        "candidate_recall": null,
+        "role_completeness_structural_only": 1.0,
+        "duplicate_source_ratio": 0.0,
+        "duplicate_content_ratio": 0.0,
+        "duplicate_content_definition": "Repeated normalized 5-token shingles; lexical proxy, not semantic redundancy",
+        "overlap_violations": 0,
+        "source_order_preserved": true,
+        "intentional_reorder": false,
+        "quality_warning": "Mechanical metrics do not establish narrative quality; positional baseline roles are proxies."
+      }
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "dead-server",
+      "task_id": "dev-07",
+      "metrics": {
+        "refusal": false,
+        "inference_latency_seconds": 0,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 0,
+        "duration": 58.360000000000014,
+        "target_duration_error": -1.6399999999999864,
+        "source_jumps": 0,
+        "average_jump_distance": 0,
+        "transcript_segment_coverage": 0.031504065040650404,
+        "candidate_recall": null,
+        "role_completeness_structural_only": 1.0,
+        "duplicate_source_ratio": 0.0,
+        "duplicate_content_ratio": 0.02358490566037741,
+        "duplicate_content_definition": "Repeated normalized 5-token shingles; lexical proxy, not semantic redundancy",
+        "overlap_violations": 0,
+        "source_order_preserved": true,
+        "intentional_reorder": false,
+        "quality_warning": "Mechanical metrics do not establish narrative quality; positional baseline roles are proxies."
+      }
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "magical-purge",
+      "task_id": "dev-03",
+      "metrics": {
+        "refusal": false,
+        "inference_latency_seconds": 0,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 0,
+        "duration": 53.2800000000002,
+        "target_duration_error": -6.7199999999998,
+        "source_jumps": 0,
+        "average_jump_distance": 0,
+        "transcript_segment_coverage": 0.008461297398934503,
+        "candidate_recall": null,
+        "role_completeness_structural_only": 1.0,
+        "duplicate_source_ratio": 0.0,
+        "duplicate_content_ratio": 0.0,
+        "duplicate_content_definition": "Repeated normalized 5-token shingles; lexical proxy, not semantic redundancy",
+        "overlap_violations": 0,
+        "source_order_preserved": true,
+        "intentional_reorder": false,
+        "quality_warning": "Mechanical metrics do not establish narrative quality; positional baseline roles are proxies."
+      }
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "magical-purge",
+      "task_id": "dev-04",
+      "metrics": {
+        "refusal": false,
+        "inference_latency_seconds": 0,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 0,
+        "duration": 59.51999999999998,
+        "target_duration_error": -0.4800000000000182,
+        "source_jumps": 0,
+        "average_jump_distance": 0,
+        "transcript_segment_coverage": 0.016609213412723284,
+        "candidate_recall": null,
+        "role_completeness_structural_only": 1.0,
+        "duplicate_source_ratio": 0.0,
+        "duplicate_content_ratio": 0.02304147465437789,
+        "duplicate_content_definition": "Repeated normalized 5-token shingles; lexical proxy, not semantic redundancy",
+        "overlap_violations": 0,
+        "source_order_preserved": true,
+        "intentional_reorder": false,
+        "quality_warning": "Mechanical metrics do not establish narrative quality; positional baseline roles are proxies."
+      }
+    },
+    {
+      "evaluation": "dev-004",
+      "source_id": "oldest-server",
+      "task_id": "dev-02",
+      "metrics": {
+        "refusal": false,
+        "inference_latency_seconds": 0,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 0,
+        "duration": 56.299999999999955,
+        "target_duration_error": -3.7000000000000455,
+        "source_jumps": 0,
+        "average_jump_distance": 0,
+        "transcript_segment_coverage": 0.021052631578947368,
+        "candidate_recall": null,
+        "role_completeness_structural_only": 1.0,
+        "duplicate_source_ratio": 0.0,
+        "duplicate_content_ratio": 0.00917431192660545,
+        "duplicate_content_definition": "Repeated normalized 5-token shingles; lexical proxy, not semantic redundancy",
+        "overlap_violations": 0,
+        "source_order_preserved": true,
+        "intentional_reorder": false,
+        "quality_warning": "Mechanical metrics do not establish narrative quality; positional baseline roles are proxies."
+      }
+    },
+    {
+      "evaluation": "dev-005-resume",
+      "source_id": "oldest-server",
+      "task_id": "dev-06",
+      "metrics": {
+        "refusal": false,
+        "inference_latency_seconds": 0,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 0,
+        "duration": 56.400000000000006,
+        "target_duration_error": -3.5999999999999943,
+        "source_jumps": 0,
+        "average_jump_distance": 0,
+        "transcript_segment_coverage": 0.013533834586466165,
+        "candidate_recall": null,
+        "role_completeness_structural_only": 1.0,
+        "duplicate_source_ratio": 0.0,
+        "duplicate_content_ratio": 0.0,
+        "duplicate_content_definition": "Repeated normalized 5-token shingles; lexical proxy, not semantic redundancy",
+        "overlap_violations": 0,
+        "source_order_preserved": true,
+        "intentional_reorder": false,
+        "quality_warning": "Mechanical metrics do not establish narrative quality; positional baseline roles are proxies."
+      }
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "dead-server",
+      "task_id": "held-10",
+      "metrics": {
+        "refusal": false,
+        "inference_latency_seconds": 0,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 0,
+        "duration": 59.25999999999999,
+        "target_duration_error": -0.7400000000000091,
+        "source_jumps": 0,
+        "average_jump_distance": 0,
+        "transcript_segment_coverage": 0.018292682926829267,
+        "candidate_recall": null,
+        "role_completeness_structural_only": 1.0,
+        "duplicate_source_ratio": 0.0,
+        "duplicate_content_ratio": 0.0,
+        "duplicate_content_definition": "Repeated normalized 5-token shingles; lexical proxy, not semantic redundancy",
+        "overlap_violations": 0,
+        "source_order_preserved": true,
+        "intentional_reorder": false,
+        "quality_warning": "Mechanical metrics do not establish narrative quality; positional baseline roles are proxies."
+      }
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "magical-purge",
+      "task_id": "held-08",
+      "metrics": {
+        "refusal": false,
+        "inference_latency_seconds": 0,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 0,
+        "duration": 1.6599999999998545,
+        "target_duration_error": -0.3400000000001455,
+        "source_jumps": 0,
+        "average_jump_distance": 0,
+        "transcript_segment_coverage": 0.000940144155437167,
+        "candidate_recall": null,
+        "role_completeness_structural_only": 1.0,
+        "duplicate_source_ratio": 0.0,
+        "duplicate_content_ratio": 0.21052631578947367,
+        "duplicate_content_definition": "Repeated normalized 5-token shingles; lexical proxy, not semantic redundancy",
+        "overlap_violations": 0,
+        "source_order_preserved": true,
+        "intentional_reorder": false,
+        "quality_warning": "Mechanical metrics do not establish narrative quality; positional baseline roles are proxies."
+      }
+    },
+    {
+      "evaluation": "held-001",
+      "source_id": "oldest-server",
+      "task_id": "held-09",
+      "metrics": {
+        "refusal": false,
+        "inference_latency_seconds": 0,
+        "planner_retries": 0,
+        "repair_rate": 0.0,
+        "context_tokens": 0,
+        "duration": 50.27999999999997,
+        "target_duration_error": -9.720000000000027,
+        "source_jumps": 0,
+        "average_jump_distance": 0,
+        "transcript_segment_coverage": 0.032330827067669175,
+        "candidate_recall": null,
+        "role_completeness_structural_only": 1.0,
+        "duplicate_source_ratio": 0.0,
+        "duplicate_content_ratio": 0.0,
+        "duplicate_content_definition": "Repeated normalized 5-token shingles; lexical proxy, not semantic redundancy",
+        "overlap_violations": 0,
+        "source_order_preserved": true,
+        "intentional_reorder": false,
+        "quality_warning": "Mechanical metrics do not establish narrative quality; positional baseline roles are proxies."
+      }
+    }
+  ],
+  "total_runs": 30,
+  "valid_plans": 0,
+  "human_evaluation": "NOT_EVALUATED",
+  "recommendation": "NOT_READY_FOR_RESOLVE_EXECUTOR"
+}

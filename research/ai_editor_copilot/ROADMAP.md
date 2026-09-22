@@ -26,3 +26,13 @@
 Приёмка: исходные timestamps сохранены; context budget не обрезает материал молча;
 на всех входах валидный план или явная причина отказа; слепая оценка связности по rubric.
 После этого — первый минимальный Resolve executor на отдельном timeline.
+
+### Milestone 1 execution gate
+
+This milestone combines the evidence foundation and initial hierarchical selection
+from phases 1–2. The delivered corpus target is three user-authorized real sources,
+with 10 scenario probes (7 development / 3 held-out), not the later 10 source-held-out
+benchmark. Read `MILESTONE_1_REPORT.md` for actual completed runs rather than treating
+this roadmap as evidence. Resolve execution remains gated on reviewed coherent plans
+and honest failure accounting; absent human evaluation the recommendation remains
+NOT_READY_FOR_RESOLVE_EXECUTOR.

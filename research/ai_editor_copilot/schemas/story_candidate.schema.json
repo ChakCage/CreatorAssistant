@@ -1,0 +1,173 @@
+{
+  "$defs": {
+    "Annotation": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Type",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        },
+        "status": {
+          "enum": [
+            "OBSERVED",
+            "INFERRED",
+            "UNKNOWN"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceRef"
+        },
+        "generator": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Generator",
+          "type": "string"
+        },
+        "model": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "value",
+        "status",
+        "confidence",
+        "evidence",
+        "generator",
+        "model",
+        "created_at"
+      ],
+      "title": "Annotation",
+      "type": "object"
+    },
+    "EvidenceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "source_segment_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Segment Ids",
+          "type": "array"
+        },
+        "evidence_start": {
+          "minimum": 0,
+          "title": "Evidence Start",
+          "type": "number"
+        },
+        "evidence_end": {
+          "exclusiveMinimum": 0,
+          "title": "Evidence End",
+          "type": "number"
+        }
+      },
+      "required": [
+        "source_segment_ids",
+        "evidence_start",
+        "evidence_end"
+      ],
+      "title": "EvidenceRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_.:-]+$",
+      "title": "Id",
+      "type": "string"
+    },
+    "evidence": {
+      "$ref": "#/$defs/EvidenceRef"
+    },
+    "annotation": {
+      "$ref": "#/$defs/Annotation"
+    },
+    "role": {
+      "enum": [
+        "hook",
+        "setup",
+        "problem",
+        "development",
+        "reveal",
+        "climax",
+        "payoff",
+        "callback"
+      ],
+      "title": "Role",
+      "type": "string"
+    },
+    "entities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Entities",
+      "type": "array"
+    },
+    "topics": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Topics",
+      "type": "array"
+    },
+    "analyzed_chunk_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[a-zA-Z0-9_.:-]+$",
+        "type": "string"
+      },
+      "title": "Analyzed Chunk Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "evidence",
+    "annotation",
+    "role",
+    "entities",
+    "topics",
+    "analyzed_chunk_ids"
+  ],
+  "title": "Candidate",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-editor-copilot:story_candidate:1.0"
+}

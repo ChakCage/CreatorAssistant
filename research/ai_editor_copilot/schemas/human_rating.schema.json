@@ -1,0 +1,111 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "evaluator_id": {
+      "title": "Evaluator Id",
+      "type": "string"
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "label": {
+      "enum": [
+        "A",
+        "B"
+      ],
+      "title": "Label",
+      "type": "string"
+    },
+    "hook": {
+      "maximum": 5,
+      "minimum": 1,
+      "title": "Hook",
+      "type": "integer"
+    },
+    "comprehensibility": {
+      "maximum": 5,
+      "minimum": 1,
+      "title": "Comprehensibility",
+      "type": "integer"
+    },
+    "causal_coherence": {
+      "maximum": 5,
+      "minimum": 1,
+      "title": "Causal Coherence",
+      "type": "integer"
+    },
+    "setup_payoff": {
+      "maximum": 5,
+      "minimum": 1,
+      "title": "Setup Payoff",
+      "type": "integer"
+    },
+    "information_sufficiency": {
+      "maximum": 5,
+      "minimum": 1,
+      "title": "Information Sufficiency",
+      "type": "integer"
+    },
+    "redundancy": {
+      "maximum": 5,
+      "minimum": 1,
+      "title": "Redundancy",
+      "type": "integer"
+    },
+    "pacing": {
+      "maximum": 5,
+      "minimum": 1,
+      "title": "Pacing",
+      "type": "integer"
+    },
+    "overall_editability": {
+      "maximum": 5,
+      "minimum": 1,
+      "title": "Overall Editability",
+      "type": "integer"
+    },
+    "preference": {
+      "enum": [
+        "A",
+        "B",
+        "tie",
+        "neither"
+      ],
+      "title": "Preference",
+      "type": "string"
+    },
+    "confidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "reason": {
+      "maxLength": 20000,
+      "minLength": 1,
+      "title": "Reason",
+      "type": "string"
+    }
+  },
+  "required": [
+    "evaluator_id",
+    "case_id",
+    "label",
+    "hook",
+    "comprehensibility",
+    "causal_coherence",
+    "setup_payoff",
+    "information_sufficiency",
+    "redundancy",
+    "pacing",
+    "overall_editability",
+    "preference",
+    "confidence",
+    "reason"
+  ],
+  "title": "HumanRating",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-editor-copilot:human_rating:1.0"
+}

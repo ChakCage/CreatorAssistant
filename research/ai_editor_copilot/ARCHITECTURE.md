@@ -73,3 +73,38 @@ Dry-run повторно валидирует mutable plan/context. Невали
 вывода и сохраняет validation report неудачных попыток для аудита.
 Синтетические fixtures можно хранить в Git; реальные transcript/feedback хранить
 в приватном каталоге по отдельному согласию. Никакого автоматического обучения.
+
+## Milestone 1: evidence-backed narrative research
+
+`scripts/ingest_media.py` explicitly invokes CA ExistingWhisperBackend/TranscriptionService,
+with the existing large-v3-turbo model and English source language. No production settings
+are changed. SHA-256 of the entire source and normalized raw transcript, FFprobe duration,
+backend version, language and UTC ingest time are sealed in a private manifest under `runs/`.
+Raw ASR text is never repaired in-place. Zero-duration/empty segments and word-alignment
+anomalies remain visible evidence; zero-duration spans cannot become standalone clips.
+
+`narrative/` layers:
+
+1. `evidence`: exact references; OBSERVED is a verbatim quote, INFERRED carries provenance,
+   UNKNOWN cannot contain a factual value. Inference provenance does not prove truth.
+2. `chunks`: whole transcript segments, max 10k characters/360 seconds, three-segment overlap;
+   oversized single segments fail explicitly. Segment and source-window union coverage are separate.
+3. `pipeline`: local candidate extraction in every chunk, exact-span dedup only, cached raw responses.
+   Global index pages are all ranked when over budget; every omitted candidate is audited.
+   Final selection is then checked against reconstructed ORIGINAL text, not summaries alone.
+4. `contracts`: typed refusal, story nodes/edges, per-cut rationale and prerequisite ordering.
+   Structural checks cannot prove causal truth; unresolved contradictions are rejected.
+5. `baseline`: deterministic density/lexical-relevance continuous window; positional role proxies
+   pass the same temporal/structural EditPlan validator, without pretending semantic understanding.
+6. `evaluation`: mechanical metrics, independent-request variance and blinded text packages.
+   Human ratings/private mapping never enter model input. No executor or production UI added.
+
+Transport budget is conservatively capped at 24k UTF-8 bytes including schema, leaving
+space in the 32768-token context for 6000 generated tokens and framing. No prompt slicing.
+Calls log original response, error, bounded repair, latency and reported token usage.
+Models are fixed to qwen3.6:35b-a3b. Analysis cache identity includes transcript hash,
+chunk contents, model and prompt version; global selection is regenerated for each repeat.
+
+The graph currently lives in the adjacent `story_graph.json`, linked by selected candidate
+IDs matching EditPlan segment IDs. It is not a claim that all 31 DSL operations have
+evidence-aware execution semantics. Only INSERT_VIDEO plans are compiled; no media is rendered.

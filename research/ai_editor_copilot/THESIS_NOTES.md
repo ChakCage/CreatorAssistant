@@ -78,3 +78,31 @@ inference, показывать median/CI и failures, не выбирать т�
 реальной речи и не эксперимент подтверждения гипотезы. Реальные длинные transcript
 потребуют hierarchical context budgeting. Следующий шаг: небольшой corpus и
 coherence rubric, затем слепой пилот сравнения с contiguous baseline.
+
+## Milestone 1 protocol limits
+
+The user-selected corpus contains three Minecraft gameplay/storytelling sources from
+MylesMC, not a representative multi-genre sample. The longest is 117 minutes (outside
+the preferred 20–90 range), retained in full. Ten pre-specified scenario probes include
+three task-held-out cases; they are NOT verified narrative ground truth or source-disjoint
+test data. Consequently candidate recall is null until independent labels exist.
+
+See `evaluation/HUMAN_RUBRIC.md`. Blind text selection evaluation cannot measure visual
+continuity or retention. Role completeness is structural only, especially for the
+contiguous baseline whose roles are positional proxies. Repeated same-model requests
+with temperature zero measure observed selection stability, not cross-model robustness.
+Report refusals, invalid output and failed transport separately from valid-plan quality.
+Do not equate provenance/reference validity with truth or publish superiority without
+independent human ratings. Full raw evidence remains private, never part of public Git.
+
+### Observed development failure, 2026-09-22
+
+The first complete development protocol yielded 0/21 accepted plans despite full
+segment coverage. This falsifies readiness of this particular configuration, not
+the general possibility of noncontiguous narrative editing. Model refusals confuse
+source-time distance with montage duration in at least one recorded example, and
+sometimes invoke operational coverage codes unsupported by measured coverage.
+Follow-up experiments should separate model-semantic refusal codes from measured
+pipeline failures, state units explicitly, and compare episode-local retrieval with
+global retrieval before increasing model size or adding an executor. Freeze a new
+protocol version and reserve new held-out tasks before such tuning.

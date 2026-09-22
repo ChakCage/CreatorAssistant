@@ -1,0 +1,55 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "split": {
+      "enum": [
+        "development",
+        "held_out"
+      ],
+      "title": "Split",
+      "type": "string"
+    },
+    "scenario": {
+      "title": "Scenario",
+      "type": "string"
+    },
+    "request": {
+      "maxLength": 20000,
+      "minLength": 1,
+      "title": "Request",
+      "type": "string"
+    },
+    "target_duration": {
+      "exclusiveMinimum": 0,
+      "maximum": 180,
+      "title": "Target Duration",
+      "type": "number"
+    },
+    "minimum_duration": {
+      "minimum": 0,
+      "title": "Minimum Duration",
+      "type": "number"
+    }
+  },
+  "required": [
+    "id",
+    "source_id",
+    "split",
+    "scenario",
+    "request",
+    "target_duration",
+    "minimum_duration"
+  ],
+  "title": "Task",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-editor-copilot:evaluation_task:1.0"
+}

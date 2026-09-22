@@ -64,10 +64,32 @@ Mock использует искусственные story/role labels и явл
 эффектами. Нерешённые требования остаются в плане. Связность сюжета проверяет человек:
 структурно корректный hook/setup/payoff ещё не доказательство смыслового качества.
 
-Нет визуальных моделей, retrieval, STT-запуска, voice capture, рендера, DaVinci
-интеграции или обучения. Имеющийся timeline state принят в доменную схему, но его
+В Milestone 0 не было retrieval и STT-запуска; исследовательские команды Milestone 1
+ниже добавляют их без production-интеграции. Визуальных моделей, voice capture,
+рендера, DaVinci-интеграции или обучения нет. Timeline state принят в доменную схему, но его
 редактирование отклоняется явно до реализации revision-aware compiler.
 
 См. [ARCHITECTURE](ARCHITECTURE.md), [DSL](docs/edit_action_dsl.md),
 [аудит Resolve](docs/davinci_integration.md), [исследование](THESIS_NOTES.md),
 [ROADMAP](ROADMAP.md), [результаты этапа](MILESTONE_REPORT.md).
+# Milestone 1 research entry points
+
+Real-data research is documented in [MILESTONE_1_REPORT.md](MILESTONE_1_REPORT.md).
+Private outputs go under ignored `runs/`, never into examples or schemas.
+
+With `PYTHONPATH=src;../../src` from this directory (Windows):
+
+```powershell
+python scripts/ingest_media.py --source '<authorized original.mp4>' --output runs/dataset/source-id
+python scripts/evaluate_narratives.py --dataset runs/dataset --tasks evaluation/tasks.json --output runs/evaluation/dev-001 --runs 3
+python scripts/evaluate_narratives.py --dataset runs/dataset --tasks evaluation/tasks.json --output runs/evaluation/held-001 --split held_out --release-held-out --runs 3
+```
+
+The task manifest source IDs must correspond to sealed dataset directories. Evaluation
+outputs are append-only; chunk cache is reused across output directories. A failed
+analysis shows incomplete coverage rather than claiming the full source was analyzed.
+Use `--task-id dev-06` with a new output directory to repeat only an interrupted
+task without changing its definition. The summary exporter excludes unfinished task
+groups (no `variance.json`); do not count pilot and final repetitions together.
+Human review uses only `evaluation_package.json` and the rubric; do not give evaluators
+the coordinator's mapping keys. No media execution is performed by these commands.
